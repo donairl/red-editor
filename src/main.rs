@@ -1,5 +1,6 @@
 mod app;
 mod file_browser;
+mod highlighter;
 mod modals;
 
 use app::TextEditorApp;
