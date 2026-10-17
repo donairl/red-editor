@@ -1,7 +1,7 @@
 # Horizontal Scrollbar and Word-Wrap Toggle Design
 
 **Date:** 2026-10-17
-**Status:** Draft, awaiting user review
+**Status:** Approved by user
 **Project:** `rred_text_editor`
 
 ## Objective
@@ -61,16 +61,22 @@ calling `layout_job`. The cache key and background pass do not change.
 
 ### Plain path
 
-The stock `TextEdit` wraps to the available width on its own. Turning wrap off means giving it an
-unbounded width inside the horizontal scroll area, so only the scroll area and width settings change.
+With wrap on, the stock `TextEdit` is used unchanged. With wrap off, the plain path gets a small
+layouter of its own (`LayoutJob::simple` with `wrap.max_width = f32::INFINITY`) that copies the stock
+layouter's text colour, `keep_trailing_whitespace` and line height, so wrapped and unwrapped plain
+text look identical.
 
-### Open question for planning
+### Probe findings (egui 0.37, 800x600 viewport, 3000-character line)
 
-How egui 0.37 sizes a multiline `TextEdit` inside `ScrollArea::both()` is unverified. The existing
-`add_sized(ui.available_size(), ...)` call may need to change when the width is unbounded. The plan
-starts with a throwaway probe that measures the content width for a very long line, on both paths,
-with wrap on and off. The probe's findings decide the final width settings; the behaviour above does
-not change.
+A probe settled the question left open in the first draft:
+
+- A stock multiline `TextEdit` stays as wide as the viewport whatever `desired_width` is, because
+  multiline edits shrink to the available width. Giving it an unbounded width does not stop wrapping,
+  so the plain path needs the layouter above when wrap is off.
+- With a layouter whose job has `wrap.max_width = f32::INFINITY` inside `ScrollArea::both()`, the
+  content becomes as wide as the longest line, the viewport stays at the window width, and a
+  horizontal wheel event moves the offset. This holds on the plain and highlighted paths.
+- With wrap on, the content stays at the viewport width and horizontal wheel events do nothing.
 
 ## Error Handling
 
@@ -81,10 +87,10 @@ No new failure paths. The toggle is a plain bool and nothing is parsed or persis
 Written first, in `src/app.rs`:
 
 - `word_wrap` defaults to `false`.
-- With wrap off, a very long line makes the scroll area's content wider than the viewport, on the
-  plain path and on the highlighted path.
-- With wrap on, the content width stays within the viewport on both paths.
-- A wheel or drag event with a horizontal delta moves the horizontal offset when wrap is off.
+- With wrap off, a horizontal wheel event moves the scroll area's horizontal offset for a very long
+  line, on the plain path and on the highlighted path. (`State` does not expose the content size, so
+  the offset is the observable signal.)
+- With wrap on, the same wheel event leaves the horizontal offset at 0 on both paths.
 - The buffer round-trips unchanged in every combination.
 - The existing scroll and round-trip tests keep passing, updated for the new `render_editor`
   signature. `cargo clippy --all-targets` and `cargo build --release` stay clean.
