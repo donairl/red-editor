@@ -393,6 +393,7 @@ mod tests {
             include_str!("modals.rs"),
             include_str!("file_browser.rs"),
             include_str!("find.rs"),
+            include_str!("search.rs"),
             include_str!("activity_bar.rs"),
         ];
         let known = keys(BUILTIN[0].1);

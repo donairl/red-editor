@@ -6,6 +6,7 @@ mod gutter;
 mod highlighter;
 mod i18n;
 mod modals;
+mod search;
 mod tab_bar;
 
 use app::TextEditorApp;

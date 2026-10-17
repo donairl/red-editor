@@ -11,6 +11,7 @@ use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::i18n::{self, I18n};
 use crate::modals::{self, ModalResponse, PendingAction};
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
+use crate::search::{self, SearchAction, SearchState};
 use crate::tab_bar;
 
 /// Storage key under which eframe remembers the interface language.
@@ -120,6 +121,7 @@ pub struct TextEditorApp {
     pub i18n: I18n,
     pub find: FindState,
     pub goto: GotoState,
+    pub search: SearchState,
     /// One-shot asks for the editor widget, applied on its next frame.
     pub editor_request: EditorRequest,
 }
@@ -156,6 +158,7 @@ impl Default for TextEditorApp {
             i18n: I18n::builtin(),
             find: FindState::default(),
             goto: GotoState::default(),
+            search: SearchState::default(),
             editor_request: EditorRequest::default(),
         }
     }
@@ -217,6 +220,7 @@ pub mod shortcuts {
     pub const TOGGLE_SIDEBAR: KeyboardShortcut = cmd(Key::B);
     pub const NEXT_TAB: KeyboardShortcut = cmd(Key::Tab);
     pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
+    pub const FIND_IN_FILES: KeyboardShortcut = cmd_shift(Key::F);
     pub const GOTO_LINE: KeyboardShortcut = cmd(Key::G);
     pub const FIND: KeyboardShortcut = cmd(Key::F);
     pub const REPLACE: KeyboardShortcut = cmd(Key::H);
@@ -245,6 +249,7 @@ pub enum ShortcutAction {
     NextTab,
     PrevTab,
     GotoLine,
+    FindInFiles,
     Find,
     Replace,
     FindNext,
@@ -258,6 +263,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
     [
         (shortcuts::FIND_PREV, FindPrev),
         (shortcuts::FIND_NEXT, FindNext),
+        (shortcuts::FIND_IN_FILES, FindInFiles),
         (shortcuts::SAVE_AS, SaveAs),
         (shortcuts::OPEN_FOLDER, OpenFolder),
         (shortcuts::PREV_TAB, PrevTab),
@@ -447,6 +453,9 @@ impl TextEditorApp {
         if item(ui, self.i18n.t("edit.replace"), &shortcuts::REPLACE) {
             self.open_find(ctx, true);
         }
+        if item(ui, self.i18n.t("edit.find_in_files"), &shortcuts::FIND_IN_FILES) {
+            self.open_search(ctx);
+        }
         if item(ui, self.i18n.t("edit.goto_line"), &shortcuts::GOTO_LINE) {
             self.open_goto();
         }
@@ -481,6 +490,29 @@ impl TextEditorApp {
                 self.find.current = None;
             }
         }
+    }
+
+    /// Opens the Find in Files panel, seeded with a one-line selection.
+    pub fn open_search(&mut self, ctx: &egui::Context) {
+        self.search.visible = true;
+        self.search.focus_query = true;
+        if let Some((a, b)) = self.editor_selection(ctx).filter(|(a, b)| a < b) {
+            let picked: String = self.active_tab().text_content.chars().skip(a).take(b - a).collect();
+            if !picked.contains('\n') {
+                self.search.query = picked;
+            }
+        }
+    }
+
+    pub fn close_search(&mut self) {
+        self.search.visible = false;
+        self.search.clear();
+        self.editor_request.focus = true;
+    }
+
+    fn open_search_hit(&mut self, path: PathBuf, line: usize) {
+        self.open_file_in_tab(path);
+        self.goto_line(line);
     }
 
     pub fn open_goto(&mut self) {
@@ -631,6 +663,7 @@ impl TextEditorApp {
                 self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
             }
             ShortcutAction::GotoLine => self.open_goto(),
+            ShortcutAction::FindInFiles => self.open_search(ctx),
             ShortcutAction::Find => self.open_find(ctx, false),
             ShortcutAction::Replace => self.open_find(ctx, true),
             ShortcutAction::FindNext => self.find_step(ctx, FindAction::Next),
@@ -1151,6 +1184,13 @@ impl eframe::App for TextEditorApp {
             self.goto.visible = false;
             self.editor_request.focus = true;
         }
+        if self.search.visible
+            && !self.find.visible
+            && !self.goto.visible
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.close_search();
+        }
         if self.find.visible
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
@@ -1202,6 +1242,24 @@ impl eframe::App for TextEditorApp {
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             self.show_status_bar(ui);
         });
+
+        if self.search.visible {
+            self.search.poll();
+            let root = self.explorer.as_ref().map(|e| e.root().to_path_buf());
+            let mut action = None;
+            egui::Panel::bottom("find_in_files")
+                .resizable(true)
+                .default_size(180.0)
+                .show(ui, |ui| {
+                    action = search::show_panel(ui, &mut self.search, root.as_deref(), &self.i18n);
+                });
+            match (action, root) {
+                (Some(SearchAction::Run), Some(root)) => self.search.start(&ctx, root),
+                (Some(SearchAction::Open { path, line }), _) => self.open_search_hit(path, line),
+                (Some(SearchAction::Close), _) => self.close_search(),
+                _ => {}
+            }
+        }
 
         // 3. Activity Bar and Explorer sidebar. Both paint their own right
         // border, so egui's separator lines are turned off.
@@ -1744,6 +1802,26 @@ mod tests {
         frame(EditorRequest::default());
         let range = egui::TextEdit::load_state(&ctx, id).unwrap().cursor.char_range().unwrap();
         assert_eq!(range.primary.index.0, 3);
+    }
+
+    #[test]
+    fn test_find_in_files_shortcut_and_hit_navigation() {
+        let ctx = egui::Context::default();
+        let dir = std::env::temp_dir().join(format!("red_fif_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("x.txt");
+        fs::write(&file, "l1\nl2\nl3\n").unwrap();
+
+        let mut app = TextEditorApp::default();
+        app.apply_shortcut(&ctx, ShortcutAction::FindInFiles);
+        assert!(app.search.visible && app.search.focus_query);
+        app.open_search_hit(file.clone(), 3);
+        assert_eq!(app.active_tab().current_path.as_ref(), Some(&file));
+        assert_eq!(app.editor_request.goto, Some(6), "caret at the start of line 3");
+        app.close_search();
+        assert!(!app.search.visible && app.search.hits.is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
