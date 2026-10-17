@@ -25,6 +25,10 @@ pub enum Language {
     C,
     Cpp,
     Php,
+    JavaScript,
+    /// Shares the `JavaScript` grammar: syntect bundles no TypeScript grammar.
+    TypeScript,
+    Html,
 }
 
 impl Language {
@@ -36,6 +40,9 @@ impl Language {
             Language::C,
             Language::Cpp,
             Language::Php,
+            Language::JavaScript,
+            Language::TypeScript,
+            Language::Html,
         ]
     }
 
@@ -48,6 +55,9 @@ impl Language {
             "c" | "h" => Language::C,
             "cpp" | "hpp" | "cc" | "cxx" => Language::Cpp,
             "php" => Language::Php,
+            "js" | "mjs" | "cjs" | "jsx" => Language::JavaScript,
+            "ts" | "mts" | "cts" | "tsx" => Language::TypeScript,
+            "html" | "htm" => Language::Html,
             _ => Language::PlainText,
         }
     }
@@ -70,6 +80,9 @@ impl Language {
             Language::C => "C",
             Language::Cpp => "C++",
             Language::Php => "PHP",
+            Language::JavaScript => "JavaScript",
+            Language::TypeScript => "TypeScript",
+            Language::Html => "HTML",
         }
     }
 
@@ -81,6 +94,8 @@ impl Language {
             Language::C => "C",
             Language::Cpp => "C++",
             Language::Php => "PHP",
+            Language::JavaScript | Language::TypeScript => "JavaScript",
+            Language::Html => "HTML",
         }
     }
 }
@@ -505,6 +520,16 @@ mod tests {
         assert_eq!(Language::from_extension("cc"), Language::Cpp);
         assert_eq!(Language::from_extension("cxx"), Language::Cpp);
         assert_eq!(Language::from_extension("php"), Language::Php);
+        assert_eq!(Language::from_extension("js"), Language::JavaScript);
+        assert_eq!(Language::from_extension("mjs"), Language::JavaScript);
+        assert_eq!(Language::from_extension("cjs"), Language::JavaScript);
+        assert_eq!(Language::from_extension("jsx"), Language::JavaScript);
+        assert_eq!(Language::from_extension("ts"), Language::TypeScript);
+        assert_eq!(Language::from_extension("mts"), Language::TypeScript);
+        assert_eq!(Language::from_extension("cts"), Language::TypeScript);
+        assert_eq!(Language::from_extension("tsx"), Language::TypeScript);
+        assert_eq!(Language::from_extension("html"), Language::Html);
+        assert_eq!(Language::from_extension("htm"), Language::Html);
     }
 
     #[test]
@@ -512,6 +537,9 @@ mod tests {
         assert_eq!(Language::from_extension("RS"), Language::Rust);
         assert_eq!(Language::from_extension("PHP"), Language::Php);
         assert_eq!(Language::from_extension("Cpp"), Language::Cpp);
+        assert_eq!(Language::from_extension("JS"), Language::JavaScript);
+        assert_eq!(Language::from_extension("Ts"), Language::TypeScript);
+        assert_eq!(Language::from_extension("HTML"), Language::Html);
     }
 
     #[test]
@@ -539,6 +567,14 @@ mod tests {
             Language::from_path(Path::new("/tmp/a/b/script.php")),
             Language::Php
         );
+        assert_eq!(
+            Language::from_path(Path::new("/srv/app.test.ts")),
+            Language::TypeScript
+        );
+        assert_eq!(
+            Language::from_path(Path::new("/srv/site/index.html")),
+            Language::Html
+        );
     }
 
     #[test]
@@ -548,11 +584,14 @@ mod tests {
         assert_eq!(Language::C.display_name(), "C");
         assert_eq!(Language::Cpp.display_name(), "C++");
         assert_eq!(Language::Php.display_name(), "PHP");
+        assert_eq!(Language::JavaScript.display_name(), "JavaScript");
+        assert_eq!(Language::TypeScript.display_name(), "TypeScript");
+        assert_eq!(Language::Html.display_name(), "HTML");
     }
 
     #[test]
     fn test_all_lists_every_variant() {
-        assert_eq!(Language::all().len(), 5);
+        assert_eq!(Language::all().len(), 8);
     }
 
     #[test]
@@ -829,5 +868,57 @@ mod tests {
         // between calls. Without carried state the second line would be plain.
         assert_eq!(runs_in_comment_color(&first), "/* start");
         assert_eq!(runs_in_comment_color(&second), "   still inside */");
+    }
+
+    #[test]
+    fn test_typescript_shares_the_javascript_grammar() {
+        assert_eq!(Language::TypeScript.syntax_name(), "JavaScript");
+        assert_eq!(Language::JavaScript.syntax_name(), "JavaScript");
+        assert_eq!(Language::Html.syntax_name(), "HTML");
+    }
+
+    /// Number of formatted sections `highlight_line` emits for each line, with
+    /// the same layouter (so multi-line state carries) across the lines.
+    fn section_counts(lang: Language, lines: &[&str]) -> Vec<usize> {
+        let mut highlighter = SyntaxHighlighter::new();
+        let mut layouter = highlighter.layouter(lang, egui::FontId::monospace(14.0));
+        lines
+            .iter()
+            .map(|line| {
+                let job = layouter.highlight_line(line);
+                job.debug_sanity_check();
+                assert_eq!(job.text, *line, "text mangled for {lang:?}");
+                job.sections.len()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_web_languages_are_coloured() {
+        let samples = [
+            (Language::JavaScript, "const x = 1; // note"),
+            (Language::TypeScript, "let y: number = 2;"),
+            (Language::Html, "<div class=\"a\">hi</div>"),
+        ];
+        for (lang, line) in samples {
+            let counts = section_counts(lang, &[line]);
+            assert!(
+                counts[0] > 1,
+                "{lang:?} produced a single plain section for {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_html_colours_embedded_script_and_style() {
+        // The same line is plain inside a paragraph and coloured inside
+        // <script>/<style>, proving the HTML grammar delegates to JS and CSS.
+        let plain = section_counts(Language::Html, &["<p>", "var x = 1;", "</p>"]);
+        let script = section_counts(Language::Html, &["<script>", "var x = 1;", "</script>"]);
+        let style = section_counts(Language::Html, &["<style>", "p { color: red; }", "</style>"]);
+
+        assert_eq!(plain[1], 1, "text inside <p> should be a single section");
+        assert!(script[1] > 1, "script body should be coloured as JavaScript");
+        assert!(style[1] > 1, "style body should be coloured as CSS");
     }
 }
