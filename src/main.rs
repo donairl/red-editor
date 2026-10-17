@@ -1,6 +1,7 @@
 mod activity_bar;
 mod app;
 mod file_browser;
+mod find;
 mod gutter;
 mod highlighter;
 mod i18n;

@@ -10,6 +10,7 @@ use crate::gutter;
 use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::i18n::{self, I18n};
 use crate::modals::{self, ModalResponse, PendingAction};
+use crate::find::{self, FindAction, FindState};
 use crate::tab_bar;
 
 /// Storage key under which eframe remembers the interface language.
@@ -117,6 +118,23 @@ pub struct TextEditorApp {
     pub show_line_numbers: bool,
     /// Interface translations and the language in use.
     pub i18n: I18n,
+    pub find: FindState,
+    /// One-shot asks for the editor widget, applied on its next frame.
+    pub editor_request: EditorRequest,
+}
+
+/// What the app wants done to the editor widget, which only `render_editor`
+/// can reach.
+#[derive(Default)]
+pub struct EditorRequest {
+    /// Give the editor keyboard focus.
+    pub focus: bool,
+    /// Press `Ctrl+<key>` in the editor (undo and redo).
+    pub key: Option<egui::Key>,
+    /// Scroll this `char` range into view.
+    pub reveal: Option<find::Range>,
+    /// Paint this `char` range as the current find match. Set every frame.
+    pub highlight: Option<find::Range>,
 }
 
 impl Default for TextEditorApp {
@@ -133,6 +151,8 @@ impl Default for TextEditorApp {
             word_wrap: false,
             show_line_numbers: true,
             i18n: I18n::builtin(),
+            find: FindState::default(),
+            editor_request: EditorRequest::default(),
         }
     }
 }
@@ -161,6 +181,17 @@ fn install_cjk_fallback_font(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// A menu entry with its shortcut on the right; closes the menu when clicked.
+fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
+    let clicked = ui
+        .add(egui::Button::new(label).shortcut_text(shortcut))
+        .clicked();
+    if clicked {
+        ui.close();
+    }
+    clicked
+}
+
 /// Keyboard shortcuts of the editor. `COMMAND` is Ctrl, or Cmd on macOS.
 pub mod shortcuts {
     use eframe::egui::{Key, KeyboardShortcut, Modifiers};
@@ -182,6 +213,17 @@ pub mod shortcuts {
     pub const TOGGLE_SIDEBAR: KeyboardShortcut = cmd(Key::B);
     pub const NEXT_TAB: KeyboardShortcut = cmd(Key::Tab);
     pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
+    pub const FIND: KeyboardShortcut = cmd(Key::F);
+    pub const REPLACE: KeyboardShortcut = cmd(Key::H);
+    pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
+    pub const FIND_PREV: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::F3);
+    // Shown in the Edit menu only: the focused text editor handles these
+    // keys itself.
+    pub const UNDO: KeyboardShortcut = cmd(Key::Z);
+    pub const REDO: KeyboardShortcut = cmd(Key::Y);
+    pub const CUT: KeyboardShortcut = cmd(Key::X);
+    pub const COPY: KeyboardShortcut = cmd(Key::C);
+    pub const PASTE: KeyboardShortcut = cmd(Key::V);
 }
 
 /// What a keyboard shortcut asks the editor to do.
@@ -197,6 +239,10 @@ pub enum ShortcutAction {
     ToggleSidebar,
     NextTab,
     PrevTab,
+    Find,
+    Replace,
+    FindNext,
+    FindPrev,
 }
 
 /// Takes at most one shortcut out of this frame's input. Shift variants are
@@ -204,6 +250,8 @@ pub enum ShortcutAction {
 pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> {
     use ShortcutAction::*;
     [
+        (shortcuts::FIND_PREV, FindPrev),
+        (shortcuts::FIND_NEXT, FindNext),
         (shortcuts::SAVE_AS, SaveAs),
         (shortcuts::OPEN_FOLDER, OpenFolder),
         (shortcuts::PREV_TAB, PrevTab),
@@ -214,6 +262,8 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::EXIT, Exit),
         (shortcuts::TOGGLE_SIDEBAR, ToggleSidebar),
         (shortcuts::NEXT_TAB, NextTab),
+        (shortcuts::FIND, Find),
+        (shortcuts::REPLACE, Replace),
     ]
     .into_iter()
     .find(|(shortcut, _)| input.consume_shortcut(shortcut))
@@ -360,14 +410,151 @@ impl TextEditorApp {
         });
     }
 
+    pub fn show_edit_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
+            menu_item(ui, label, &ctx.format_shortcut(shortcut))
+        };
+        if item(ui, self.i18n.t("edit.undo"), &shortcuts::UNDO) {
+            self.send_editor_key(egui::Key::Z);
+        }
+        if item(ui, self.i18n.t("edit.redo"), &shortcuts::REDO) {
+            self.send_editor_key(egui::Key::Y);
+        }
+        ui.separator();
+        if item(ui, self.i18n.t("edit.cut"), &shortcuts::CUT) {
+            self.editor_request.focus = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestCut);
+        }
+        if item(ui, self.i18n.t("edit.copy"), &shortcuts::COPY) {
+            self.editor_request.focus = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestCopy);
+        }
+        if item(ui, self.i18n.t("edit.paste"), &shortcuts::PASTE) {
+            self.editor_request.focus = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        }
+        ui.separator();
+        if item(ui, self.i18n.t("edit.find"), &shortcuts::FIND) {
+            self.open_find(ctx, false);
+        }
+        if item(ui, self.i18n.t("edit.replace"), &shortcuts::REPLACE) {
+            self.open_find(ctx, true);
+        }
+    }
+
+    fn send_editor_key(&mut self, key: egui::Key) {
+        self.editor_request.focus = true;
+        self.editor_request.key = Some(key);
+    }
+
+    fn editor_id(&self) -> egui::Id {
+        egui::Id::unique(("editor", self.active_tab_index))
+    }
+
+    /// The editor's selection as sorted `char` indices, or just the caret.
+    fn editor_selection(&self, ctx: &egui::Context) -> Option<find::Range> {
+        let state = egui::TextEdit::load_state(ctx, self.editor_id())?;
+        let range = state.cursor.char_range()?;
+        let (a, b) = (range.primary.index.0, range.secondary.index.0);
+        Some((a.min(b), a.max(b)))
+    }
+
+    /// Opens the find bar, seeded with a one-line selection, if any.
+    pub fn open_find(&mut self, ctx: &egui::Context, replace: bool) {
+        self.find.visible = true;
+        self.find.replace_mode = replace || (self.find.replace_mode && self.find.visible);
+        self.find.focus_query = true;
+        if let Some((a, b)) = self.editor_selection(ctx).filter(|(a, b)| a < b) {
+            let picked: String = self.active_tab().text_content.chars().skip(a).take(b - a).collect();
+            if !picked.contains('\n') {
+                self.find.query = picked;
+                self.find.current = None;
+            }
+        }
+    }
+
+    pub fn close_find(&mut self) {
+        self.find.visible = false;
+        self.find.current = None;
+        self.find.matches.clear();
+        self.editor_request.focus = true;
+    }
+
+    fn refresh_find_matches(&mut self) {
+        self.find.matches = find::find_all(
+            &self.active_tab().text_content,
+            &self.find.query,
+            self.find.case_sensitive,
+        );
+        let matches = &self.find.matches;
+        self.find.current = self.find.current.filter(|c| matches.contains(c));
+    }
+
+    /// Jumps to the next or previous match, wrapping around.
+    pub fn find_step(&mut self, ctx: &egui::Context, action: FindAction) {
+        self.refresh_find_matches();
+        let caret = self.editor_selection(ctx).map(|(a, _)| a);
+        let (after, before) = match self.find.current {
+            Some((start, end)) => (end, start),
+            None => {
+                let from = self.find.anchor.or(caret).unwrap_or(0);
+                (from, from)
+            }
+        };
+        let found = match action {
+            FindAction::Prev => find::prev_match(&self.find.matches, before),
+            // Typing refines the match under the caret instead of skipping it.
+            FindAction::Refresh => find::next_match(&self.find.matches, before),
+            _ => find::next_match(&self.find.matches, after),
+        };
+        self.find.current = found;
+        self.find.anchor = None;
+        self.editor_request.reveal = found;
+    }
+
+    pub fn replace_current(&mut self, ctx: &egui::Context) {
+        self.refresh_find_matches();
+        if let Some(current) = self.find.current {
+            let with = self.find.replacement.clone();
+            let index = self.active_tab_index;
+            find::replace_range(&mut self.tabs[index].text_content, current, &with);
+            self.find.current = None;
+            self.find.anchor = Some(current.0 + with.chars().count());
+        }
+        self.find_step(ctx, FindAction::Next);
+    }
+
+    pub fn replace_all(&mut self) {
+        let index = self.active_tab_index;
+        let (text, count) = find::replace_all(
+            &self.tabs[index].text_content,
+            &self.find.query,
+            &self.find.replacement,
+            self.find.case_sensitive,
+        );
+        if count > 0 {
+            self.tabs[index].text_content = text;
+        }
+        self.find.current = None;
+        self.find.matches.clear();
+        self.status_message = Some((
+            self.i18n.tf("msg.replaced", &[("count", &count.to_string())]),
+            false,
+        ));
+    }
+
+    fn apply_find_action(&mut self, ctx: &egui::Context, action: FindAction) {
+        match action {
+            FindAction::Close => self.close_find(),
+            FindAction::Replace => self.replace_current(ctx),
+            FindAction::ReplaceAll => self.replace_all(),
+            step => self.find_step(ctx, step),
+        }
+    }
+
     pub fn show_file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
-            let button = egui::Button::new(label).shortcut_text(ctx.format_shortcut(shortcut));
-            let clicked = ui.add(button).clicked();
-            if clicked {
-                ui.close();
-            }
-            clicked
+            menu_item(ui, label, &ctx.format_shortcut(shortcut))
         };
         if item(ui, self.i18n.t("file.new_tab"), &shortcuts::NEW_TAB) {
             self.open_new_tab();
@@ -419,6 +606,10 @@ impl TextEditorApp {
             ShortcutAction::NextTab => {
                 self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
             }
+            ShortcutAction::Find => self.open_find(ctx, false),
+            ShortcutAction::Replace => self.open_find(ctx, true),
+            ShortcutAction::FindNext => self.find_step(ctx, FindAction::Next),
+            ShortcutAction::FindPrev => self.find_step(ctx, FindAction::Prev),
             ShortcutAction::PrevTab => {
                 self.active_tab_index =
                     (self.active_tab_index + self.tabs.len() - 1) % self.tabs.len();
@@ -761,13 +952,30 @@ fn text_content_exceeds_highlight_limit(content: &str) -> bool {
 /// With `line_numbers` on, the editor's left margin widens to hold the
 /// gutter, which is painted over it once the text is laid out. `hint` shows
 /// in grey while the document is empty.
+#[cfg(test)]
 fn render_editor(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    layouter: Option<&mut HighlighterLayouter<'_>>,
+    word_wrap: bool,
+    line_numbers: bool,
+    hint: &str,
+) {
+    render_editor_with(ui, text, layouter, word_wrap, line_numbers, hint, None, EditorRequest::default());
+}
+
+/// [`render_editor`] with a fixed widget `id` (so the app can find the
+/// editor's state) and a one-shot `request` to act on.
+#[allow(clippy::too_many_arguments)]
+fn render_editor_with(
     ui: &mut egui::Ui,
     text: &mut String,
     mut layouter: Option<&mut HighlighterLayouter<'_>>,
     word_wrap: bool,
     line_numbers: bool,
     hint: &str,
+    id: Option<egui::Id>,
+    request: EditorRequest,
 ) {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
@@ -798,6 +1006,27 @@ fn render_editor(
             // No outline or rounded fill: the editor sits on the central
             // panel's background, the same colour as the active tab.
             .frame(egui::Frame::NONE.inner_margin(margin));
+
+        let text_edit = match id {
+            Some(id) => text_edit.id(id),
+            None => text_edit,
+        };
+        if let Some(id) = id {
+            if request.focus {
+                ui.memory_mut(|m| m.request_focus(id));
+            }
+            if let Some(key) = request.key {
+                ui.ctx().input_mut(|i| {
+                    i.events.push(egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::COMMAND,
+                    });
+                });
+            }
+        }
 
         let output = match layouter.as_mut() {
             Some(highlighter) => {
@@ -848,6 +1077,24 @@ fn render_editor(
         if let Some(width) = gutter_width {
             gutter::paint(ui, &output, &font_id, width);
         }
+
+        // Rectangle of a `char` range, when it sits on one row.
+        let span = |(start, end): find::Range| {
+            let a = output.galley.pos_from_cursor(egui::text::CCursor::new(start));
+            let b = output.galley.pos_from_cursor(egui::text::CCursor::new(end));
+            (a.center().y == b.center().y)
+                .then(|| egui::Rect::from_min_max(a.min, b.max).translate(output.galley_pos.to_vec2()))
+        };
+        if let Some(rect) = request.highlight.and_then(span) {
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius::same(2),
+                egui::Color32::from_rgba_unmultiplied(255, 200, 0, 90),
+            );
+        }
+        if let Some(rect) = request.reveal.and_then(span) {
+            ui.scroll_to_rect(rect, None);
+        }
     });
 }
 
@@ -864,6 +1111,15 @@ impl eframe::App for TextEditorApp {
             self.apply_shortcut(&ctx, action);
         }
 
+        if self.find.visible
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.close_find();
+        }
+        if self.find.visible {
+            self.refresh_find_matches();
+        }
+
         // 1. Top Panel (Menu Bar & Toolbar)
         egui::Panel::top("top_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -873,6 +1129,11 @@ impl eframe::App for TextEditorApp {
                 // Menu File
                 ui.menu_button(file, |ui| {
                     self.show_file_menu(ui, &ctx);
+                });
+
+                let edit = self.i18n.t("menu.edit").to_owned();
+                ui.menu_button(edit, |ui| {
+                    self.show_edit_menu(ui, &ctx);
                 });
 
                 // Menu Tampilan
@@ -952,6 +1213,15 @@ impl eframe::App for TextEditorApp {
         egui::CentralPanel::default().frame(editor_frame).show(ui, |ui| {
             self.render_tab_bar(ui);
 
+            if self.find.visible {
+                if let Some(action) = find::show_bar(ui, &mut self.find, &self.i18n) {
+                    self.apply_find_action(&ctx, action);
+                }
+            }
+            let mut request = std::mem::take(&mut self.editor_request);
+            request.highlight = self.find.visible.then_some(self.find.current).flatten();
+            let editor_id = self.editor_id();
+
             // `TextEdit::font` resolves this `TextStyle` the same way, so the
             // caret and selection line up with the highlighted glyphs.
             let font_id = egui::TextStyle::Monospace.resolve(ui.style());
@@ -965,23 +1235,27 @@ impl eframe::App for TextEditorApp {
 
             ui.push_id(self.active_tab_index, |ui| {
                 if too_large {
-                    render_editor(
+                    render_editor_with(
                         ui,
                         &mut self.tabs[active_idx].text_content,
                         None,
                         word_wrap,
                         line_numbers,
                         hint,
+                        Some(editor_id),
+                        request,
                     );
                 } else {
                     let mut layouter = self.highlighter.layouter(language, font_id);
-                    render_editor(
+                    render_editor_with(
                         ui,
                         &mut self.tabs[active_idx].text_content,
                         Some(&mut layouter),
                         word_wrap,
                         line_numbers,
                         hint,
+                        Some(editor_id),
+                        request,
                     );
                 }
             });
@@ -1384,6 +1658,83 @@ mod tests {
         assert_eq!(app.active_tab_index, 2);
         app.apply_shortcut(&ctx, ShortcutAction::NewTab);
         assert_eq!(app.tabs.len(), 4);
+    }
+
+    #[test]
+    fn test_find_next_walks_matches_and_wraps() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "ab ab ab".into();
+        app.find.query = "ab".into();
+        app.find_step(&ctx, FindAction::Next);
+        assert_eq!(app.find.current, Some((0, 2)));
+        app.find_step(&ctx, FindAction::Next);
+        assert_eq!(app.find.current, Some((3, 5)));
+        app.find_step(&ctx, FindAction::Next);
+        app.find_step(&ctx, FindAction::Next);
+        assert_eq!(app.find.current, Some((0, 2)), "wraps");
+        app.find_step(&ctx, FindAction::Prev);
+        assert_eq!(app.find.current, Some((6, 8)), "wraps backwards");
+        assert_eq!(app.editor_request.reveal, Some((6, 8)));
+    }
+
+    #[test]
+    fn test_replace_current_then_replace_all() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "cat cat cat".into();
+        app.find.query = "cat".into();
+        app.find.replacement = "dog".into();
+        app.find_step(&ctx, FindAction::Next);
+        app.replace_current(&ctx);
+        assert_eq!(app.active_tab().text_content, "dog cat cat");
+        assert_eq!(app.find.current, Some((4, 7)), "moves on to the next match");
+        app.replace_all();
+        assert_eq!(app.active_tab().text_content, "dog dog dog");
+        assert!(app.status_message.is_some());
+    }
+
+    #[test]
+    fn test_find_shortcuts_open_and_close_the_bar() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.apply_shortcut(&ctx, ShortcutAction::Find);
+        assert!(app.find.visible && !app.find.replace_mode && app.find.focus_query);
+        app.apply_shortcut(&ctx, ShortcutAction::Replace);
+        assert!(app.find.replace_mode);
+        app.close_find();
+        assert!(!app.find.visible && app.find.matches.is_empty());
+    }
+
+    /// The menu's Undo presses Ctrl+Z in the editor, which must work even
+    /// though the click on the menu took focus away.
+    #[test]
+    fn test_menu_undo_reverts_typing() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique(("editor", 0));
+        let text = std::cell::RefCell::new(String::new());
+        let frame = |time: f64, events: Vec<egui::Event>, request: EditorRequest| {
+            let mut request = Some(request);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                super::render_editor_with(ui, &mut text.borrow_mut(), None, false, false, "", Some(id), request.take().unwrap());
+            });
+            out.textures_delta.clear();
+        };
+        let focus = || EditorRequest { focus: true, ..Default::default() };
+        frame(0.0, Vec::new(), focus());
+        frame(0.1, Vec::new(), focus());
+        frame(0.2, vec![egui::Event::Text("hello".into())], EditorRequest::default());
+        frame(2.0, Vec::new(), EditorRequest::default());
+        assert_eq!(*text.borrow(), "hello");
+        frame(3.0, Vec::new(), EditorRequest { focus: true, key: Some(egui::Key::Z), ..Default::default() });
+        frame(3.1, Vec::new(), EditorRequest::default());
+        assert_eq!(*text.borrow(), "", "undo reverts the typed text");
     }
 
     #[test]
