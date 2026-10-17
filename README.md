@@ -117,6 +117,7 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | `Ctrl+Shift+S` | Simpan sebagai |
 | `Ctrl+Q` | Keluar |
 | `Ctrl+B` | Tampilkan/sembunyikan sidebar |
+| `F11` | Zen mode (layar penuh, hanya editor); `Esc` untuk keluar |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Tab berikutnya / sebelumnya |
 | `Ctrl+Z` | Urungkan |
 | `Ctrl+Y` atau `Ctrl+Shift+Z` | Ulangi |

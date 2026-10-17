@@ -117,6 +117,8 @@ pub struct TextEditorApp {
     /// Show the line-number gutter left of the text. On by default, as in
     /// VS Code.
     pub show_line_numbers: bool,
+    /// Distraction-free mode: fullscreen, with only the editor shown.
+    pub zen_mode: bool,
     /// Interface translations and the language in use.
     pub i18n: I18n,
     pub find: FindState,
@@ -155,6 +157,7 @@ impl Default for TextEditorApp {
             highlighter: SyntaxHighlighter::new(),
             word_wrap: false,
             show_line_numbers: true,
+            zen_mode: false,
             i18n: I18n::builtin(),
             find: FindState::default(),
             goto: GotoState::default(),
@@ -222,6 +225,7 @@ pub mod shortcuts {
     pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
     pub const FIND_IN_FILES: KeyboardShortcut = cmd_shift(Key::F);
     pub const GOTO_LINE: KeyboardShortcut = cmd(Key::G);
+    pub const ZEN_MODE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F11);
     pub const FIND: KeyboardShortcut = cmd(Key::F);
     pub const REPLACE: KeyboardShortcut = cmd(Key::H);
     pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
@@ -249,6 +253,7 @@ pub enum ShortcutAction {
     NextTab,
     PrevTab,
     GotoLine,
+    ZenMode,
     FindInFiles,
     Find,
     Replace,
@@ -275,6 +280,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::TOGGLE_SIDEBAR, ToggleSidebar),
         (shortcuts::NEXT_TAB, NextTab),
         (shortcuts::GOTO_LINE, GotoLine),
+        (shortcuts::ZEN_MODE, ZenMode),
         (shortcuts::FIND, Find),
         (shortcuts::REPLACE, Replace),
     ]
@@ -373,6 +379,10 @@ impl TextEditorApp {
     pub fn show_view_menu(&mut self, ui: &mut egui::Ui) {
         ui.checkbox(&mut self.word_wrap, self.i18n.t("view.word_wrap"));
         ui.checkbox(&mut self.show_line_numbers, self.i18n.t("view.line_numbers"));
+        let ctx = ui.ctx().clone();
+        if menu_item(ui, self.i18n.t("view.zen_mode"), &ctx.format_shortcut(&shortcuts::ZEN_MODE)) {
+            self.toggle_zen_mode(&ctx);
+        }
         ui.separator();
         self.show_language_menu(ui);
         self.show_ui_language_menu(ui);
@@ -513,6 +523,13 @@ impl TextEditorApp {
     fn open_search_hit(&mut self, path: PathBuf, line: usize) {
         self.open_file_in_tab(path);
         self.goto_line(line);
+    }
+
+    /// Enters or leaves zen mode: only the editor is shown, fullscreen.
+    pub fn toggle_zen_mode(&mut self, ctx: &egui::Context) {
+        self.zen_mode = !self.zen_mode;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.zen_mode));
+        self.editor_request.focus = true;
     }
 
     pub fn open_goto(&mut self) {
@@ -663,6 +680,7 @@ impl TextEditorApp {
                 self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
             }
             ShortcutAction::GotoLine => self.open_goto(),
+            ShortcutAction::ZenMode => self.toggle_zen_mode(ctx),
             ShortcutAction::FindInFiles => self.open_search(ctx),
             ShortcutAction::Find => self.open_find(ctx, false),
             ShortcutAction::Replace => self.open_find(ctx, true),
@@ -1196,11 +1214,20 @@ impl eframe::App for TextEditorApp {
         {
             self.close_find();
         }
+        if self.zen_mode
+            && !self.find.visible
+            && !self.goto.visible
+            && !self.search.visible
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.toggle_zen_mode(&ctx);
+        }
         if self.find.visible {
             self.refresh_find_matches();
         }
 
         // 1. Top Panel (Menu Bar & Toolbar)
+        if !self.zen_mode {
         egui::Panel::top("top_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let [file, view, help] =
@@ -1239,11 +1266,14 @@ impl eframe::App for TextEditorApp {
         });
 
         // 2. Bottom Status Bar Panel
-        egui::Panel::bottom("status_bar").show(ui, |ui| {
-            self.show_status_bar(ui);
-        });
+        }
+        if !self.zen_mode {
+            egui::Panel::bottom("status_bar").show(ui, |ui| {
+                self.show_status_bar(ui);
+            });
+        }
 
-        if self.search.visible {
+        if self.search.visible && !self.zen_mode {
             self.search.poll();
             let root = self.explorer.as_ref().map(|e| e.root().to_path_buf());
             let mut action = None;
@@ -1266,23 +1296,25 @@ impl eframe::App for TextEditorApp {
         let side_fill = file_browser::SidebarPalette::for_visuals(ui.visuals()).background;
         let side_frame = egui::Frame::NONE.fill(side_fill);
         let explorer_open = self.show_sidebar && self.explorer.is_some();
-        let activity = egui::Panel::left("activity_bar")
-            .exact_size(activity_bar::WIDTH)
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(side_frame)
-            .show(ui, |ui| {
-                activity_bar::show(ui, explorer_open, self.i18n.t("activity.explorer"))
-            })
-            .inner;
-        if activity.clicked {
-            self.toggle_explorer();
+        if !self.zen_mode {
+            let activity = egui::Panel::left("activity_bar")
+                .exact_size(activity_bar::WIDTH)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(side_frame)
+                .show(ui, |ui| {
+                    activity_bar::show(ui, explorer_open, self.i18n.t("activity.explorer"))
+                })
+                .inner;
+            if activity.clicked {
+                self.toggle_explorer();
+            }
         }
 
         let mut file_to_open = None;
         let active_file = self.active_tab().current_path.clone();
         #[allow(clippy::collapsible_if)]
-        if self.show_sidebar {
+        if self.show_sidebar && !self.zen_mode {
             if let Some(explorer) = self.explorer.as_mut() {
                 egui::Panel::left("file_browser_panel")
                     .resizable(true)
@@ -1309,7 +1341,9 @@ impl eframe::App for TextEditorApp {
         let editor_fill = tab_bar::TabPalette::for_visuals(ui.visuals()).tab_active;
         let editor_frame = egui::Frame::NONE.fill(editor_fill);
         egui::CentralPanel::default().frame(editor_frame).show(ui, |ui| {
-            self.render_tab_bar(ui);
+            if !self.zen_mode {
+                self.render_tab_bar(ui);
+            }
 
             if self.find.visible {
                 if let Some(action) = find::show_bar(ui, &mut self.find, &self.i18n) {
@@ -1767,6 +1801,17 @@ mod tests {
         assert_eq!(app.active_tab_index, 2);
         app.apply_shortcut(&ctx, ShortcutAction::NewTab);
         assert_eq!(app.tabs.len(), 4);
+    }
+
+    #[test]
+    fn test_zen_mode_toggles_with_shortcut() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        assert!(!app.zen_mode);
+        app.apply_shortcut(&ctx, ShortcutAction::ZenMode);
+        assert!(app.zen_mode && app.editor_request.focus);
+        app.apply_shortcut(&ctx, ShortcutAction::ZenMode);
+        assert!(!app.zen_mode);
     }
 
     #[test]
