@@ -5,6 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::file_browser;
+use crate::highlighter::Language;
 use crate::modals::{self, ModalResponse, PendingAction};
 
 pub struct TextEditorApp {
@@ -16,6 +17,8 @@ pub struct TextEditorApp {
     pub pending_action: Option<PendingAction>,
     pub show_about_modal: bool,
     pub status_message: Option<(String, bool)>, // (message, is_error)
+    pub active_language: Language,
+    pub language_override: Option<Language>,
 }
 
 impl Default for TextEditorApp {
@@ -30,6 +33,8 @@ impl Default for TextEditorApp {
             pending_action: None,
             show_about_modal: false,
             status_message: None,
+            active_language: Language::PlainText,
+            language_override: None,
         }
     }
 }
@@ -52,13 +57,47 @@ impl TextEditorApp {
         format!("{}{dirty_flag} - Red Text Editor", self.file_display_name())
     }
 
+    /// The language actually used for highlighting: the manual override if set,
+    /// otherwise the language auto-detected from the current file.
+    pub fn effective_language(&self) -> Language {
+        self.language_override.unwrap_or(self.active_language)
+    }
+
+    /// Draws the "Bahasa" dropdown used by both the File menu and the status bar.
+    ///
+    /// Re-selecting the already active language clears the override and returns
+    /// to automatic detection.
+    // Task 4 renders this in the File menu and the status bar and must delete
+    // the `expect` below along with src/highlighter.rs's `#![allow(dead_code)]`.
+    #[expect(dead_code, reason = "not yet rendered anywhere; Task 4 calls it")]
+    pub fn show_language_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Bahasa", |ui| {
+            let current = self.effective_language();
+            for lang in Language::all() {
+                let selected = *lang == current;
+                if ui.selectable_label(selected, lang.display_name()).clicked() {
+                    self.language_override = if selected { None } else { Some(*lang) };
+                    ui.close();
+                }
+            }
+        });
+    }
+
     pub fn load_file(&mut self, path: PathBuf) {
         match fs::read_to_string(&path) {
             Ok(content) => {
                 self.text_content = content.clone();
                 self.saved_content = content;
+                self.active_language = Language::from_path(&path);
                 self.current_path = Some(path);
-                self.status_message = Some(("File berhasil dibuka.".to_string(), false));
+                self.status_message = Some((
+                    if text_content_exceeds_highlight_limit(&self.text_content) {
+                        "File terlalu besar untuk syntax highlighting.".to_string()
+                    } else {
+                        "File berhasil dibuka.".to_string()
+                    },
+                    false,
+                ));
             }
             Err(err) => {
                 self.status_message = Some((format!("Gagal membuka file: {err}"), true));
@@ -100,6 +139,7 @@ impl TextEditorApp {
             match fs::write(&path, &self.text_content) {
                 Ok(_) => {
                     self.saved_content = self.text_content.clone();
+                    self.active_language = Language::from_path(&path);
                     self.current_path = Some(path);
                     self.status_message = Some(("File berhasil disimpan.".to_string(), false));
                     true
@@ -165,6 +205,14 @@ impl TextEditorApp {
             }
         }
     }
+}
+
+/// Documents above this size skip syntax highlighting and render plain.
+const HIGHLIGHT_SIZE_LIMIT: usize = 1024 * 1024;
+
+/// True when a document is too large to highlight cheaply.
+fn text_content_exceeds_highlight_limit(content: &str) -> bool {
+    content.len() > HIGHLIGHT_SIZE_LIMIT
 }
 
 impl eframe::App for TextEditorApp {
@@ -410,5 +458,66 @@ mod tests {
             app.pending_action,
             Some(PendingAction::OpenFile(target_path))
         );
+    }
+
+    #[test]
+    fn test_effective_language_prefers_override() {
+        let mut app = TextEditorApp::default();
+        assert_eq!(app.active_language, crate::highlighter::Language::PlainText);
+        assert_eq!(app.language_override, None);
+        assert_eq!(
+            app.effective_language(),
+            crate::highlighter::Language::PlainText
+        );
+
+        app.active_language = crate::highlighter::Language::Rust;
+        assert_eq!(app.effective_language(), crate::highlighter::Language::Rust);
+
+        app.language_override = Some(crate::highlighter::Language::Php);
+        assert_eq!(app.effective_language(), crate::highlighter::Language::Php);
+
+        app.language_override = None;
+        assert_eq!(app.effective_language(), crate::highlighter::Language::Rust);
+    }
+
+    #[test]
+    fn test_load_file_updates_detected_language() {
+        let dir = std::env::temp_dir().join("rred_app_lang_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.rs");
+        std::fs::write(&path, "fn main() {}").unwrap();
+
+        let mut app = TextEditorApp::default();
+        app.load_file(path);
+        assert_eq!(app.active_language, crate::highlighter::Language::Rust);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_file_keeps_explicit_override() {
+        let dir = std::env::temp_dir().join("rred_app_lang_override_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("script.php");
+        std::fs::write(&path, "<?php echo 1;").unwrap();
+
+        let mut app = TextEditorApp {
+            language_override: Some(crate::highlighter::Language::Rust),
+            ..Default::default()
+        };
+        app.load_file(path);
+        assert_eq!(app.active_language, crate::highlighter::Language::Php);
+        assert_eq!(app.effective_language(), crate::highlighter::Language::Rust);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_highlight_size_limit() {
+        assert!(!super::text_content_exceeds_highlight_limit("small"));
+        assert!(!super::text_content_exceeds_highlight_limit(&"a".repeat(super::HIGHLIGHT_SIZE_LIMIT)));
+        assert!(super::text_content_exceeds_highlight_limit(&"a".repeat(super::HIGHLIGHT_SIZE_LIMIT + 1)));
     }
 }
