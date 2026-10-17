@@ -170,6 +170,7 @@ impl TextEditorApp {
 impl eframe::App for TextEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
 
         // 1. Top Panel (Menu Bar & Toolbar)
         egui::Panel::top("top_panel").show(ui, |ui| {
