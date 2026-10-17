@@ -207,6 +207,10 @@ impl TextEditorApp {
 }
 
 /// Documents above this size skip syntax highlighting and render plain.
+///
+/// Highlighting of anything past a few KB runs on a background thread (see
+/// `HighlighterLayouter::frame_job`), so this only bounds how long that pass can
+/// take, not how long the UI can freeze.
 const HIGHLIGHT_SIZE_LIMIT: usize = 1024 * 1024;
 
 /// True when a document is too large to highlight cheaply.
@@ -235,23 +239,12 @@ fn render_editor(ui: &mut egui::Ui, text: &mut String, mut layouter: Option<&mut
 
         match layouter.as_mut() {
             Some(highlighter) => {
+                // `TextEdit` calls this every frame. `frame_job` reuses the
+                // cached result, and highlights large documents on a background
+                // thread (plain text meanwhile) so the window never freezes.
                 let mut lay = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
-                    let mut job = egui::text::LayoutJob::default();
-                    for (index, line) in buf.as_str().split('\n').enumerate() {
-                        if index > 0 {
-                            job.append("\n", 0.0, highlighter.default_format().clone());
-                        }
-                        let line_job = highlighter.highlight_line(line);
-                        let offset = job.text.len();
-                        job.text.push_str(&line_job.text);
-                        for mut section in line_job.sections {
-                            section.byte_range.start += offset;
-                            section.byte_range.end += offset;
-                            job.sections.push(section);
-                        }
-                    }
-                    job.wrap.max_width = f32::INFINITY;
-                    ui.fonts_mut(|f| f.layout_job(job))
+                    let job = highlighter.frame_job(buf.as_str(), ui.ctx());
+                    ui.fonts_mut(|f| f.layout_job((*job).clone()))
                 };
                 ui.add_sized(ui.available_size(), text_edit.layouter(&mut lay));
             }
