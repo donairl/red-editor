@@ -100,8 +100,8 @@ mod tests {
     fn test_scan_directory_sorting_and_hidden_files() {
         let temp_dir = std::env::temp_dir().join("rred_test_scan_dir");
         let _ = fs::remove_dir_all(&temp_dir);
-        fs::create_dir_all(&temp_dir.join("sub_folder")).unwrap();
-        fs::create_dir_all(&temp_dir.join(".hidden_folder")).unwrap();
+        fs::create_dir_all(temp_dir.join("sub_folder")).unwrap();
+        fs::create_dir_all(temp_dir.join(".hidden_folder")).unwrap();
         File::create(temp_dir.join("a_file.txt")).unwrap();
         File::create(temp_dir.join("b_file.txt")).unwrap();
         File::create(temp_dir.join(".hidden_file.txt")).unwrap();
