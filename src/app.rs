@@ -219,37 +219,47 @@ fn text_content_exceeds_highlight_limit(content: &str) -> bool {
 /// When `layouter` is `None` the text renders plain, which is what oversized
 /// documents get. Lines are joined back together with `\n` separators so the
 /// buffer round-trips exactly, keeping the caret and selection aligned.
-fn render_editor(ui: &mut egui::Ui, text: &mut String, layouter: Option<&mut HighlighterLayouter<'_>>) {
-    let text_edit = egui::TextEdit::multiline(text)
-        .font(egui::TextStyle::Monospace)
-        .desired_width(f32::INFINITY);
+///
+/// The editor is wrapped in a vertical `ScrollArea`: `TextEdit` has no scrolling
+/// of its own for multiline input (`clip_text` is `false`, so its `text_offset`
+/// handling never runs) and its only `ui.scroll_to_rect` call writes to
+/// `PassState::scroll_target`, which only `ScrollArea::show` drains. Without this
+/// wrapper a document taller than the viewport cannot be scrolled and, with the
+/// default `cursor_at_end`, the caret lands off-screen and stays unreachable.
+fn render_editor(ui: &mut egui::Ui, text: &mut String, mut layouter: Option<&mut HighlighterLayouter<'_>>) {
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        let text_edit = egui::TextEdit::multiline(text)
+            .font(egui::TextStyle::Monospace)
+            .lock_focus(true)
+            .desired_width(f32::INFINITY);
 
-    match layouter {
-        Some(highlighter) => {
-            let mut lay = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
-                let mut job = egui::text::LayoutJob::default();
-                for (index, line) in buf.as_str().split('\n').enumerate() {
-                    if index > 0 {
-                        job.append("\n", 0.0, highlighter.default_format().clone());
+        match layouter.as_mut() {
+            Some(highlighter) => {
+                let mut lay = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
+                    let mut job = egui::text::LayoutJob::default();
+                    for (index, line) in buf.as_str().split('\n').enumerate() {
+                        if index > 0 {
+                            job.append("\n", 0.0, highlighter.default_format().clone());
+                        }
+                        let line_job = highlighter.highlight_line(line);
+                        let offset = job.text.len();
+                        job.text.push_str(&line_job.text);
+                        for mut section in line_job.sections {
+                            section.byte_range.start += offset;
+                            section.byte_range.end += offset;
+                            job.sections.push(section);
+                        }
                     }
-                    let line_job = highlighter.highlight_line(line);
-                    let offset = job.text.len();
-                    job.text.push_str(&line_job.text);
-                    for mut section in line_job.sections {
-                        section.byte_range.start += offset;
-                        section.byte_range.end += offset;
-                        job.sections.push(section);
-                    }
-                }
-                job.wrap.max_width = f32::INFINITY;
-                ui.fonts_mut(|f| f.layout_job(job))
-            };
-            ui.add_sized(ui.available_size(), text_edit.layouter(&mut lay));
+                    job.wrap.max_width = f32::INFINITY;
+                    ui.fonts_mut(|f| f.layout_job(job))
+                };
+                ui.add_sized(ui.available_size(), text_edit.layouter(&mut lay));
+            }
+            None => {
+                ui.add_sized(ui.available_size(), text_edit);
+            }
         }
-        None => {
-            ui.add_sized(ui.available_size(), text_edit);
-        }
-    }
+    });
 }
 
 impl eframe::App for TextEditorApp {
@@ -572,5 +582,143 @@ mod tests {
         assert!(!super::text_content_exceeds_highlight_limit("small"));
         assert!(!super::text_content_exceeds_highlight_limit(&"a".repeat(super::HIGHLIGHT_SIZE_LIMIT)));
         assert!(super::text_content_exceeds_highlight_limit(&"a".repeat(super::HIGHLIGHT_SIZE_LIMIT + 1)));
+    }
+
+    /// A document with more lines than fit on one screen.
+    fn long_document(lines: usize) -> String {
+        (0..lines)
+            .map(|i| format!("let x{i} = {i};"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The single `ScrollArea` the editor created, if any. `render_editor` must
+    /// create exactly one, on the plain and on the highlighted path alike:
+    /// `TextEdit` does not scroll multiline input by itself, and its
+    /// `ui.scroll_to_rect` call is drained only by `ScrollArea::show`.
+    fn editor_scroll_area(ctx: &egui::Context) -> Option<egui::containers::scroll_area::State> {
+        ctx.data(|data| {
+            data.iter_temp_by_type::<egui::containers::scroll_area::State>()
+                .next()
+                .cloned()
+        })
+    }
+
+    /// One frame rendering `body` with the given input events, discarding
+    /// texture deltas.
+    fn run_frame_with_events(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        mut body: impl FnMut(&mut egui::Ui),
+    ) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(800.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| body(ui));
+        output.textures_delta.clear();
+    }
+
+    /// Scrolls the editor with a real wheel event: the pointer hovers over the
+    /// editor and the wheel moves the content up by 200 points. Runs enough
+    /// frames for the animated scroll to settle.
+    fn scroll_editor_with_wheel(
+        ctx: &egui::Context,
+        mut body: impl FnMut(&mut egui::Ui),
+    ) -> egui::containers::scroll_area::State {
+        let pointer = egui::Event::PointerMoved(egui::pos2(100.0, 100.0));
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -200.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run_frame_with_events(ctx, vec![pointer, wheel], &mut body);
+        for _ in 0..30 {
+            run_frame_with_events(ctx, Vec::new(), &mut body);
+        }
+        editor_scroll_area(ctx).expect("ScrollArea must survive")
+    }
+
+    /// Regression: the editor must live inside a `ScrollArea` on the plain path.
+    /// Without it a document taller than the viewport cannot be scrolled, and
+    /// because `TextEdit` starts with the cursor at the end, the caret opens
+    /// off-screen and stays unreachable.
+    #[test]
+    fn test_render_editor_plain_path_is_scrollable() {
+        let ctx = egui::Context::default();
+        let original = long_document(400);
+        let mut text = original.clone();
+
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                super::render_editor(ui, &mut text, None);
+            });
+        });
+        let area = editor_scroll_area(&ctx).expect("editor must render inside a ScrollArea");
+        assert_eq!(area.clamped_offset().y, 0.0, "a fresh editor starts at the top");
+
+        let area = scroll_editor_with_wheel(&ctx, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                super::render_editor(ui, &mut text, None);
+            });
+        });
+        assert!(
+            area.clamped_offset().y > 0.0,
+            "the wheel must scroll the editor, offset {:?}",
+            area.clamped_offset()
+        );
+        assert_eq!(text, original, "scrolling must not alter the buffer");
+    }
+
+    /// Regression: the same for the highlighted path, which additionally proves
+    /// the multi-line layouter keeps the text byte-identical through layout.
+    #[test]
+    fn test_render_editor_highlighted_path_is_scrollable() {
+        let ctx = egui::Context::default();
+        let original = long_document(400);
+        let mut text = original.clone();
+
+        let area = scroll_editor_with_wheel(&ctx, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut highlighter = SyntaxHighlighter::new();
+                let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                let mut layouter = highlighter.layouter(Language::Rust, font_id);
+                super::render_editor(ui, &mut text, Some(&mut layouter));
+            });
+        });
+        assert!(
+            area.clamped_offset().y > 0.0,
+            "the highlighted editor must scroll, offset {:?}",
+            area.clamped_offset()
+        );
+        assert_eq!(text, original, "layouter must not alter the buffer");
+    }
+
+    /// Both branches of `render_editor` keep the buffer byte-identical.
+    #[test]
+    fn test_render_editor_round_trips_text_on_both_paths() {
+        let original = "fn main() {\n    let x = 1;\n}\n// tail\nlast".to_string();
+        let ctx = egui::Context::default();
+
+        let mut plain = original.clone();
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            super::render_editor(ui, &mut plain, None);
+        });
+        assert_eq!(plain, original);
+
+        let mut highlighted = original.clone();
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            let mut highlighter = SyntaxHighlighter::new();
+            let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+            let mut layouter = highlighter.layouter(Language::C, font_id);
+            super::render_editor(ui, &mut highlighted, Some(&mut layouter));
+        });
+        assert_eq!(highlighted, original);
     }
 }

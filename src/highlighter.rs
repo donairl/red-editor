@@ -103,8 +103,9 @@ impl SyntaxHighlighter {
     }
 
     /// The bundled grammar set.
-    // Only the tests need this accessor; the layouter borrows the set directly.
-    #[cfg_attr(not(test), expect(dead_code, reason = "only the tests inspect the raw grammar set"))]
+    // Only the tests inspect the raw grammar set; the layouter borrows the
+    // field directly, so this accessor is not part of the runtime surface.
+    #[cfg(test)]
     pub fn syntax_set(&self) -> &SyntaxSet {
         &self.syntax_set
     }
