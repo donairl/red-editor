@@ -7,6 +7,8 @@ use std::path::PathBuf;
 pub enum PendingAction {
     OpenFile(PathBuf),
     PromptOpenFile,
+    #[allow(dead_code)]
+    CloseTab(usize),
     Exit,
 }
 
@@ -80,11 +82,17 @@ mod tests {
         let action2 = PendingAction::OpenFile(PathBuf::from("test.txt"));
         let action3 = PendingAction::Exit;
         let action4 = PendingAction::PromptOpenFile;
+        let action5 = PendingAction::CloseTab(1);
+        let action6 = PendingAction::CloseTab(1);
+        let action7 = PendingAction::CloseTab(2);
 
         assert_eq!(action1, action2);
         assert_ne!(action1, action3);
         assert_ne!(action1, action4);
         assert_ne!(action3, action4);
+        assert_eq!(action5, action6);
+        assert_ne!(action5, action7);
+        assert_ne!(action5, action3);
     }
 
     #[test]

@@ -8,46 +8,53 @@ use crate::file_browser;
 use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::modals::{self, ModalResponse, PendingAction};
 
-pub struct TextEditorApp {
+pub const INITIAL_TEXT: &str = "Ketik sesuatu di sini...";
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocumentTab {
     pub text_content: String,
     pub saved_content: String,
     pub current_path: Option<PathBuf>,
-    pub opened_folder: Option<PathBuf>,
-    pub show_file_browser: bool,
-    pub pending_action: Option<PendingAction>,
-    pub show_about_modal: bool,
-    pub status_message: Option<(String, bool)>, // (message, is_error)
     pub active_language: Language,
     pub language_override: Option<Language>,
-    pub highlighter: SyntaxHighlighter,
-    /// Wrap long lines to the window width. Off by default: lines run on and
-    /// the editor scrolls sideways instead.
-    pub word_wrap: bool,
 }
 
-impl Default for TextEditorApp {
+impl Default for DocumentTab {
     fn default() -> Self {
-        let initial_text = String::from("Ketik sesuatu di sini...");
-        Self {
-            text_content: initial_text.clone(),
-            saved_content: initial_text,
-            current_path: None,
-            opened_folder: None,
-            show_file_browser: false,
-            pending_action: None,
-            show_about_modal: false,
-            status_message: None,
-            active_language: Language::PlainText,
-            language_override: None,
-            highlighter: SyntaxHighlighter::new(),
-            word_wrap: false,
-        }
+        Self::default_new()
     }
 }
 
-impl TextEditorApp {
+impl DocumentTab {
+    pub fn default_new() -> Self {
+        let initial = String::from(INITIAL_TEXT);
+        Self {
+            text_content: initial.clone(),
+            saved_content: initial,
+            current_path: None,
+            active_language: Language::PlainText,
+            language_override: None,
+        }
+    }
+
+    pub fn from_file(path: PathBuf) -> Result<Self, std::io::Error> {
+        let content = fs::read_to_string(&path)?;
+        let active_language = Language::from_path(&path);
+        Ok(Self {
+            text_content: content.clone(),
+            saved_content: content,
+            current_path: Some(path),
+            active_language,
+            language_override: None,
+        })
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.text_content != self.saved_content
+    }
+
+    pub fn is_pristine(&self) -> bool {
+        self.current_path.is_none() && !self.is_dirty() && self.text_content == INITIAL_TEXT
     }
 
     pub fn file_display_name(&self) -> String {
@@ -58,6 +65,75 @@ impl TextEditorApp {
             .unwrap_or_else(|| "[Dokumen Baru]".to_string())
     }
 
+    pub fn effective_language(&self) -> Language {
+        self.language_override.unwrap_or(self.active_language)
+    }
+
+    pub fn save(&mut self) -> Result<(), std::io::Error> {
+        if let Some(ref path) = self.current_path {
+            fs::write(path, &self.text_content)?;
+            self.saved_content = self.text_content.clone();
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No file path specified",
+            ))
+        }
+    }
+}
+
+pub struct TextEditorApp {
+    pub tabs: Vec<DocumentTab>,
+    pub active_tab_index: usize,
+    pub opened_folder: Option<PathBuf>,
+    pub show_file_browser: bool,
+    pub pending_action: Option<PendingAction>,
+    pub show_about_modal: bool,
+    pub status_message: Option<(String, bool)>, // (message, is_error)
+    pub highlighter: SyntaxHighlighter,
+    /// Wrap long lines to the window width. Off by default: lines run on and
+    /// the editor scrolls sideways instead.
+    pub word_wrap: bool,
+}
+
+impl Default for TextEditorApp {
+    fn default() -> Self {
+        Self {
+            tabs: vec![DocumentTab::default_new()],
+            active_tab_index: 0,
+            opened_folder: None,
+            show_file_browser: false,
+            pending_action: None,
+            show_about_modal: false,
+            status_message: None,
+            highlighter: SyntaxHighlighter::new(),
+            word_wrap: false,
+        }
+    }
+}
+
+impl TextEditorApp {
+    pub fn active_tab(&self) -> &DocumentTab {
+        &self.tabs[self.active_tab_index]
+    }
+
+    pub fn active_tab_mut(&mut self) -> &mut DocumentTab {
+        &mut self.tabs[self.active_tab_index]
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.active_tab().is_dirty()
+    }
+
+    pub fn any_dirty(&self) -> bool {
+        self.tabs.iter().any(|t| t.is_dirty())
+    }
+
+    pub fn file_display_name(&self) -> String {
+        self.active_tab().file_display_name()
+    }
+
     pub fn window_title(&self) -> String {
         let dirty_flag = if self.is_dirty() { " *" } else { "" };
         format!("{}{dirty_flag} - Red Text Editor", self.file_display_name())
@@ -66,7 +142,7 @@ impl TextEditorApp {
     /// The language actually used for highlighting: the manual override if set,
     /// otherwise the language auto-detected from the current file.
     pub fn effective_language(&self) -> Language {
-        self.language_override.unwrap_or(self.active_language)
+        self.active_tab().effective_language()
     }
 
     /// Draws the "Bahasa" dropdown used by both the File menu and the status bar.
@@ -79,22 +155,94 @@ impl TextEditorApp {
             for lang in Language::all() {
                 let selected = *lang == current;
                 if ui.selectable_label(selected, lang.display_name()).clicked() {
-                    self.language_override = if selected { None } else { Some(*lang) };
+                    self.active_tab_mut().language_override =
+                        if selected { None } else { Some(*lang) };
                     ui.close();
                 }
             }
         });
     }
 
+    #[allow(dead_code)]
+    pub fn open_new_tab(&mut self) {
+        self.tabs.push(DocumentTab::default_new());
+        self.active_tab_index = self.tabs.len() - 1;
+    }
+
+    pub fn open_file_in_tab(&mut self, path: PathBuf) {
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|t| t.current_path.as_ref() == Some(&path))
+        {
+            self.active_tab_index = index;
+            self.status_message = Some(("File sudah dibuka.".to_string(), false));
+            return;
+        }
+
+        if self.active_tab().is_pristine() {
+            self.load_file(path);
+        } else {
+            match DocumentTab::from_file(path) {
+                Ok(tab) => {
+                    let exceeds = text_content_exceeds_highlight_limit(&tab.text_content);
+                    self.tabs.push(tab);
+                    self.active_tab_index = self.tabs.len() - 1;
+                    self.status_message = Some((
+                        if exceeds {
+                            "File terlalu besar untuk syntax highlighting.".to_string()
+                        } else {
+                            "File berhasil dibuka.".to_string()
+                        },
+                        false,
+                    ));
+                }
+                Err(err) => {
+                    self.status_message = Some((format!("Gagal membuka file: {err}"), true));
+                }
+            }
+        }
+    }
+
+    pub fn close_tab(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        if self.tabs.len() <= 1 {
+            self.tabs[0] = DocumentTab::default_new();
+            self.active_tab_index = 0;
+        } else {
+            self.tabs.remove(index);
+            if self.active_tab_index > index {
+                self.active_tab_index -= 1;
+            } else if self.active_tab_index >= self.tabs.len() {
+                self.active_tab_index = self.tabs.len() - 1;
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn trigger_close_tab(&mut self, index: usize) {
+        if let Some(tab) = self.tabs.get(index) {
+            if tab.is_dirty() {
+                self.pending_action = Some(PendingAction::CloseTab(index));
+            } else {
+                self.close_tab(index);
+            }
+        }
+    }
+
     pub fn load_file(&mut self, path: PathBuf) {
         match fs::read_to_string(&path) {
             Ok(content) => {
-                self.text_content = content.clone();
-                self.saved_content = content;
-                self.active_language = Language::from_path(&path);
-                self.current_path = Some(path);
+                let exceeds_limit = text_content_exceeds_highlight_limit(&content);
+                let tab = self.active_tab_mut();
+                tab.text_content = content.clone();
+                tab.saved_content = content;
+                tab.active_language = Language::from_path(&path);
+                tab.current_path = Some(path);
                 self.status_message = Some((
-                    if text_content_exceeds_highlight_limit(&self.text_content) {
+                    if exceeds_limit {
                         "File terlalu besar untuk syntax highlighting.".to_string()
                     } else {
                         "File berhasil dibuka.".to_string()
@@ -108,11 +256,13 @@ impl TextEditorApp {
         }
     }
 
-    pub fn save(&mut self) -> bool {
-        if let Some(path) = self.current_path.clone() {
-            match fs::write(&path, &self.text_content) {
+    pub fn save_tab(&mut self, index: usize) -> bool {
+        if index >= self.tabs.len() {
+            return false;
+        }
+        if self.tabs[index].current_path.is_some() {
+            match self.tabs[index].save() {
                 Ok(_) => {
-                    self.saved_content = self.text_content.clone();
                     self.status_message = Some(("File berhasil disimpan.".to_string(), false));
                     true
                 }
@@ -122,13 +272,24 @@ impl TextEditorApp {
                 }
             }
         } else {
-            self.save_as()
+            let old_idx = self.active_tab_index;
+            self.active_tab_index = index;
+            let result = self.save_as();
+            if !result {
+                self.active_tab_index = old_idx;
+            }
+            result
         }
     }
 
+    pub fn save(&mut self) -> bool {
+        self.save_tab(self.active_tab_index)
+    }
+
     pub fn save_as(&mut self) -> bool {
+        let active = self.active_tab();
         let dialog = rfd::FileDialog::new();
-        let dialog = if let Some(ref path) = self.current_path {
+        let dialog = if let Some(ref path) = active.current_path {
             if let Some(parent) = path.parent() {
                 dialog.set_directory(parent)
             } else {
@@ -139,11 +300,13 @@ impl TextEditorApp {
         };
 
         if let Some(path) = dialog.save_file() {
-            match fs::write(&path, &self.text_content) {
+            let text_to_save = self.active_tab().text_content.clone();
+            match fs::write(&path, &text_to_save) {
                 Ok(_) => {
-                    self.saved_content = self.text_content.clone();
-                    self.active_language = Language::from_path(&path);
-                    self.current_path = Some(path);
+                    let active = self.active_tab_mut();
+                    active.saved_content = active.text_content.clone();
+                    active.active_language = Language::from_path(&path);
+                    active.current_path = Some(path);
                     self.status_message = Some(("File berhasil disimpan.".to_string(), false));
                     true
                 }
@@ -167,7 +330,7 @@ impl TextEditorApp {
 
     pub fn pick_and_open_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_file() {
-            self.load_file(path);
+            self.open_file_in_tab(path);
         }
     }
 
@@ -183,12 +346,12 @@ impl TextEditorApp {
         if self.is_dirty() {
             self.pending_action = Some(PendingAction::OpenFile(path));
         } else {
-            self.load_file(path);
+            self.open_file_in_tab(path);
         }
     }
 
     pub fn trigger_exit(&mut self, ctx: &egui::Context) {
-        if self.is_dirty() {
+        if self.any_dirty() {
             self.pending_action = Some(PendingAction::Exit);
         } else {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -198,10 +361,13 @@ impl TextEditorApp {
     pub fn execute_pending_action(&mut self, ctx: &egui::Context, action: PendingAction) {
         match action {
             PendingAction::OpenFile(path) => {
-                self.load_file(path);
+                self.open_file_in_tab(path);
             }
             PendingAction::PromptOpenFile => {
                 self.pick_and_open_file();
+            }
+            PendingAction::CloseTab(index) => {
+                self.close_tab(index);
             }
             PendingAction::Exit => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -372,7 +538,7 @@ impl eframe::App for TextEditorApp {
 
                 // Info Karakter di sisi kanan
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("Karakter: {}", self.text_content.len()));
+                    ui.label(format!("Karakter: {}", self.active_tab().text_content.len()));
                 });
             });
         });
@@ -434,25 +600,22 @@ impl eframe::App for TextEditorApp {
             // `TextEdit::font` resolves this `TextStyle` the same way, so the
             // caret and selection line up with the highlighted glyphs.
             let font_id = egui::TextStyle::Monospace.resolve(ui.style());
-            let too_large = text_content_exceeds_highlight_limit(&self.text_content);
+            let too_large = text_content_exceeds_highlight_limit(&self.active_tab().text_content);
 
-            // Split the borrows so the text and the highlighter can be handed to
-            // `render_editor` together.
-            let Self {
-                text_content,
-                highlighter,
-                active_language,
-                language_override,
-                word_wrap,
-                ..
-            } = self;
-            let language = language_override.unwrap_or(*active_language);
+            let word_wrap = self.word_wrap;
+            let active_idx = self.active_tab_index;
+            let language = self.tabs[active_idx].effective_language();
 
             if too_large {
-                render_editor(ui, text_content, None, *word_wrap);
+                render_editor(ui, &mut self.tabs[active_idx].text_content, None, word_wrap);
             } else {
-                let mut layouter = highlighter.layouter(language, font_id);
-                render_editor(ui, text_content, Some(&mut layouter), *word_wrap);
+                let mut layouter = self.highlighter.layouter(language, font_id);
+                render_editor(
+                    ui,
+                    &mut self.tabs[active_idx].text_content,
+                    Some(&mut layouter),
+                    word_wrap,
+                );
             }
         });
 
@@ -461,13 +624,36 @@ impl eframe::App for TextEditorApp {
 
         #[allow(clippy::collapsible_if)]
         if self.pending_action.is_some() {
-            if let Some(response) =
-                modals::show_unsaved_changes_modal(&ctx, &self.file_display_name())
-            {
+            let prompt_name = match self.pending_action {
+                Some(PendingAction::CloseTab(idx)) => self
+                    .tabs
+                    .get(idx)
+                    .map(|t| t.file_display_name())
+                    .unwrap_or_else(|| self.file_display_name()),
+                Some(PendingAction::Exit) => self
+                    .tabs
+                    .iter()
+                    .find(|t| t.is_dirty())
+                    .map(|t| t.file_display_name())
+                    .unwrap_or_else(|| self.file_display_name()),
+                _ => self.file_display_name(),
+            };
+            if let Some(response) = modals::show_unsaved_changes_modal(&ctx, &prompt_name) {
                 let action = self.pending_action.take().unwrap();
                 match response {
                     ModalResponse::Save => {
-                        if self.save() {
+                        let saved = match action {
+                            PendingAction::CloseTab(idx) => self.save_tab(idx),
+                            PendingAction::Exit => {
+                                if let Some(idx) = self.tabs.iter().position(|t| t.is_dirty()) {
+                                    self.save_tab(idx)
+                                } else {
+                                    true
+                                }
+                            }
+                            _ => self.save(),
+                        };
+                        if saved {
                             self.execute_pending_action(&ctx, action);
                         }
                     }
@@ -495,10 +681,10 @@ mod tests {
         let mut app = TextEditorApp::default();
         assert!(!app.is_dirty());
 
-        app.text_content = "Berubah".to_string();
+        app.active_tab_mut().text_content = "Berubah".to_string();
         assert!(app.is_dirty());
 
-        app.saved_content = "Berubah".to_string();
+        app.active_tab_mut().saved_content = "Berubah".to_string();
         assert!(!app.is_dirty());
     }
 
@@ -507,14 +693,14 @@ mod tests {
         let mut app = TextEditorApp::default();
         assert_eq!(app.window_title(), "[Dokumen Baru] - Red Text Editor");
 
-        app.text_content = "Teks baru".to_string();
+        app.active_tab_mut().text_content = "Teks baru".to_string();
         assert_eq!(app.window_title(), "[Dokumen Baru] * - Red Text Editor");
 
-        app.current_path = Some(PathBuf::from("/home/user/document.txt"));
-        app.saved_content = "Teks baru".to_string();
+        app.active_tab_mut().current_path = Some(PathBuf::from("/home/user/document.txt"));
+        app.active_tab_mut().saved_content = "Teks baru".to_string();
         assert_eq!(app.window_title(), "document.txt - Red Text Editor");
 
-        app.text_content = "Teks diedit".to_string();
+        app.active_tab_mut().text_content = "Teks diedit".to_string();
         assert_eq!(app.window_title(), "document.txt * - Red Text Editor");
     }
 
@@ -532,22 +718,22 @@ mod tests {
         let mut app = TextEditorApp::default();
         app.load_file(test_file.clone());
 
-        assert_eq!(app.text_content, "Hello from file");
-        assert_eq!(app.saved_content, "Hello from file");
-        assert_eq!(app.current_path, Some(test_file.clone()));
+        assert_eq!(app.active_tab().text_content, "Hello from file");
+        assert_eq!(app.active_tab().saved_content, "Hello from file");
+        assert_eq!(app.active_tab().current_path, Some(test_file.clone()));
         assert!(!app.is_dirty());
         assert_eq!(
             app.status_message,
             Some(("File berhasil dibuka.".to_string(), false))
         );
 
-        app.text_content = "Modified content".to_string();
+        app.active_tab_mut().text_content = "Modified content".to_string();
         assert!(app.is_dirty());
 
         let save_result = app.save();
         assert!(save_result);
         assert!(!app.is_dirty());
-        assert_eq!(app.saved_content, "Modified content");
+        assert_eq!(app.active_tab().saved_content, "Modified content");
         let reloaded = fs::read_to_string(&test_file).unwrap();
         assert_eq!(reloaded, "Modified content");
 
@@ -566,7 +752,7 @@ mod tests {
         assert!(app.status_message.as_ref().unwrap().1);
 
         // Dirty: should prompt via pending_action
-        app.text_content = "Modified".to_string();
+        app.active_tab_mut().text_content = "Modified".to_string();
         app.trigger_open_specific_file(target_path.clone());
         assert_eq!(
             app.pending_action,
@@ -577,20 +763,23 @@ mod tests {
     #[test]
     fn test_effective_language_prefers_override() {
         let mut app = TextEditorApp::default();
-        assert_eq!(app.active_language, crate::highlighter::Language::PlainText);
-        assert_eq!(app.language_override, None);
+        assert_eq!(
+            app.active_tab().active_language,
+            crate::highlighter::Language::PlainText
+        );
+        assert_eq!(app.active_tab().language_override, None);
         assert_eq!(
             app.effective_language(),
             crate::highlighter::Language::PlainText
         );
 
-        app.active_language = crate::highlighter::Language::Rust;
+        app.active_tab_mut().active_language = crate::highlighter::Language::Rust;
         assert_eq!(app.effective_language(), crate::highlighter::Language::Rust);
 
-        app.language_override = Some(crate::highlighter::Language::Php);
+        app.active_tab_mut().language_override = Some(crate::highlighter::Language::Php);
         assert_eq!(app.effective_language(), crate::highlighter::Language::Php);
 
-        app.language_override = None;
+        app.active_tab_mut().language_override = None;
         assert_eq!(app.effective_language(), crate::highlighter::Language::Rust);
     }
 
@@ -604,7 +793,10 @@ mod tests {
 
         let mut app = TextEditorApp::default();
         app.load_file(path);
-        assert_eq!(app.active_language, crate::highlighter::Language::Rust);
+        assert_eq!(
+            app.active_tab().active_language,
+            crate::highlighter::Language::Rust
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -617,15 +809,158 @@ mod tests {
         let path = dir.join("script.php");
         std::fs::write(&path, "<?php echo 1;").unwrap();
 
-        let mut app = TextEditorApp {
-            language_override: Some(crate::highlighter::Language::Rust),
-            ..Default::default()
-        };
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().language_override = Some(crate::highlighter::Language::Rust);
         app.load_file(path);
-        assert_eq!(app.active_language, crate::highlighter::Language::Php);
+        assert_eq!(
+            app.active_tab().active_language,
+            crate::highlighter::Language::Php
+        );
         assert_eq!(app.effective_language(), crate::highlighter::Language::Rust);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_default_starts_with_one_pristine_tab() {
+        let app = TextEditorApp::default();
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab_index, 0);
+        assert!(app.active_tab().is_pristine());
+        assert!(!app.is_dirty());
+        assert_eq!(app.file_display_name(), "[Dokumen Baru]");
+    }
+
+    #[test]
+    fn test_open_new_tab() {
+        let mut app = TextEditorApp::default();
+        app.open_new_tab();
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab_index, 1);
+        assert!(app.active_tab().is_pristine());
+    }
+
+    #[test]
+    fn test_open_file_replaces_pristine_tab() {
+        let temp_dir = std::env::temp_dir().join("rred_test_open_pristine");
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join("doc.txt");
+        fs::write(&test_file, "hello world").unwrap();
+
+        let mut app = TextEditorApp::default();
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().is_pristine());
+
+        app.open_file_in_tab(test_file.clone());
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab_index, 0);
+        assert_eq!(app.active_tab().text_content, "hello world");
+        assert_eq!(app.active_tab().current_path, Some(test_file));
+        assert!(!app.active_tab().is_pristine());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_open_file_creates_new_tab_when_active_tab_is_not_pristine() {
+        let temp_dir = std::env::temp_dir().join("rred_test_open_not_pristine");
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join("second.txt");
+        fs::write(&test_file, "second file content").unwrap();
+
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "user typed something".to_string();
+        assert!(!app.active_tab().is_pristine());
+
+        app.open_file_in_tab(test_file.clone());
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab_index, 1);
+        assert_eq!(app.active_tab().text_content, "second file content");
+        assert_eq!(app.active_tab().current_path, Some(test_file));
+        assert_eq!(app.tabs[0].text_content, "user typed something");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_open_existing_file_focuses_tab_without_duplicate() {
+        let temp_dir = std::env::temp_dir().join("rred_test_open_existing");
+        let _ = fs::create_dir_all(&temp_dir);
+        let file1 = temp_dir.join("file1.txt");
+        let file2 = temp_dir.join("file2.txt");
+        fs::write(&file1, "file 1").unwrap();
+        fs::write(&file2, "file 2").unwrap();
+
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(file1.clone());
+        app.open_file_in_tab(file2);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab_index, 1);
+
+        // Re-open file1: should not open a 3rd tab, but switch active_tab_index to 0
+        app.open_file_in_tab(file1);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab_index, 0);
+        assert_eq!(
+            app.status_message,
+            Some(("File sudah dibuka.".to_string(), false))
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_close_tab_adjusts_active_index() {
+        let mut app = TextEditorApp::default();
+        app.open_new_tab(); // tab 1
+        app.open_new_tab(); // tab 2
+        assert_eq!(app.tabs.len(), 3);
+        assert_eq!(app.active_tab_index, 2);
+
+        // Close the active tab at the end (index 2) -> active index becomes 1
+        app.close_tab(2);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab_index, 1);
+
+        // Close tab 0 while active index is 1 -> active index shifts to 0
+        app.close_tab(0);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab_index, 0);
+    }
+
+    #[test]
+    fn test_close_last_tab_creates_new_blank_tab() {
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "some edited text".to_string();
+        app.active_tab_mut().current_path = Some(PathBuf::from("test.txt"));
+        assert!(!app.active_tab().is_pristine());
+
+        app.close_tab(0);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab_index, 0);
+        assert!(app.active_tab().is_pristine());
+        assert_eq!(app.active_tab().text_content, INITIAL_TEXT);
+        assert_eq!(app.active_tab().current_path, None);
+    }
+
+    #[test]
+    fn test_dirty_tab_triggers_close_tab_pending_action() {
+        let mut app = TextEditorApp::default();
+        app.open_new_tab();
+        app.active_tab_mut().text_content = "dirty content".to_string();
+        assert!(app.active_tab().is_dirty());
+
+        app.trigger_close_tab(1);
+        assert_eq!(app.pending_action, Some(PendingAction::CloseTab(1)));
+        assert_eq!(app.tabs.len(), 2); // Tab was not closed yet
+
+        // If clean, closes immediately
+        app.active_tab_mut().saved_content = "dirty content".to_string();
+        assert!(!app.active_tab().is_dirty());
+        app.pending_action = None;
+        app.trigger_close_tab(1);
+        assert_eq!(app.pending_action, None);
+        assert_eq!(app.tabs.len(), 1);
     }
 
     #[test]
