@@ -4,7 +4,8 @@ use eframe::egui;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::file_browser;
+use crate::activity_bar;
+use crate::file_browser::{self, Explorer};
 use crate::gutter;
 use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::modals::{self, ModalResponse, PendingAction};
@@ -98,8 +99,10 @@ impl DocumentTab {
 pub struct TextEditorApp {
     pub tabs: Vec<DocumentTab>,
     pub active_tab_index: usize,
-    pub opened_folder: Option<PathBuf>,
-    pub show_file_browser: bool,
+    /// The open folder's tree; `None` until a folder is opened.
+    pub explorer: Option<Explorer>,
+    /// Whether the Explorer sidebar is shown, once a folder is open.
+    pub show_sidebar: bool,
     pub pending_action: Option<PendingAction>,
     pub show_about_modal: bool,
     pub status_message: Option<(String, bool)>, // (message, is_error)
@@ -117,8 +120,8 @@ impl Default for TextEditorApp {
         Self {
             tabs: vec![DocumentTab::default_new()],
             active_tab_index: 0,
-            opened_folder: None,
-            show_file_browser: false,
+            explorer: None,
+            show_sidebar: false,
             pending_action: None,
             show_about_modal: false,
             status_message: None,
@@ -406,9 +409,19 @@ impl TextEditorApp {
 
     pub fn trigger_open_folder(&mut self) {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-            self.opened_folder = Some(folder);
-            self.show_file_browser = true;
+            self.explorer = Some(Explorer::new(folder));
+            self.show_sidebar = true;
             self.status_message = Some(("Folder dibuka.".to_string(), false));
+        }
+    }
+
+    /// The Activity Bar's Explorer item: asks for a folder when none is
+    /// open, otherwise shows or hides the sidebar.
+    pub fn toggle_explorer(&mut self) {
+        if self.explorer.is_none() {
+            self.trigger_open_folder();
+        } else {
+            self.show_sidebar = !self.show_sidebar;
         }
     }
 
@@ -633,19 +646,6 @@ impl eframe::App for TextEditorApp {
                     }
                 });
 
-                ui.separator();
-
-                // Toggle Sidebar File Browser button
-                if self.opened_folder.is_some() {
-                    let toggle_text = if self.show_file_browser {
-                        "📂 Sembunyikan Sidebar"
-                    } else {
-                        "📁 Tampilkan Sidebar"
-                    };
-                    if ui.button(toggle_text).clicked() {
-                        self.show_file_browser = !self.show_file_browser;
-                    }
-                }
 
                 // Info Karakter di sisi kanan
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -659,31 +659,39 @@ impl eframe::App for TextEditorApp {
             self.show_status_bar(ui);
         });
 
-        // 3. Left Panel (File Browser Sidebar)
-        let mut file_to_open = None;
-        let mut close_sidebar = false;
-
-        #[allow(clippy::collapsible_if)]
-        if self.show_file_browser {
-            if let Some(ref folder) = self.opened_folder {
-                egui::Panel::left("file_browser_panel")
-                    .resizable(true)
-                    .default_size(200.0)
-                    .min_size(120.0)
-                    .max_size(400.0)
-                    .show(ui, |ui| {
-                        file_browser::show_file_browser(
-                            ui,
-                            folder,
-                            &mut file_to_open,
-                            &mut close_sidebar,
-                        );
-                    });
-            }
+        // 3. Activity Bar and Explorer sidebar. Both paint their own right
+        // border, so egui's separator lines are turned off.
+        let side_fill = file_browser::SidebarPalette::for_visuals(ui.visuals()).background;
+        let side_frame = egui::Frame::NONE.fill(side_fill);
+        let explorer_open = self.show_sidebar && self.explorer.is_some();
+        let activity = egui::Panel::left("activity_bar")
+            .exact_size(activity_bar::WIDTH)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(side_frame)
+            .show(ui, |ui| activity_bar::show(ui, explorer_open))
+            .inner;
+        if activity.clicked {
+            self.toggle_explorer();
         }
 
-        if close_sidebar {
-            self.show_file_browser = false;
+        let mut file_to_open = None;
+        let active_file = self.active_tab().current_path.clone();
+        #[allow(clippy::collapsible_if)]
+        if self.show_sidebar {
+            if let Some(explorer) = self.explorer.as_mut() {
+                egui::Panel::left("file_browser_panel")
+                    .resizable(true)
+                    .default_size(240.0)
+                    .min_size(170.0)
+                    .max_size(500.0)
+                    .show_separator_line(false)
+                    .frame(side_frame)
+                    .show(ui, |ui| {
+                        file_to_open =
+                            file_browser::show(ui, explorer, active_file.as_deref()).open_file;
+                    });
+            }
         }
 
         if let Some(path) = file_to_open {
@@ -1399,6 +1407,69 @@ mod tests {
             painted_text(&shapes, "Bahasa").is_some(),
             "Tampilan menu must offer Bahasa"
         );
+    }
+
+    /// A fresh folder `rred_app_<name>` in the temp directory holding
+    /// `notes.txt`.
+    fn folder_with_notes(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rred_app_{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("notes.txt"), "notes").unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_toggle_explorer_hides_and_shows_the_sidebar() {
+        let dir = folder_with_notes("toggle_explorer");
+        let mut app = TextEditorApp {
+            explorer: Some(Explorer::new(dir.clone())),
+            show_sidebar: true,
+            ..Default::default()
+        };
+
+        app.toggle_explorer();
+        assert!(!app.show_sidebar);
+        app.toggle_explorer();
+        assert!(app.show_sidebar);
+        assert!(app.explorer.is_some(), "toggling keeps the open folder");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Clicking a file in the tree opens it, and clicking it again focuses
+    /// its tab instead of opening a second one.
+    #[test]
+    fn test_tree_click_opens_a_file_once() {
+        let dir = folder_with_notes("tree_click");
+        let notes = dir.join("notes.txt");
+        let mut app = TextEditorApp::default();
+        app.open_new_tab();
+        app.active_tab_mut().text_content = "unsaved".to_string();
+        let mut explorer = Explorer::new(dir.clone());
+        let ctx = egui::Context::default();
+
+        let mut tree = |events| {
+            let mut response = None;
+            run_frame_with_events(&ctx, events, |ui| {
+                response = Some(file_browser::show(ui, &mut explorer, None));
+            });
+            response.expect("show ran")
+        };
+        let (path, row) = tree(Vec::new()).rows[0].clone();
+        assert_eq!(path, notes);
+        let opened = tree(click_events(row.center()))
+            .open_file
+            .expect("the notes row was clicked");
+        assert_eq!(opened, notes);
+
+        app.trigger_open_specific_file(opened.clone());
+        let tabs = app.tabs.len();
+        assert_eq!(app.active_tab().current_path.as_ref(), Some(&notes));
+        app.active_tab_index = 0;
+        app.trigger_open_specific_file(opened);
+        assert_eq!(app.tabs.len(), tabs, "no duplicate tab");
+        assert_eq!(app.active_tab().current_path.as_ref(), Some(&notes));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

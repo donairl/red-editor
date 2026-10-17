@@ -514,53 +514,6 @@ fn paint_collapse_all_icon(painter: &egui::Painter, center: egui::Pos2, color: C
     painter.line_segment([back.left_top(), back.right_top()], stroke);
 }
 
-pub fn render_tree_node(ui: &mut egui::Ui, dir: &Path, on_open_file: &mut Option<PathBuf>) {
-    let entries = scan_directory(dir);
-
-    for entry in entries {
-        if entry.is_dir {
-            egui::CollapsingHeader::new(format!("📁 {}", entry.name))
-                .id_salt(&entry.path)
-                .show(ui, |ui| {
-                    render_tree_node(ui, &entry.path, on_open_file);
-                });
-        } else {
-            let file_button = ui.button(format!("📄 {}", entry.name));
-            if file_button.clicked() {
-                *on_open_file = Some(entry.path);
-            }
-        }
-    }
-}
-
-pub fn show_file_browser(
-    ui: &mut egui::Ui,
-    current_folder: &Path,
-    on_open_file: &mut Option<PathBuf>,
-    on_close_sidebar: &mut bool,
-) {
-    ui.horizontal(|ui| {
-        let folder_name = current_folder
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_else(|| current_folder.to_string_lossy());
-        ui.heading(format!("📂 {}", folder_name));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("✖").clicked() {
-                *on_close_sidebar = true;
-            }
-        });
-    });
-
-    ui.separator();
-
-    egui::ScrollArea::both()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            render_tree_node(ui, current_folder, on_open_file);
-        });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
