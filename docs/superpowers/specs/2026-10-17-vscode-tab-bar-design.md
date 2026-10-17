@@ -26,6 +26,7 @@ The current tab bar wraps every tab in a `ui.group` frame, highlights the active
    | accent       | `#0078D4`   | `#005FB8`    |
    | fg active    | `#FFFFFF`   | `#3B3B3B`    |
    | fg inactive  | `#9D9D9D`   | `#868686`    |
+   | close hover  | `#313131`   | `#E9E9E9`    |
 
 2. **Strip geometry.**
    - Height 35 px, corner radius 0, tabs flush against each other.
