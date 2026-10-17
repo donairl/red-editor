@@ -520,10 +520,16 @@ fn render_editor(
         egui::ScrollArea::both()
     };
     scroll_area.show(ui, |ui| {
+        // Fill the viewport through `min_size`, not `ui.add_sized`: `add_sized`
+        // centres a widget larger than the space it is given, so a line wider
+        // than the window pushed the start of every line off the left edge,
+        // beyond the reach of the scroll bar. A plain `ui.add` grows the
+        // editor right and down from the top-left corner instead.
         let text_edit = egui::TextEdit::multiline(text)
             .font(egui::TextStyle::Monospace)
             .lock_focus(true)
-            .desired_width(f32::INFINITY);
+            .desired_width(f32::INFINITY)
+            .min_size(ui.available_size());
 
         match layouter.as_mut() {
             Some(highlighter) => {
@@ -537,10 +543,10 @@ fn render_editor(
                     job.wrap.max_width = if word_wrap { wrap_width } else { f32::INFINITY };
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
-                ui.add_sized(ui.available_size(), text_edit.layouter(&mut lay));
+                ui.add(text_edit.layouter(&mut lay));
             }
             None if word_wrap => {
-                ui.add_sized(ui.available_size(), text_edit);
+                ui.add(text_edit);
             }
             None => {
                 // Mirror egui's stock `TextEdit` layouter so wrap-off plain text
@@ -569,7 +575,7 @@ fn render_editor(
                     }
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
-                ui.add_sized(ui.available_size(), text_edit.layouter(&mut lay));
+                ui.add(text_edit.layouter(&mut lay));
             }
         }
     });
@@ -1063,12 +1069,12 @@ mod tests {
     }
 
     /// One frame rendering `body` with the given input events, discarding
-    /// texture deltas.
+    /// texture deltas. Returns the painted shapes.
     fn run_frame_with_events(
         ctx: &egui::Context,
         events: Vec<egui::Event>,
         mut body: impl FnMut(&mut egui::Ui),
-    ) {
+    ) -> Vec<egui::epaint::ClippedShape> {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::pos2(0.0, 0.0),
@@ -1079,6 +1085,22 @@ mod tests {
         };
         let mut output = ctx.run_ui(input, |ui| body(ui));
         output.textures_delta.clear();
+        output.shapes
+    }
+
+    /// Where the editor painted `text`, as `(galley rect, clip rect)` in screen
+    /// coordinates, or `None` if it was not painted at all.
+    fn painted_text(
+        shapes: &[egui::epaint::ClippedShape],
+        text: &str,
+    ) -> Option<(egui::Rect, egui::Rect)> {
+        shapes.iter().find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(shape) if shape.galley.text() == text => Some((
+                egui::Rect::from_min_size(shape.pos, shape.galley.size()),
+                clipped.clip_rect,
+            )),
+            _ => None,
+        })
     }
 
     /// Scrolls the editor with a real wheel event: the pointer hovers over the
@@ -1219,6 +1241,63 @@ mod tests {
         });
         assert_eq!(text, original, "scrolling must not alter the buffer");
         area
+    }
+
+    /// Renders `text` with wrap off on the plain or highlighted path, scrolled
+    /// sideways by `scroll_x` points, and returns where it was painted.
+    fn paint_wide_line(highlighted: bool, scroll_x: f32) -> Option<(egui::Rect, egui::Rect)> {
+        let ctx = egui::Context::default();
+        let original = wide_document();
+        let mut text = original.clone();
+        let mut highlighter = SyntaxHighlighter::new();
+        let mut body = |ui: &mut egui::Ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                if highlighted {
+                    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                    let mut layouter = highlighter.layouter(Language::Rust, font_id);
+                    super::render_editor(ui, &mut text, Some(&mut layouter), false);
+                } else {
+                    super::render_editor(ui, &mut text, None, false);
+                }
+            });
+        };
+        if scroll_x != 0.0 {
+            scroll_editor_with_wheel_delta(&ctx, egui::vec2(-scroll_x, 0.0), &mut body);
+        }
+        let shapes = run_frame_with_events(&ctx, Vec::new(), &mut body);
+        painted_text(&shapes, &original)
+    }
+
+    /// Regression: with wrap off, one line wider than the window pushed the
+    /// start of every line off the left edge, where no scroll offset reaches.
+    /// `Ui::add_sized` centres a widget that is larger than the space it is
+    /// given, so the editor overflowed to the left by half its excess width.
+    #[test]
+    fn test_wide_line_keeps_line_starts_visible() {
+        for highlighted in [false, true] {
+            let (galley, clip) =
+                paint_wide_line(highlighted, 0.0).expect("the editor must paint the buffer");
+            assert!(
+                galley.left() >= clip.left(),
+                "line starts painted left of the viewport (highlighted: {highlighted}): \
+                 galley {galley:?}, clip {clip:?}"
+            );
+        }
+    }
+
+    /// Regression: scrolled fully right, the end of the long line must fill the
+    /// viewport. With the centred overflow the scroll range ran past the text
+    /// and the viewport showed empty space.
+    #[test]
+    fn test_wide_line_end_is_reachable_by_scrolling() {
+        for highlighted in [false, true] {
+            let painted = paint_wide_line(highlighted, 1_000_000.0);
+            assert!(
+                painted.is_some_and(|(galley, clip)| galley.right() > clip.center().x),
+                "line end not visible when scrolled fully right (highlighted: {highlighted}): \
+                 painted (galley, clip) {painted:?}"
+            );
+        }
     }
 
     #[test]
