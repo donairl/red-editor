@@ -394,6 +394,36 @@ impl TextEditorApp {
         }
     }
 
+    /// Closes every tab `close` selects, except those with unsaved changes,
+    /// which stay so no edit is lost. If the active tab goes, the nearest
+    /// survivor at or after `fallback` becomes active. Closing everything
+    /// leaves one blank tab.
+    pub fn close_tabs_where(&mut self, fallback: usize, close: impl Fn(usize, &DocumentTab) -> bool) {
+        let keep: Vec<bool> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| t.is_dirty() || !close(i, t))
+            .collect();
+        if !keep.contains(&true) {
+            self.tabs = vec![DocumentTab::default_new()];
+            self.active_tab_index = 0;
+            return;
+        }
+        let new_index = |old: usize| keep[..old].iter().filter(|k| **k).count();
+        let target = if keep.get(self.active_tab_index) == Some(&true) {
+            self.active_tab_index
+        } else {
+            (fallback..keep.len())
+                .find(|&i| keep[i])
+                .or_else(|| keep.iter().rposition(|k| *k))
+                .unwrap_or(0)
+        };
+        self.active_tab_index = new_index(target);
+        let mut flags = keep.into_iter();
+        self.tabs.retain(|_| flags.next().unwrap_or(true));
+    }
+
     pub fn trigger_close_tab(&mut self, index: usize) {
         if let Some(tab) = self.tabs.get(index) {
             if tab.is_dirty() {
@@ -582,10 +612,25 @@ impl TextEditorApp {
     pub fn render_tab_bar(&mut self, ui: &mut egui::Ui) -> tab_bar::TabBarResponse {
         let untitled = self.i18n.t("doc.untitled");
         let views: Vec<tab_bar::TabView> = self.tabs.iter().map(|t| t.tab_view(untitled)).collect();
-        let response = tab_bar::show(ui, &views, self.active_tab_index);
+        let labels = tab_bar::MenuLabels {
+            close: self.i18n.t("file.close_tab"),
+            close_others: self.i18n.t("tab.close_others"),
+            close_to_right: self.i18n.t("tab.close_to_right"),
+            close_saved: self.i18n.t("tab.close_saved"),
+        };
+        let response = tab_bar::show(ui, &views, self.active_tab_index, &labels);
         match response.action {
             Some(tab_bar::TabBarAction::Select(index)) => self.active_tab_index = index,
             Some(tab_bar::TabBarAction::Close(index)) => self.trigger_close_tab(index),
+            Some(tab_bar::TabBarAction::CloseOthers(index)) => {
+                self.close_tabs_where(index, |i, _| i != index)
+            }
+            Some(tab_bar::TabBarAction::CloseToRight(index)) => {
+                self.close_tabs_where(index, |i, _| i > index)
+            }
+            Some(tab_bar::TabBarAction::CloseSaved) => {
+                self.close_tabs_where(self.active_tab_index, |_, _| true)
+            }
             Some(tab_bar::TabBarAction::New) => self.open_new_tab(),
             None => {}
         }
@@ -1144,6 +1189,62 @@ mod tests {
         app.close_tab(0);
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.active_tab_index, 0);
+    }
+
+    fn app_with_tabs(dirty: &[bool]) -> TextEditorApp {
+        let mut app = TextEditorApp::default();
+        for _ in 1..dirty.len() {
+            app.open_new_tab();
+        }
+        for (i, d) in dirty.iter().enumerate() {
+            app.tabs[i].current_path = Some(PathBuf::from(format!("t{i}.txt")));
+            if *d {
+                app.tabs[i].text_content = "edited".into();
+            }
+        }
+        app
+    }
+
+    fn paths(app: &TextEditorApp) -> Vec<String> {
+        app.tabs
+            .iter()
+            .map(|t| t.current_path.as_ref().unwrap().display().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_close_others_keeps_clicked_and_dirty_tabs() {
+        let mut app = app_with_tabs(&[false, false, true, false]);
+        app.active_tab_index = 3;
+        app.close_tabs_where(1, |i, _| i != 1);
+        assert_eq!(paths(&app), ["t1.txt", "t2.txt"]);
+        assert_eq!(app.active_tab_index, 0, "active closed -> clicked tab (t1)");
+    }
+
+    #[test]
+    fn test_close_to_right_keeps_active_when_it_survives() {
+        let mut app = app_with_tabs(&[false, false, false, false]);
+        app.active_tab_index = 0;
+        app.close_tabs_where(1, |i, _| i > 1);
+        assert_eq!(paths(&app), ["t0.txt", "t1.txt"]);
+        assert_eq!(app.active_tab_index, 0);
+    }
+
+    #[test]
+    fn test_close_saved_keeps_only_dirty_tabs() {
+        let mut app = app_with_tabs(&[false, true, false, true]);
+        app.active_tab_index = 2;
+        app.close_tabs_where(2, |_, _| true);
+        assert_eq!(paths(&app), ["t1.txt", "t3.txt"]);
+        assert_eq!(app.active_tab_index, 1, "next survivor after active");
+    }
+
+    #[test]
+    fn test_close_saved_with_all_saved_leaves_blank_tab() {
+        let mut app = app_with_tabs(&[false, false]);
+        app.close_tabs_where(0, |_, _| true);
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().is_pristine());
     }
 
     #[test]

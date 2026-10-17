@@ -9,6 +9,9 @@
 
   "file.new_tab": "Pestaña nueva",
   "file.close_tab": "Cerrar pestaña",
+  "tab.close_others": "Cerrar otras",
+  "tab.close_to_right": "Cerrar pestañas a la derecha",
+  "tab.close_saved": "Cerrar guardadas",
   "file.open_file": "Abrir archivo...",
   "file.open_folder": "Abrir carpeta...",
   "file.save": "Guardar",

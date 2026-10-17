@@ -123,7 +123,22 @@ const CLOSE_SIZE: f32 = 16.0;
 pub enum TabBarAction {
     Select(usize),
     Close(usize),
+    /// Context menu: close every tab but this one.
+    CloseOthers(usize),
+    /// Context menu: close every tab after this one.
+    CloseToRight(usize),
+    /// Context menu: close every tab without unsaved changes.
+    CloseSaved,
     New,
+}
+
+/// Texts of the tab context menu; the strip does no translation itself.
+#[derive(Clone, Copy, Debug)]
+pub struct MenuLabels<'a> {
+    pub close: &'a str,
+    pub close_others: &'a str,
+    pub close_to_right: &'a str,
+    pub close_saved: &'a str,
 }
 
 /// One frame of the strip: what was clicked, and where each part was drawn.
@@ -140,7 +155,12 @@ pub struct TabBarResponse {
 }
 
 /// Draws the strip across the available width and reports what was clicked.
-pub fn show(ui: &mut egui::Ui, tabs: &[TabView], active: usize) -> TabBarResponse {
+pub fn show(
+    ui: &mut egui::Ui,
+    tabs: &[TabView],
+    active: usize,
+    labels: &MenuLabels,
+) -> TabBarResponse {
     let palette = TabPalette::for_visuals(ui.visuals());
 
     // Background and bottom border for the whole width, including the empty
@@ -168,7 +188,15 @@ pub fn show(ui: &mut egui::Ui, tabs: &[TabView], active: usize) -> TabBarRespons
                 };
                 for (index, tab) in tabs.iter().enumerate() {
                     let (rect, close_rect, action) =
-                        show_tab(ui, &palette, index, tab, index == active);
+                        show_tab(
+                            ui,
+                            &palette,
+                            index,
+                            tab,
+                            index == active,
+                            tabs.len(),
+                            labels,
+                        );
                     response.tab_rects.push(rect);
                     response.close_rects.push(close_rect);
                     response.action = response.action.or(action);
@@ -207,6 +235,8 @@ fn show_tab(
     index: usize,
     tab: &TabView,
     active: bool,
+    tab_count: usize,
+    labels: &MenuLabels,
 ) -> (Rect, Rect, Option<TabBarAction>) {
     let fg = if active {
         palette.fg_active
@@ -280,7 +310,33 @@ fn show_tab(
         Some(path) => body.on_hover_text(path),
         None => body,
     };
-    let action = if close.clicked() {
+    let mut menu_action = None;
+    body.context_menu(|ui| {
+        if ui.button(labels.close).clicked() {
+            menu_action = Some(TabBarAction::Close(index));
+        }
+        if ui
+            .add_enabled(tab_count > 1, egui::Button::new(labels.close_others))
+            .clicked()
+        {
+            menu_action = Some(TabBarAction::CloseOthers(index));
+        }
+        if ui
+            .add_enabled(index + 1 < tab_count, egui::Button::new(labels.close_to_right))
+            .clicked()
+        {
+            menu_action = Some(TabBarAction::CloseToRight(index));
+        }
+        if ui.button(labels.close_saved).clicked() {
+            menu_action = Some(TabBarAction::CloseSaved);
+        }
+        if menu_action.is_some() {
+            ui.close();
+        }
+    });
+    let action = if menu_action.is_some() {
+        menu_action
+    } else if close.clicked() {
         Some(TabBarAction::Close(index))
     } else if body.clicked() {
         Some(TabBarAction::Select(index))
@@ -395,6 +451,13 @@ mod tests {
         assert_eq!(close_slot(false, false, false, false), Empty);
     }
 
+    const LABELS: MenuLabels = MenuLabels {
+        close: "Close",
+        close_others: "Close Others",
+        close_to_right: "Close to the Right",
+        close_saved: "Close Saved",
+    };
+
     fn view(title: &str, dirty: bool) -> TabView {
         TabView {
             title: title.to_owned(),
@@ -420,7 +483,7 @@ mod tests {
             ..Default::default()
         };
         let mut response = None;
-        let mut output = ctx.run_ui(input, |ui| response = Some(show(ui, tabs, active)));
+        let mut output = ctx.run_ui(input, |ui| response = Some(show(ui, tabs, active, &LABELS)));
         output.textures_delta.clear();
         (response.expect("show ran"), output.shapes)
     }

@@ -9,6 +9,9 @@
 
   "file.new_tab": "Tab Baru",
   "file.close_tab": "Tutup Tab",
+  "tab.close_others": "Tutup Lainnya",
+  "tab.close_to_right": "Tutup Tab di Kanan",
+  "tab.close_saved": "Tutup yang Tersimpan",
   "file.open_file": "Buka File...",
   "file.open_folder": "Buka Folder...",
   "file.save": "Simpan",

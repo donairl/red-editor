@@ -9,6 +9,9 @@
 
   "file.new_tab": "Neuer Tab",
   "file.close_tab": "Tab schließen",
+  "tab.close_others": "Andere schließen",
+  "tab.close_to_right": "Tabs rechts schließen",
+  "tab.close_saved": "Gespeicherte schließen",
   "file.open_file": "Datei öffnen...",
   "file.open_folder": "Ordner öffnen...",
   "file.save": "Speichern",
