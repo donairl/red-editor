@@ -776,7 +776,7 @@ with:
 
 Run: `cargo test --bin rred_text_editor app::tests`
 
-Expected: PASS — 14 tests, 0 failures.
+Expected: PASS — 8 app tests, 0 failures (28 across the full suite).
 
 - [ ] **Step 10: Commit**
 
@@ -946,29 +946,34 @@ with:
                 self.show_language_menu(ui);
 ```
 
-- [ ] **Step 6: Remove the interim `#![allow(dead_code)]` from `src/highlighter.rs`**
+- [ ] **Step 6: Remove the two interim lint markers**
 
-Task 1 added `#![allow(dead_code)]` at the top of `src/highlighter.rs` because the new
-module's `pub` API had no consumers yet, which would otherwise fail `-D warnings` in this
-binary-only crate. This task is where every item in that module finally gets wired
-(`SyntaxHighlighter` is constructed, and `show_language_menu` is called from the File menu and
-status bar), so the exemption is now dead weight and must go.
+Two temporary lint suppressions exist only because their subjects had no callers yet. This
+task is where both finally get called, so both must go:
 
-Delete the attribute and its explanatory comment from `src/highlighter.rs`.
+1. `#![allow(dead_code)]` at the top of `src/highlighter.rs`, plus its explanatory comment.
+   `SyntaxHighlighter` is constructed for the first time in this task.
+2. `#[expect(dead_code, reason = "not yet rendered anywhere; Task 4 calls it")]` on
+   `TextEditorApp::show_language_menu` in `src/app.rs`, plus the comment above it explaining it.
+   `show_language_menu` is first called in this task (File menu and status bar).
+
+`#[expect(...)]` is *load-bearing in the other direction*: leaving it after the function is
+called makes clippy fail with `unfulfilled_lint_expectation`. Both markers must be deleted
+together in the same commit.
 
 - [ ] **Step 7: Verify it compiles and is warning-free**
 
 Run: `cargo clippy --all-targets -- -D warnings`
 
-Expected: exit code 0 **without** the attribute. This is the positive proof that every item in
-the module is now genuinely used — if the attribute is still load-bearing, this command fails
-and tells you what is still dead.
+Expected: exit code 0 **without** either marker. This is the positive proof that every item is
+now genuinely used — if `unfulfilled_lint_expectation` fires, `show_language_menu` is still not
+being called; if `dead_code` fires, something in the highlighter is still unwired.
 
 - [ ] **Step 8: Run the full test suite**
 
 Run: `cargo test`
 
-Expected: PASS — 14 tests, 0 failures.
+Expected: PASS — 28 tests, 0 failures.
 
 - [ ] **Step 9: Commit**
 
@@ -988,7 +993,7 @@ git commit -m "feat(app): render editor with syntax highlighting and language se
 
 Run: `cargo test`
 
-Expected: PASS — all 14 tests across `app`, `file_browser`, `highlighter`, and `modals`, 0 failures.
+Expected: PASS — all 28 tests across `app`, `file_browser`, `highlighter`, and `modals`, 0 failures.
 
 - [ ] **Step 2: Run clippy with warnings denied on all targets**
 
