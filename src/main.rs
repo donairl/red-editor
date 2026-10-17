@@ -2,6 +2,7 @@ mod app;
 mod file_browser;
 mod highlighter;
 mod modals;
+mod tab_bar;
 
 use app::TextEditorApp;
 use eframe::egui;
