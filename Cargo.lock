@@ -2740,6 +2740,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "red_text_editor"
+version = "0.2.0"
+dependencies = [
+ "eframe",
+ "rfd",
+ "serde_json",
+ "syntect",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2837,16 +2847,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "rred_text_editor"
-version = "0.2.0"
-dependencies = [
- "eframe",
- "rfd",
- "serde_json",
- "syntect",
 ]
 
 [[package]]

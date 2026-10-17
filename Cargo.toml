@@ -1,5 +1,5 @@
 [package]
-name = "rred_text_editor"
+name = "red_text_editor"
 version = "0.2.0"
 edition = "2024"
 

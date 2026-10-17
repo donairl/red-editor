@@ -44,7 +44,7 @@ cargo run
 cargo build --release
 ```
 
-Hasil build release ada di `target/release/rred_text_editor`.
+Hasil build release ada di `target/release/red_text_editor`.
 
 ## Install
 
@@ -54,26 +54,26 @@ Hasil build release ada di `target/release/rred_text_editor`.
 cargo install --path .
 ```
 
-Program dipasang ke `~/.cargo/bin/rred_text_editor`. Pastikan `~/.cargo/bin` ada di `PATH` (rustup biasanya sudah mengaturnya), lalu jalankan:
+Program dipasang ke `~/.cargo/bin/red_text_editor`. Pastikan `~/.cargo/bin` ada di `PATH` (rustup biasanya sudah mengaturnya), lalu jalankan:
 
 ```bash
-rred_text_editor
+red_text_editor
 ```
 
 Untuk menghapus:
 
 ```bash
-cargo uninstall rred_text_editor
+cargo uninstall red_text_editor
 ```
 
 ### Manual, untuk semua pengguna (Linux)
 
 ```bash
 cargo build --release
-sudo install -Dm755 target/release/rred_text_editor /usr/local/bin/rred_text_editor
+sudo install -Dm755 target/release/red_text_editor /usr/local/bin/red_text_editor
 ```
 
-Untuk menghapus: `sudo rm /usr/local/bin/rred_text_editor`.
+Untuk menghapus: `sudo rm /usr/local/bin/red_text_editor`.
 
 ### Shortcut di menu aplikasi (Linux, opsional)
 
@@ -84,12 +84,12 @@ Supaya muncul di menu aplikasi desktop, buat file `~/.local/share/applications/r
 Type=Application
 Name=Red Text Editor
 Comment=Editor teks ringan bergaya VS Code
-Exec=rred_text_editor
+Exec=red_text_editor
 Terminal=false
 Categories=Utility;TextEditor;Development;
 ```
 
-Kalau dipasang di luar `PATH`, isi `Exec=` dengan path lengkapnya, misalnya `Exec=/home/nama/.cargo/bin/rred_text_editor`.
+Kalau dipasang di luar `PATH`, isi `Exec=` dengan path lengkapnya, misalnya `Exec=/home/nama/.cargo/bin/red_text_editor`.
 
 ## Cara pakai
 

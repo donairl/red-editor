@@ -9,7 +9,7 @@ cd "$REPO_ROOT"
 # 1. Ambil versi dari Cargo.toml
 VERSION=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
 ARCH=$(uname -m)
-APP_NAME="rred_text_editor"
+APP_NAME="red_text_editor"
 TAG="v${VERSION}"
 RELEASE_NAME="${APP_NAME}-${TAG}-linux-${ARCH}"
 DIST_DIR="${REPO_ROOT}/dist"

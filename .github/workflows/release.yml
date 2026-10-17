@@ -36,10 +36,10 @@ jobs:
       - name: Package Linux release
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          PKG_NAME="rred_text_editor-v${VERSION}-linux-x86_64"
+          PKG_NAME="red_text_editor-v${VERSION}-linux-x86_64"
           mkdir -p "dist/${PKG_NAME}"
 
-          cp target/release/rred_text_editor "dist/${PKG_NAME}/"
+          cp target/release/red_text_editor "dist/${PKG_NAME}/"
           cp -r assets "dist/${PKG_NAME}/"
           cp README.md "dist/${PKG_NAME}/"
 
@@ -73,10 +73,10 @@ jobs:
         run: |
           $Version = "${env:GITHUB_REF_NAME}".TrimStart('v')
           if (-not $Version) { $Version = "dev" }
-          $PkgName = "rred_text_editor-v$Version-windows-x86_64"
+          $PkgName = "red_text_editor-v$Version-windows-x86_64"
           New-Item -ItemType Directory -Path "dist/$PkgName" -Force
 
-          Copy-Item "target/release/rred_text_editor.exe" "dist/$PkgName/"
+          Copy-Item "target/release/red_text_editor.exe" "dist/$PkgName/"
           Copy-Item -Recurse "assets" "dist/$PkgName/"
           Copy-Item "README.md" "dist/$PkgName/"
 
