@@ -29,6 +29,7 @@ pub enum Language {
     /// Shares the `JavaScript` grammar: syntect bundles no TypeScript grammar.
     TypeScript,
     Html,
+    Json,
 }
 
 impl Language {
@@ -43,6 +44,7 @@ impl Language {
             Language::JavaScript,
             Language::TypeScript,
             Language::Html,
+            Language::Json,
         ]
     }
 
@@ -58,6 +60,7 @@ impl Language {
             "js" | "mjs" | "cjs" | "jsx" => Language::JavaScript,
             "ts" | "mts" | "cts" | "tsx" => Language::TypeScript,
             "html" | "htm" => Language::Html,
+            "json" | "jsonc" => Language::Json,
             _ => Language::PlainText,
         }
     }
@@ -83,6 +86,7 @@ impl Language {
             Language::JavaScript => "JavaScript",
             Language::TypeScript => "TypeScript",
             Language::Html => "HTML",
+            Language::Json => "JSON",
         }
     }
 
@@ -96,6 +100,7 @@ impl Language {
             Language::Php => "PHP",
             Language::JavaScript | Language::TypeScript => "JavaScript",
             Language::Html => "HTML",
+            Language::Json => "JSON",
         }
     }
 }
@@ -530,6 +535,8 @@ mod tests {
         assert_eq!(Language::from_extension("tsx"), Language::TypeScript);
         assert_eq!(Language::from_extension("html"), Language::Html);
         assert_eq!(Language::from_extension("htm"), Language::Html);
+        assert_eq!(Language::from_extension("json"), Language::Json);
+        assert_eq!(Language::from_extension("jsonc"), Language::Json);
     }
 
     #[test]
@@ -540,6 +547,8 @@ mod tests {
         assert_eq!(Language::from_extension("JS"), Language::JavaScript);
         assert_eq!(Language::from_extension("Ts"), Language::TypeScript);
         assert_eq!(Language::from_extension("HTML"), Language::Html);
+        assert_eq!(Language::from_extension("JSON"), Language::Json);
+        assert_eq!(Language::from_extension("JSONC"), Language::Json);
     }
 
     #[test]
@@ -587,11 +596,12 @@ mod tests {
         assert_eq!(Language::JavaScript.display_name(), "JavaScript");
         assert_eq!(Language::TypeScript.display_name(), "TypeScript");
         assert_eq!(Language::Html.display_name(), "HTML");
+        assert_eq!(Language::Json.display_name(), "JSON");
     }
 
     #[test]
     fn test_all_lists_every_variant() {
-        assert_eq!(Language::all().len(), 8);
+        assert_eq!(Language::all().len(), 9);
     }
 
     #[test]
@@ -920,5 +930,14 @@ mod tests {
         assert_eq!(plain[1], 1, "text inside <p> should be a single section");
         assert!(script[1] > 1, "script body should be coloured as JavaScript");
         assert!(style[1] > 1, "style body should be coloured as CSS");
+    }
+
+    #[test]
+    fn test_json_is_coloured() {
+        let counts = section_counts(Language::Json, &["{\"key\": 42, \"flag\": true}"]);
+        assert!(
+            counts[0] > 1,
+            "JSON produced a single plain section for sample text"
+        );
     }
 }

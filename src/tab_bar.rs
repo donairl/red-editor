@@ -84,6 +84,7 @@ pub fn badge(language: Language) -> (&'static str, Option<Color32>) {
         Language::JavaScript => ("JS", Some(Color32::from_rgb(0xCB, 0xCB, 0x41))),
         Language::TypeScript => ("TS", Some(Color32::from_rgb(0x51, 0x9A, 0xBA))),
         Language::Html => ("<>", Some(Color32::from_rgb(0xE4, 0x4D, 0x26))),
+        Language::Json => ("{}", Some(Color32::from_rgb(0xCB, 0xB0, 0x41))),
     }
 }
 
@@ -370,6 +371,10 @@ mod tests {
         assert_eq!(
             badge(Language::Html),
             ("<>", Some(Color32::from_rgb(0xE4, 0x4D, 0x26)))
+        );
+        assert_eq!(
+            badge(Language::Json),
+            ("{}", Some(Color32::from_rgb(0xCB, 0xB0, 0x41)))
         );
         assert_eq!(badge(Language::PlainText), ("TXT", None));
     }
