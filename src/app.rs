@@ -161,6 +161,65 @@ fn install_cjk_fallback_font(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// Keyboard shortcuts of the editor. `COMMAND` is Ctrl, or Cmd on macOS.
+pub mod shortcuts {
+    use eframe::egui::{Key, KeyboardShortcut, Modifiers};
+
+    const fn cmd(key: Key) -> KeyboardShortcut {
+        KeyboardShortcut::new(Modifiers::COMMAND, key)
+    }
+    const fn cmd_shift(key: Key) -> KeyboardShortcut {
+        KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), key)
+    }
+
+    pub const NEW_TAB: KeyboardShortcut = cmd(Key::N);
+    pub const CLOSE_TAB: KeyboardShortcut = cmd(Key::W);
+    pub const OPEN_FILE: KeyboardShortcut = cmd(Key::O);
+    pub const OPEN_FOLDER: KeyboardShortcut = cmd_shift(Key::O);
+    pub const SAVE: KeyboardShortcut = cmd(Key::S);
+    pub const SAVE_AS: KeyboardShortcut = cmd_shift(Key::S);
+    pub const EXIT: KeyboardShortcut = cmd(Key::Q);
+    pub const TOGGLE_SIDEBAR: KeyboardShortcut = cmd(Key::B);
+    pub const NEXT_TAB: KeyboardShortcut = cmd(Key::Tab);
+    pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
+}
+
+/// What a keyboard shortcut asks the editor to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShortcutAction {
+    NewTab,
+    CloseTab,
+    OpenFile,
+    OpenFolder,
+    Save,
+    SaveAs,
+    Exit,
+    ToggleSidebar,
+    NextTab,
+    PrevTab,
+}
+
+/// Takes at most one shortcut out of this frame's input. Shift variants are
+/// tried first: egui lets `Ctrl+S` match while Shift is also held.
+pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> {
+    use ShortcutAction::*;
+    [
+        (shortcuts::SAVE_AS, SaveAs),
+        (shortcuts::OPEN_FOLDER, OpenFolder),
+        (shortcuts::PREV_TAB, PrevTab),
+        (shortcuts::SAVE, Save),
+        (shortcuts::OPEN_FILE, OpenFile),
+        (shortcuts::NEW_TAB, NewTab),
+        (shortcuts::CLOSE_TAB, CloseTab),
+        (shortcuts::EXIT, Exit),
+        (shortcuts::TOGGLE_SIDEBAR, ToggleSidebar),
+        (shortcuts::NEXT_TAB, NextTab),
+    ]
+    .into_iter()
+    .find(|(shortcut, _)| input.consume_shortcut(shortcut))
+    .map(|(_, action)| action)
+}
+
 impl TextEditorApp {
     /// The app as eframe starts it: language files from disk, and the saved
     /// or the system interface language.
@@ -302,38 +361,68 @@ impl TextEditorApp {
     }
 
     pub fn show_file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if ui.button(self.i18n.t("file.new_tab")).clicked() {
+        let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
+            let button = egui::Button::new(label).shortcut_text(ctx.format_shortcut(shortcut));
+            let clicked = ui.add(button).clicked();
+            if clicked {
+                ui.close();
+            }
+            clicked
+        };
+        if item(ui, self.i18n.t("file.new_tab"), &shortcuts::NEW_TAB) {
             self.open_new_tab();
-            ui.close();
         }
-        if ui.button(self.i18n.t("file.close_tab")).clicked() {
+        if item(ui, self.i18n.t("file.close_tab"), &shortcuts::CLOSE_TAB) {
             self.trigger_close_tab(self.active_tab_index);
-            ui.close();
         }
         ui.separator();
-        if ui.button(self.i18n.t("file.open_file")).clicked() {
+        if item(ui, self.i18n.t("file.open_file"), &shortcuts::OPEN_FILE) {
             self.trigger_open_file();
-            ui.close();
         }
-        if ui.button(self.i18n.t("file.open_folder")).clicked() {
+        if item(ui, self.i18n.t("file.open_folder"), &shortcuts::OPEN_FOLDER) {
             self.trigger_open_folder();
-            ui.close();
         }
         ui.separator();
-        if ui.button(self.i18n.t("file.save")).clicked() {
+        if item(ui, self.i18n.t("file.save"), &shortcuts::SAVE) {
             self.save();
-            ui.close();
         }
-        if ui.button(self.i18n.t("file.save_as")).clicked() {
+        if item(ui, self.i18n.t("file.save_as"), &shortcuts::SAVE_AS) {
             self.save_as();
-            ui.close();
         }
         ui.separator();
         self.show_language_menu(ui);
         ui.separator();
-        if ui.button(self.i18n.t("file.exit")).clicked() {
+        if item(ui, self.i18n.t("file.exit"), &shortcuts::EXIT) {
             self.trigger_exit(ctx);
-            ui.close();
+        }
+    }
+
+    /// Runs the action of a keyboard shortcut. Ignored while a dialog waits
+    /// for an answer.
+    pub fn apply_shortcut(&mut self, ctx: &egui::Context, action: ShortcutAction) {
+        if self.pending_action.is_some() || self.show_about_modal {
+            return;
+        }
+        match action {
+            ShortcutAction::NewTab => self.open_new_tab(),
+            ShortcutAction::CloseTab => self.trigger_close_tab(self.active_tab_index),
+            ShortcutAction::OpenFile => self.trigger_open_file(),
+            ShortcutAction::OpenFolder => self.trigger_open_folder(),
+            ShortcutAction::Save => {
+                self.save();
+            }
+            ShortcutAction::SaveAs => {
+                self.save_as();
+            }
+            ShortcutAction::Exit => self.trigger_exit(ctx),
+            ShortcutAction::ToggleSidebar => self.toggle_explorer(),
+            ShortcutAction::NextTab => {
+                self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
+            }
+            ShortcutAction::PrevTab => {
+                self.active_tab_index =
+                    (self.active_tab_index + self.tabs.len() - 1) % self.tabs.len();
+            }
         }
     }
 
@@ -770,6 +859,10 @@ impl eframe::App for TextEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
+
+        if let Some(action) = ctx.input_mut(consume_shortcut) {
+            self.apply_shortcut(&ctx, action);
+        }
 
         // 1. Top Panel (Menu Bar & Toolbar)
         egui::Panel::top("top_panel").show(ui, |ui| {
@@ -1245,6 +1338,52 @@ mod tests {
         app.close_tabs_where(0, |_, _| true);
         assert_eq!(app.tabs.len(), 1);
         assert!(app.active_tab().is_pristine());
+    }
+
+    #[test]
+    fn test_consume_shortcut_prefers_shift_variant() {
+        let ctx = egui::Context::default();
+        let press = |key, modifiers| egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        };
+        let ctrl = egui::Modifiers::COMMAND;
+        let ctrl_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+        for (key, mods, want) in [
+            (egui::Key::S, ctrl, ShortcutAction::Save),
+            (egui::Key::S, ctrl_shift, ShortcutAction::SaveAs),
+            (egui::Key::O, ctrl, ShortcutAction::OpenFile),
+            (egui::Key::O, ctrl_shift, ShortcutAction::OpenFolder),
+            (egui::Key::Tab, ctrl, ShortcutAction::NextTab),
+            (egui::Key::Tab, ctrl_shift, ShortcutAction::PrevTab),
+            (egui::Key::Q, ctrl, ShortcutAction::Exit),
+        ] {
+            let mut got = None;
+            let mut output = ctx.run_ui(press(key, mods), |ui| {
+                got = ui.ctx().input_mut(consume_shortcut);
+            });
+            output.textures_delta.clear();
+            assert_eq!(got, Some(want), "{key:?} {mods:?}");
+        }
+    }
+
+    #[test]
+    fn test_tab_shortcuts_wrap_around() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_tabs(&[false, false, false]);
+        app.active_tab_index = 2;
+        app.apply_shortcut(&ctx, ShortcutAction::NextTab);
+        assert_eq!(app.active_tab_index, 0);
+        app.apply_shortcut(&ctx, ShortcutAction::PrevTab);
+        assert_eq!(app.active_tab_index, 2);
+        app.apply_shortcut(&ctx, ShortcutAction::NewTab);
+        assert_eq!(app.tabs.len(), 4);
     }
 
     #[test]
