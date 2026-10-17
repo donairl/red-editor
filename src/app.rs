@@ -20,6 +20,9 @@ pub struct TextEditorApp {
     pub active_language: Language,
     pub language_override: Option<Language>,
     pub highlighter: SyntaxHighlighter,
+    /// Wrap long lines to the window width. Off by default: lines run on and
+    /// the editor scrolls sideways instead.
+    pub word_wrap: bool,
 }
 
 impl Default for TextEditorApp {
@@ -37,6 +40,7 @@ impl Default for TextEditorApp {
             active_language: Language::PlainText,
             language_override: None,
             highlighter: SyntaxHighlighter::new(),
+            word_wrap: false,
         }
     }
 }
@@ -224,14 +228,30 @@ fn text_content_exceeds_highlight_limit(content: &str) -> bool {
 /// documents get. Lines are joined back together with `\n` separators so the
 /// buffer round-trips exactly, keeping the caret and selection aligned.
 ///
-/// The editor is wrapped in a vertical `ScrollArea`: `TextEdit` has no scrolling
+/// With `word_wrap` on, long lines wrap to the window width and only vertical
+/// scrolling is needed. With it off, lines never wrap and the editor scrolls
+/// sideways as well. Wrap off needs a layouter on the plain path too: a stock
+/// multiline `TextEdit` always shrinks to the available width, so it wraps
+/// whatever `desired_width` says.
+///
+/// The editor is wrapped in a `ScrollArea`: `TextEdit` has no scrolling
 /// of its own for multiline input (`clip_text` is `false`, so its `text_offset`
 /// handling never runs) and its only `ui.scroll_to_rect` call writes to
 /// `PassState::scroll_target`, which only `ScrollArea::show` drains. Without this
 /// wrapper a document taller than the viewport cannot be scrolled and, with the
 /// default `cursor_at_end`, the caret lands off-screen and stays unreachable.
-fn render_editor(ui: &mut egui::Ui, text: &mut String, mut layouter: Option<&mut HighlighterLayouter<'_>>) {
-    egui::ScrollArea::vertical().show(ui, |ui| {
+fn render_editor(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    mut layouter: Option<&mut HighlighterLayouter<'_>>,
+    word_wrap: bool,
+) {
+    let scroll_area = if word_wrap {
+        egui::ScrollArea::vertical()
+    } else {
+        egui::ScrollArea::both()
+    };
+    scroll_area.show(ui, |ui| {
         let text_edit = egui::TextEdit::multiline(text)
             .font(egui::TextStyle::Monospace)
             .lock_focus(true)
@@ -242,14 +262,46 @@ fn render_editor(ui: &mut egui::Ui, text: &mut String, mut layouter: Option<&mut
                 // `TextEdit` calls this every frame. `frame_job` reuses the
                 // cached result, and highlights large documents on a background
                 // thread (plain text meanwhile) so the window never freezes.
-                let mut lay = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
-                    let job = highlighter.frame_job(buf.as_str(), ui.ctx());
-                    ui.fonts_mut(|f| f.layout_job((*job).clone()))
+                // Wrapping is a layout concern, so it is applied to the clone and
+                // never reaches the cache.
+                let mut lay = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                    let mut job = (*highlighter.frame_job(buf.as_str(), ui.ctx())).clone();
+                    job.wrap.max_width = if word_wrap { wrap_width } else { f32::INFINITY };
+                    ui.fonts_mut(|f| f.layout_job(job))
                 };
                 ui.add_sized(ui.available_size(), text_edit.layouter(&mut lay));
             }
-            None => {
+            None if word_wrap => {
                 ui.add_sized(ui.available_size(), text_edit);
+            }
+            None => {
+                // Mirror egui's stock `TextEdit` layouter so wrap-off plain text
+                // looks identical to the wrapped text: the colour is the
+                // `inactive` widget colour (a text edit does not brighten on
+                // hover), unless the theme overrides it, and every section gets
+                // the same line height.
+                let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                let color = ui
+                    .visuals()
+                    .override_text_color
+                    .unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
+                let line_height = ui.fonts_mut(|f| f.row_height(&font_id))
+                    + ui.spacing().extra_text_line_spacing;
+                let mut lay = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
+                    let mut job = egui::text::LayoutJob::simple(
+                        buf.as_str().to_owned(),
+                        font_id.clone(),
+                        color,
+                        f32::INFINITY,
+                    );
+                    // Typing a trailing space must not make the caret jump.
+                    job.keep_trailing_whitespace = true;
+                    for section in &mut job.sections {
+                        section.format.line_height = Some(line_height);
+                    }
+                    ui.fonts_mut(|f| f.layout_job(job))
+                };
+                ui.add_sized(ui.available_size(), text_edit.layouter(&mut lay));
             }
         }
     });
@@ -289,6 +341,11 @@ impl eframe::App for TextEditorApp {
                         self.trigger_exit(&ctx);
                         ui.close();
                     }
+                });
+
+                // Menu Tampilan
+                ui.menu_button("Tampilan", |ui| {
+                    ui.checkbox(&mut self.word_wrap, "Bungkus Baris");
                 });
 
                 // Menu Help
@@ -386,15 +443,16 @@ impl eframe::App for TextEditorApp {
                 highlighter,
                 active_language,
                 language_override,
+                word_wrap,
                 ..
             } = self;
             let language = language_override.unwrap_or(*active_language);
 
             if too_large {
-                render_editor(ui, text_content, None);
+                render_editor(ui, text_content, None, *word_wrap);
             } else {
                 let mut layouter = highlighter.layouter(language, font_id);
-                render_editor(ui, text_content, Some(&mut layouter));
+                render_editor(ui, text_content, Some(&mut layouter), *word_wrap);
             }
         });
 
@@ -617,16 +675,18 @@ mod tests {
     }
 
     /// Scrolls the editor with a real wheel event: the pointer hovers over the
-    /// editor and the wheel moves the content up by 200 points. Runs enough
-    /// frames for the animated scroll to settle.
-    fn scroll_editor_with_wheel(
+    /// editor and the wheel moves the content by `delta` points (negative moves
+    /// the content up or left). Runs enough frames for the animated scroll to
+    /// settle.
+    fn scroll_editor_with_wheel_delta(
         ctx: &egui::Context,
+        delta: egui::Vec2,
         mut body: impl FnMut(&mut egui::Ui),
     ) -> egui::containers::scroll_area::State {
         let pointer = egui::Event::PointerMoved(egui::pos2(100.0, 100.0));
         let wheel = egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, -200.0),
+            delta,
             phase: egui::TouchPhase::Move,
             source: egui::MouseWheelSource::Unknown,
             modifiers: egui::Modifiers::NONE,
@@ -636,6 +696,14 @@ mod tests {
             run_frame_with_events(ctx, Vec::new(), &mut body);
         }
         editor_scroll_area(ctx).expect("ScrollArea must survive")
+    }
+
+    /// Scrolls the editor down with the mouse wheel.
+    fn scroll_editor_with_wheel(
+        ctx: &egui::Context,
+        body: impl FnMut(&mut egui::Ui),
+    ) -> egui::containers::scroll_area::State {
+        scroll_editor_with_wheel_delta(ctx, egui::vec2(0.0, -200.0), body)
     }
 
     /// Regression: the editor must live inside a `ScrollArea` on the plain path.
@@ -650,7 +718,7 @@ mod tests {
 
         run_frame_with_events(&ctx, Vec::new(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                super::render_editor(ui, &mut text, None);
+                super::render_editor(ui, &mut text, None, false);
             });
         });
         let area = editor_scroll_area(&ctx).expect("editor must render inside a ScrollArea");
@@ -658,7 +726,7 @@ mod tests {
 
         let area = scroll_editor_with_wheel(&ctx, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                super::render_editor(ui, &mut text, None);
+                super::render_editor(ui, &mut text, None, false);
             });
         });
         assert!(
@@ -682,7 +750,7 @@ mod tests {
                 let mut highlighter = SyntaxHighlighter::new();
                 let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                 let mut layouter = highlighter.layouter(Language::Rust, font_id);
-                super::render_editor(ui, &mut text, Some(&mut layouter));
+                super::render_editor(ui, &mut text, Some(&mut layouter), false);
             });
         });
         assert!(
@@ -699,19 +767,102 @@ mod tests {
         let original = "fn main() {\n    let x = 1;\n}\n// tail\nlast".to_string();
         let ctx = egui::Context::default();
 
-        let mut plain = original.clone();
-        run_frame_with_events(&ctx, Vec::new(), |ui| {
-            super::render_editor(ui, &mut plain, None);
-        });
-        assert_eq!(plain, original);
+        for word_wrap in [false, true] {
+            let mut plain = original.clone();
+            run_frame_with_events(&ctx, Vec::new(), |ui| {
+                super::render_editor(ui, &mut plain, None, word_wrap);
+            });
+            assert_eq!(plain, original);
 
-        let mut highlighted = original.clone();
-        run_frame_with_events(&ctx, Vec::new(), |ui| {
-            let mut highlighter = SyntaxHighlighter::new();
-            let font_id = egui::TextStyle::Monospace.resolve(ui.style());
-            let mut layouter = highlighter.layouter(Language::C, font_id);
-            super::render_editor(ui, &mut highlighted, Some(&mut layouter));
+            let mut highlighted = original.clone();
+            run_frame_with_events(&ctx, Vec::new(), |ui| {
+                let mut highlighter = SyntaxHighlighter::new();
+                let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                let mut layouter = highlighter.layouter(Language::C, font_id);
+                super::render_editor(ui, &mut highlighted, Some(&mut layouter), word_wrap);
+            });
+            assert_eq!(highlighted, original);
+        }
+    }
+
+    /// One long line, far wider than the 800 point test viewport.
+    fn wide_document() -> String {
+        format!("let a = \"{}\";\nshort\nline3", "x".repeat(3000))
+    }
+
+    /// Renders `text` through `render_editor` on the plain or highlighted path
+    /// and returns the scroll state after a horizontal wheel scroll of 300
+    /// points. The buffer is asserted unchanged.
+    fn scroll_sideways(highlighted: bool, word_wrap: bool) -> egui::containers::scroll_area::State {
+        let ctx = egui::Context::default();
+        let original = wide_document();
+        let mut text = original.clone();
+        let mut highlighter = SyntaxHighlighter::new();
+
+        let area = scroll_editor_with_wheel_delta(&ctx, egui::vec2(-300.0, 0.0), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                if highlighted {
+                    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                    let mut layouter = highlighter.layouter(Language::Rust, font_id);
+                    super::render_editor(ui, &mut text, Some(&mut layouter), word_wrap);
+                } else {
+                    super::render_editor(ui, &mut text, None, word_wrap);
+                }
+            });
         });
-        assert_eq!(highlighted, original);
+        assert_eq!(text, original, "scrolling must not alter the buffer");
+        area
+    }
+
+    #[test]
+    fn test_word_wrap_defaults_to_off() {
+        assert!(!TextEditorApp::default().word_wrap);
+    }
+
+    /// Wrap off: a line wider than the window scrolls sideways on the plain path.
+    #[test]
+    fn test_plain_path_scrolls_horizontally_without_wrap() {
+        let area = scroll_sideways(false, false);
+        assert!(
+            area.clamped_offset().x > 0.0,
+            "a long line must scroll sideways, offset {:?}",
+            area.clamped_offset()
+        );
+    }
+
+    /// Wrap off: the same on the highlighted path.
+    #[test]
+    fn test_highlighted_path_scrolls_horizontally_without_wrap() {
+        let area = scroll_sideways(true, false);
+        assert!(
+            area.clamped_offset().x > 0.0,
+            "a long line must scroll sideways, offset {:?}",
+            area.clamped_offset()
+        );
+    }
+
+    /// Wrap on: the text wraps to the window, so there is nothing to scroll
+    /// sideways, on the plain path.
+    #[test]
+    fn test_plain_path_does_not_scroll_horizontally_with_wrap() {
+        let area = scroll_sideways(false, true);
+        assert_eq!(
+            area.clamped_offset().x,
+            0.0,
+            "wrapped text must fit the window width, offset {:?}",
+            area.clamped_offset()
+        );
+    }
+
+    /// Wrap on: the same on the highlighted path.
+    #[test]
+    fn test_highlighted_path_does_not_scroll_horizontally_with_wrap() {
+        let area = scroll_sideways(true, true);
+        assert_eq!(
+            area.clamped_offset().x,
+            0.0,
+            "wrapped text must fit the window width, offset {:?}",
+            area.clamped_offset()
+        );
     }
 }
