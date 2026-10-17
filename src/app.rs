@@ -10,7 +10,7 @@ use crate::gutter;
 use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::i18n::{self, I18n};
 use crate::modals::{self, ModalResponse, PendingAction};
-use crate::find::{self, FindAction, FindState};
+use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::tab_bar;
 
 /// Storage key under which eframe remembers the interface language.
@@ -119,6 +119,7 @@ pub struct TextEditorApp {
     /// Interface translations and the language in use.
     pub i18n: I18n,
     pub find: FindState,
+    pub goto: GotoState,
     /// One-shot asks for the editor widget, applied on its next frame.
     pub editor_request: EditorRequest,
 }
@@ -131,6 +132,8 @@ pub struct EditorRequest {
     pub focus: bool,
     /// Press `Ctrl+<key>` in the editor (undo and redo).
     pub key: Option<egui::Key>,
+    /// Put the caret at this `char` index and scroll to it.
+    pub goto: Option<usize>,
     /// Scroll this `char` range into view.
     pub reveal: Option<find::Range>,
     /// Paint this `char` range as the current find match. Set every frame.
@@ -152,6 +155,7 @@ impl Default for TextEditorApp {
             show_line_numbers: true,
             i18n: I18n::builtin(),
             find: FindState::default(),
+            goto: GotoState::default(),
             editor_request: EditorRequest::default(),
         }
     }
@@ -213,6 +217,7 @@ pub mod shortcuts {
     pub const TOGGLE_SIDEBAR: KeyboardShortcut = cmd(Key::B);
     pub const NEXT_TAB: KeyboardShortcut = cmd(Key::Tab);
     pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
+    pub const GOTO_LINE: KeyboardShortcut = cmd(Key::G);
     pub const FIND: KeyboardShortcut = cmd(Key::F);
     pub const REPLACE: KeyboardShortcut = cmd(Key::H);
     pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
@@ -239,6 +244,7 @@ pub enum ShortcutAction {
     ToggleSidebar,
     NextTab,
     PrevTab,
+    GotoLine,
     Find,
     Replace,
     FindNext,
@@ -262,6 +268,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::EXIT, Exit),
         (shortcuts::TOGGLE_SIDEBAR, ToggleSidebar),
         (shortcuts::NEXT_TAB, NextTab),
+        (shortcuts::GOTO_LINE, GotoLine),
         (shortcuts::FIND, Find),
         (shortcuts::REPLACE, Replace),
     ]
@@ -440,6 +447,9 @@ impl TextEditorApp {
         if item(ui, self.i18n.t("edit.replace"), &shortcuts::REPLACE) {
             self.open_find(ctx, true);
         }
+        if item(ui, self.i18n.t("edit.goto_line"), &shortcuts::GOTO_LINE) {
+            self.open_goto();
+        }
     }
 
     fn send_editor_key(&mut self, key: egui::Key) {
@@ -471,6 +481,20 @@ impl TextEditorApp {
                 self.find.current = None;
             }
         }
+    }
+
+    pub fn open_goto(&mut self) {
+        self.goto.visible = true;
+        self.goto.focus = true;
+        self.goto.input.clear();
+    }
+
+    pub fn goto_line(&mut self, line: usize) {
+        let index = find::line_start(&self.active_tab().text_content, line);
+        self.goto.visible = false;
+        self.editor_request.focus = true;
+        self.editor_request.goto = Some(index);
+        self.editor_request.reveal = Some((index, index));
     }
 
     pub fn close_find(&mut self) {
@@ -606,6 +630,7 @@ impl TextEditorApp {
             ShortcutAction::NextTab => {
                 self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
             }
+            ShortcutAction::GotoLine => self.open_goto(),
             ShortcutAction::Find => self.open_find(ctx, false),
             ShortcutAction::Replace => self.open_find(ctx, true),
             ShortcutAction::FindNext => self.find_step(ctx, FindAction::Next),
@@ -1078,6 +1103,15 @@ fn render_editor_with(
             gutter::paint(ui, &output, &font_id, width);
         }
 
+        if let (Some(index), Some(id)) = (request.goto, id) {
+            let mut state = output.state.clone();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(index))));
+            state.store(ui.ctx(), id);
+            ui.ctx().request_repaint();
+        }
+
         // Rectangle of a `char` range, when it sits on one row.
         let span = |(start, end): find::Range| {
             let a = output.galley.pos_from_cursor(egui::text::CCursor::new(start));
@@ -1111,6 +1145,12 @@ impl eframe::App for TextEditorApp {
             self.apply_shortcut(&ctx, action);
         }
 
+        if self.goto.visible
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.goto.visible = false;
+            self.editor_request.focus = true;
+        }
         if self.find.visible
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
@@ -1216,6 +1256,17 @@ impl eframe::App for TextEditorApp {
             if self.find.visible {
                 if let Some(action) = find::show_bar(ui, &mut self.find, &self.i18n) {
                     self.apply_find_action(&ctx, action);
+                }
+            }
+            if self.goto.visible {
+                let lines = find::line_count(&self.active_tab().text_content);
+                match find::show_goto_bar(ui, &mut self.goto, lines, &self.i18n) {
+                    Some(GotoAction::Go(line)) => self.goto_line(line),
+                    Some(GotoAction::Close) => {
+                        self.goto.visible = false;
+                        self.editor_request.focus = true;
+                    }
+                    None => {}
                 }
             }
             let mut request = std::mem::take(&mut self.editor_request);
@@ -1658,6 +1709,41 @@ mod tests {
         assert_eq!(app.active_tab_index, 2);
         app.apply_shortcut(&ctx, ShortcutAction::NewTab);
         assert_eq!(app.tabs.len(), 4);
+    }
+
+    #[test]
+    fn test_goto_line_moves_caret_and_scrolls() {
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "ab\ncde\nf".into();
+        app.apply_shortcut(&egui::Context::default(), ShortcutAction::GotoLine);
+        assert!(app.goto.visible && app.goto.focus);
+        app.goto_line(2);
+        assert!(!app.goto.visible);
+        assert_eq!(app.editor_request.goto, Some(3));
+        assert_eq!(app.editor_request.reveal, Some((3, 3)));
+        assert!(app.editor_request.focus);
+    }
+
+    #[test]
+    fn test_goto_line_places_the_caret() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique(("editor", 0));
+        let mut text = "ab\ncde\nf".to_owned();
+        let mut frame = |request: EditorRequest| {
+            let mut request = Some(request);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap());
+            });
+            out.textures_delta.clear();
+        };
+        frame(EditorRequest { focus: true, goto: Some(3), ..Default::default() });
+        frame(EditorRequest::default());
+        let range = egui::TextEdit::load_state(&ctx, id).unwrap().cursor.char_range().unwrap();
+        assert_eq!(range.primary.index.0, 3);
     }
 
     #[test]

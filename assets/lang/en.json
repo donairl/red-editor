@@ -20,6 +20,8 @@
   "edit.paste": "Paste",
   "edit.find": "Find",
   "edit.replace": "Replace",
+  "edit.goto_line": "Go to Line...",
+  "goto.hint": "Line number (1-{max})",
   "find.query": "Find",
   "find.replacement": "Replace with",
   "find.replace_one": "Replace",

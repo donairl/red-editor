@@ -20,6 +20,8 @@
   "edit.paste": "Tempel",
   "edit.find": "Cari",
   "edit.replace": "Ganti",
+  "edit.goto_line": "Ke Baris...",
+  "goto.hint": "Nomor baris (1-{max})",
   "find.query": "Cari",
   "find.replacement": "Ganti dengan",
   "find.replace_one": "Ganti",

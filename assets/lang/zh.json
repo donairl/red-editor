@@ -20,6 +20,8 @@
   "edit.paste": "粘贴",
   "edit.find": "查找",
   "edit.replace": "替换",
+  "edit.goto_line": "转到行...",
+  "goto.hint": "行号 (1-{max})",
   "find.query": "查找",
   "find.replacement": "替换为",
   "find.replace_one": "替换",

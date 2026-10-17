@@ -89,6 +89,76 @@ pub fn replace_all(text: &str, query: &str, with: &str, case_sensitive: bool) ->
     (out, matches.len())
 }
 
+/// `char` index where 1-based `line` starts; lines past the end clamp to the
+/// last one.
+pub fn line_start(text: &str, line: usize) -> usize {
+    let line = line.clamp(1, line_count(text));
+    text.split('\n')
+        .take(line - 1)
+        .map(|row| row.chars().count() + 1)
+        .sum()
+}
+
+/// Number of lines in `text`; an empty text has one.
+pub fn line_count(text: &str) -> usize {
+    text.split('\n').count()
+}
+
+/// State of the go-to-line bar.
+#[derive(Default)]
+pub struct GotoState {
+    pub visible: bool,
+    pub input: String,
+    /// Put the caret in the field on the next frame.
+    pub focus: bool,
+}
+
+/// What the user asked of the go-to-line bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GotoAction {
+    /// Jump to this 1-based line.
+    Go(usize),
+    Close,
+}
+
+/// Draws the go-to-line bar; `lines` is the document's line count.
+pub fn show_goto_bar(
+    ui: &mut egui::Ui,
+    state: &mut GotoState,
+    lines: usize,
+    i18n: &I18n,
+) -> Option<GotoAction> {
+    let mut action = None;
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut state.input)
+                        .id(egui::Id::unique("goto_line"))
+                        .hint_text(i18n.tf("goto.hint", &[("max", &lines.to_string())]))
+                        .desired_width(160.0),
+                );
+                if std::mem::take(&mut state.focus) {
+                    field.request_focus();
+                }
+                if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    action = match state.input.trim().parse::<usize>() {
+                        Ok(line) => Some(GotoAction::Go(line.clamp(1, lines))),
+                        Err(_) => {
+                            field.request_focus();
+                            None
+                        }
+                    };
+                }
+                if ui.button("\u{d7}").clicked() {
+                    action = Some(GotoAction::Close);
+                }
+            });
+        });
+    action
+}
+
 /// State of the find/replace bar.
 #[derive(Default)]
 pub struct FindState {
@@ -231,6 +301,19 @@ mod tests {
         let mut text = "héllo wörld".to_owned();
         replace_range(&mut text, (6, 9), "WOR");
         assert_eq!(text, "héllo WORld");
+    }
+
+    #[test]
+    fn test_line_start_and_count() {
+        let text = "ab\ncde\n\nf";
+        assert_eq!(line_count(text), 4);
+        assert_eq!(line_count(""), 1);
+        assert_eq!(line_start(text, 1), 0);
+        assert_eq!(line_start(text, 2), 3);
+        assert_eq!(line_start(text, 3), 7);
+        assert_eq!(line_start(text, 4), 8);
+        assert_eq!(line_start(text, 99), 8, "clamps to the last line");
+        assert_eq!(line_start("héé\nx", 2), 4, "counts chars, not bytes");
     }
 
     #[test]

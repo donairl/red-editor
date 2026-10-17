@@ -20,6 +20,8 @@
   "edit.paste": "Pegar",
   "edit.find": "Buscar",
   "edit.replace": "Reemplazar",
+  "edit.goto_line": "Ir a la línea...",
+  "goto.hint": "Número de línea (1-{max})",
   "find.query": "Buscar",
   "find.replacement": "Reemplazar con",
   "find.replace_one": "Reemplazar",

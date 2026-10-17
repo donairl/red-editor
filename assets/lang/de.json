@@ -20,6 +20,8 @@
   "edit.paste": "Einfügen",
   "edit.find": "Suchen",
   "edit.replace": "Ersetzen",
+  "edit.goto_line": "Gehe zu Zeile...",
+  "goto.hint": "Zeilennummer (1-{max})",
   "find.query": "Suchen",
   "find.replacement": "Ersetzen durch",
   "find.replace_one": "Ersetzen",
