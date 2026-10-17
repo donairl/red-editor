@@ -163,7 +163,42 @@ impl TextEditorApp {
         });
     }
 
-    #[allow(dead_code)]
+    pub fn show_file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if ui.button("Tab Baru").clicked() {
+            self.open_new_tab();
+            ui.close();
+        }
+        if ui.button("Tutup Tab").clicked() {
+            self.trigger_close_tab(self.active_tab_index);
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("Buka File...").clicked() {
+            self.trigger_open_file();
+            ui.close();
+        }
+        if ui.button("Buka Folder...").clicked() {
+            self.trigger_open_folder();
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("Simpan").clicked() {
+            self.save();
+            ui.close();
+        }
+        if ui.button("Simpan Sebagai...").clicked() {
+            self.save_as();
+            ui.close();
+        }
+        ui.separator();
+        self.show_language_menu(ui);
+        ui.separator();
+        if ui.button("Keluar").clicked() {
+            self.trigger_exit(ctx);
+            ui.close();
+        }
+    }
+
     pub fn open_new_tab(&mut self) {
         self.tabs.push(DocumentTab::default_new());
         self.active_tab_index = self.tabs.len() - 1;
@@ -221,7 +256,6 @@ impl TextEditorApp {
         }
     }
 
-    #[allow(dead_code)]
     pub fn trigger_close_tab(&mut self, index: usize) {
         if let Some(tab) = self.tabs.get(index) {
             if tab.is_dirty() {
@@ -374,6 +408,53 @@ impl TextEditorApp {
             }
         }
     }
+
+    pub fn render_tab_bar(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::horizontal()
+            .id_salt("tab_bar_scroll")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let mut tab_to_close = None;
+                    let mut tab_to_select = None;
+                    for (idx, tab) in self.tabs.iter().enumerate() {
+                        let is_active = idx == self.active_tab_index;
+                        let title = format!(
+                            "{}{}",
+                            tab.file_display_name(),
+                            if tab.is_dirty() { " *" } else { "" }
+                        );
+
+                        ui.push_id(idx, |ui| {
+                            ui.group(|ui| {
+                                ui.style_mut().visuals.widgets.inactive.bg_fill = if is_active {
+                                    ui.visuals().selection.bg_fill.linear_multiply(0.4)
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                };
+
+                                if ui.selectable_label(is_active, title).clicked() {
+                                    tab_to_select = Some(idx);
+                                }
+                                if ui.small_button("✕").clicked() {
+                                    tab_to_close = Some(idx);
+                                }
+                            });
+                        });
+                    }
+
+                    if ui.button("➕").clicked() {
+                        self.open_new_tab();
+                    }
+
+                    if let Some(idx) = tab_to_select {
+                        self.active_tab_index = idx;
+                    }
+                    if let Some(idx) = tab_to_close {
+                        self.trigger_close_tab(idx);
+                    }
+                });
+            });
+    }
 }
 
 /// Documents above this size skip syntax highlighting and render plain.
@@ -483,30 +564,7 @@ impl eframe::App for TextEditorApp {
             ui.horizontal(|ui| {
                 // Menu File
                 ui.menu_button("File", |ui| {
-                    if ui.button("Buka File...").clicked() {
-                        self.trigger_open_file();
-                        ui.close();
-                    }
-                    if ui.button("Buka Folder...").clicked() {
-                        self.trigger_open_folder();
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Simpan").clicked() {
-                        self.save();
-                        ui.close();
-                    }
-                    if ui.button("Simpan Sebagai...").clicked() {
-                        self.save_as();
-                        ui.close();
-                    }
-                    ui.separator();
-                    self.show_language_menu(ui);
-                    ui.separator();
-                    if ui.button("Keluar").clicked() {
-                        self.trigger_exit(&ctx);
-                        ui.close();
-                    }
+                    self.show_file_menu(ui, &ctx);
                 });
 
                 // Menu Tampilan
@@ -597,6 +655,9 @@ impl eframe::App for TextEditorApp {
 
         // 4. Central Panel (Main Text Editor Area)
         egui::CentralPanel::default().show(ui, |ui| {
+            self.render_tab_bar(ui);
+            ui.separator();
+
             // `TextEdit::font` resolves this `TextStyle` the same way, so the
             // caret and selection line up with the highlighted glyphs.
             let font_id = egui::TextStyle::Monospace.resolve(ui.style());
@@ -1199,5 +1260,229 @@ mod tests {
             "wrapped text must fit the window width, offset {:?}",
             area.clamped_offset()
         );
+    }
+
+    #[test]
+    fn test_tab_bar_ui_rendering_and_interaction() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.open_new_tab(); // Tab 0: [Dokumen Baru], Tab 1: [Dokumen Baru]
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab_index, 1);
+
+        // Frame 1: render tab bar
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            app.render_tab_bar(ui);
+        });
+
+        // Click Tab 0 label to switch to Tab 0
+        let click_tab_0 = vec![
+            egui::Event::PointerMoved(egui::pos2(50.0, 17.0)),
+            egui::Event::PointerButton {
+                pos: egui::pos2(50.0, 17.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(50.0, 17.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        run_frame_with_events(&ctx, click_tab_0, |ui| {
+            app.render_tab_bar(ui);
+        });
+        assert_eq!(app.active_tab_index, 0, "Clicking tab 0 label should switch active tab to 0");
+
+        // Click Tab 1 close button to close Tab 1
+        let click_close_tab_1 = vec![
+            egui::Event::PointerMoved(egui::pos2(299.0, 17.0)),
+            egui::Event::PointerButton {
+                pos: egui::pos2(299.0, 17.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(299.0, 17.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        run_frame_with_events(&ctx, click_close_tab_1, |ui| {
+            app.render_tab_bar(ui);
+        });
+        assert_eq!(app.tabs.len(), 1, "Clicking tab 1 close button should close Tab 1");
+        assert_eq!(app.active_tab_index, 0);
+
+        // Frame to let layout settle after closing tab 1
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            app.render_tab_bar(ui);
+        });
+
+        // Click the "+" button to open a new tab
+        // Let's check where "+" button is after tab 0:
+        // Tab 0 group is ~148px wide + margin. Let's try x=170.0, or check min_rect
+        let mut add_button_center = egui::pos2(0.0, 0.0);
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            app.render_tab_bar(ui);
+            add_button_center = egui::pos2(ui.min_rect().max.x - 12.0, 17.0);
+        });
+
+        let click_add_tab = vec![
+            egui::Event::PointerMoved(add_button_center),
+            egui::Event::PointerButton {
+                pos: add_button_center,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: add_button_center,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        run_frame_with_events(&ctx, click_add_tab, |ui| {
+            app.render_tab_bar(ui);
+        });
+        assert_eq!(app.tabs.len(), 2, "Clicking '+' button should open a new tab");
+        assert_eq!(app.active_tab_index, 1);
+    }
+
+    #[test]
+    fn test_tab_bar_close_dirty_tab_triggers_pending_action() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.open_new_tab();
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab_index, 1);
+        app.tabs[1].text_content = "modified dirty content".to_string();
+        assert!(app.tabs[1].is_dirty());
+
+        // Frame 1: render tab bar
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            app.render_tab_bar(ui);
+        });
+
+        // Click close button on dirty tab 1
+        let click_close_tab_1 = vec![
+            egui::Event::PointerMoved(egui::pos2(299.0, 17.0)),
+            egui::Event::PointerButton {
+                pos: egui::pos2(299.0, 17.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: egui::pos2(299.0, 17.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        run_frame_with_events(&ctx, click_close_tab_1, |ui| {
+            app.render_tab_bar(ui);
+        });
+
+        // Tab 1 is dirty, so it should NOT be closed immediately; pending_action is set
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.pending_action, Some(PendingAction::CloseTab(1)));
+    }
+
+    #[test]
+    fn test_file_menu_tab_actions() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        assert_eq!(app.tabs.len(), 1);
+
+        // Warm up frame so egui lays out the buttons
+        let mut tab_baru_center = egui::pos2(0.0, 0.0);
+        let mut tutup_tab_center = egui::pos2(0.0, 0.0);
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            let r1 = ui.button("Tab Baru").rect;
+            let r2 = ui.button("Tutup Tab").rect;
+            tab_baru_center = r1.center();
+            tutup_tab_center = r2.center();
+        });
+
+        // Click "Tab Baru" button in show_file_menu
+        let click_tab_baru = vec![
+            egui::Event::PointerMoved(tab_baru_center),
+            egui::Event::PointerButton {
+                pos: tab_baru_center,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: tab_baru_center,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        run_frame_with_events(&ctx, click_tab_baru, |ui| {
+            app.show_file_menu(ui, &ctx);
+        });
+        assert_eq!(app.tabs.len(), 2, "Menu 'Tab Baru' should create a new tab");
+        assert_eq!(app.active_tab_index, 1);
+
+        // Warm up frame before next click
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            app.show_file_menu(ui, &ctx);
+        });
+
+        // Click "Tutup Tab" button in show_file_menu
+        let click_tutup_tab = vec![
+            egui::Event::PointerMoved(tutup_tab_center),
+            egui::Event::PointerButton {
+                pos: tutup_tab_center,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: tutup_tab_center,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        run_frame_with_events(&ctx, click_tutup_tab, |ui| {
+            app.show_file_menu(ui, &ctx);
+        });
+        assert_eq!(app.tabs.len(), 1, "Menu 'Tutup Tab' should close active tab");
+        assert_eq!(app.active_tab_index, 0);
+    }
+
+    #[test]
+    fn test_tab_bar_dirty_indicator_in_title() {
+        let mut app = TextEditorApp::default();
+        app.open_new_tab();
+        assert_eq!(app.tabs.len(), 2);
+        assert!(!app.tabs[0].is_dirty());
+        assert!(!app.tabs[1].is_dirty());
+
+        app.tabs[0].text_content = "dirty buffer".to_string();
+        assert!(app.tabs[0].is_dirty());
+
+        let title_0 = format!(
+            "{}{}",
+            app.tabs[0].file_display_name(),
+            if app.tabs[0].is_dirty() { " *" } else { "" }
+        );
+        let title_1 = format!(
+            "{}{}",
+            app.tabs[1].file_display_name(),
+            if app.tabs[1].is_dirty() { " *" } else { "" }
+        );
+
+        assert_eq!(title_0, "[Dokumen Baru] *");
+        assert_eq!(title_1, "[Dokumen Baru]");
     }
 }

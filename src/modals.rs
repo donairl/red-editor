@@ -7,7 +7,6 @@ use std::path::PathBuf;
 pub enum PendingAction {
     OpenFile(PathBuf),
     PromptOpenFile,
-    #[allow(dead_code)]
     CloseTab(usize),
     Exit,
 }
