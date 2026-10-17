@@ -10,7 +10,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Bungkus baris** (word wrap) yang bisa dinyalakan atau dimatikan (**Tampilan → Bungkus Baris**). Saat mati, baris panjang bisa digeser ke samping.
 - **Explorer dan Activity Bar** seperti VS Code: buka folder, jelajahi isinya sebagai tree, klik file untuk membukanya di tab. Ada tombol **Refresh** dan **Collapse All** di header folder.
 - **Konfirmasi perubahan belum disimpan** saat menutup tab atau keluar dari aplikasi.
-- **Multi bahasa antarmuka** (Indonesia, English, dan bahasa lain lewat file JSON). Pilih di **Tampilan → Bahasa Antarmuka**; pilihan diingat saat aplikasi dibuka lagi. Lihat [Menambah bahasa antarmuka](#menambah-bahasa-antarmuka).
+- **Multi bahasa antarmuka** (Indonesia, English, Español, Deutsch, 中文, dan bahasa lain lewat file JSON). Pilih di **Tampilan → Bahasa Antarmuka**; pilihan diingat saat aplikasi dibuka lagi. Lihat [Menambah bahasa antarmuka](#menambah-bahasa-antarmuka).
 - Tema terang/gelap mengikuti pengaturan sistem.
 
 ## Kebutuhan
@@ -122,9 +122,9 @@ Langkah:
 2. Taruh file itu di folder `assets/lang/` di **samping file program** (misalnya `~/.cargo/bin/assets/lang/` untuk hasil `cargo install`, atau `/usr/local/bin/assets/lang/`), atau di `assets/lang/` pada **folder tempat aplikasi dijalankan**.
 3. Buka ulang aplikasi; bahasa baru muncul di **Tampilan → Bahasa Antarmuka**.
 
-Kunci yang tidak ada di file memakai teks Bahasa Indonesia. File dengan kode yang sama dengan bahasa bawaan (`id.json`, `en.json`) hanya menimpa kunci yang ada di dalamnya. Kalau file tidak valid, aplikasi tetap jalan dan menampilkan pesan error di status bar.
+Kunci yang tidak ada di file memakai teks Bahasa Indonesia. File dengan kode yang sama dengan bahasa bawaan (mis. `id.json`, `en.json`, `zh.json`) hanya menimpa kunci yang ada di dalamnya. Kalau file tidak valid, aplikasi tetap jalan dan menampilkan pesan error di status bar.
 
-Bahasa Indonesia dan English sudah tertanam di dalam program, jadi tetap tersedia walaupun folder `assets/` tidak ikut dipasang. Saat pertama kali dibuka, aplikasi memilih bahasa sistem (`LANG`) kalau tersedia, selain itu English.
+Bahasa Indonesia, English, Español, Deutsch, dan 中文 sudah tertanam di dalam program, jadi tetap tersedia walaupun folder `assets/` tidak ikut dipasang. Saat pertama kali dibuka, aplikasi memilih bahasa sistem (`LANG`) kalau tersedia, selain itu English. Teks Mandarin memakai font CJK sistem (mis. Noto Sans CJK) kalau terpasang.
 
 ## Pengembangan
 

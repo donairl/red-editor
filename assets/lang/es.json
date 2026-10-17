@@ -1,0 +1,56 @@
+{
+  "name": "Español",
+
+  "menu.file": "Archivo",
+  "menu.view": "Ver",
+  "menu.help": "Ayuda",
+  "menu.syntax": "Lenguaje",
+  "menu.ui_language": "Idioma de la interfaz",
+
+  "file.new_tab": "Pestaña nueva",
+  "file.close_tab": "Cerrar pestaña",
+  "file.open_file": "Abrir archivo...",
+  "file.open_folder": "Abrir carpeta...",
+  "file.save": "Guardar",
+  "file.save_as": "Guardar como...",
+  "file.exit": "Salir",
+
+  "view.word_wrap": "Ajuste de línea",
+  "view.line_numbers": "Números de línea",
+
+  "help.about": "Acerca de",
+
+  "toolbar.characters": "Caracteres: {count}",
+  "status.document": "Documento: {name}{modified}",
+  "status.modified": " [modificado]",
+
+  "doc.untitled": "[Documento nuevo]",
+  "editor.placeholder": "Escribe algo aquí...",
+
+  "msg.already_open": "El archivo ya está abierto.",
+  "msg.opened": "Archivo abierto correctamente.",
+  "msg.too_large": "El archivo es demasiado grande para el resaltado de sintaxis.",
+  "msg.open_failed": "No se pudo abrir el archivo: {error}",
+  "msg.saved": "Archivo guardado correctamente.",
+  "msg.save_failed": "No se pudo guardar el archivo: {error}",
+  "msg.folder_opened": "Carpeta abierta.",
+  "msg.language_load_failed": "No se pudo cargar el idioma {file}: {error}",
+
+  "about.title": "Acerca de Red Text Editor",
+  "about.version": "Versión {version}",
+  "about.description": "Editor de texto sencillo y rápido basado en Rust y egui.",
+  "about.close": "Cerrar",
+
+  "unsaved.title": "Cambios sin guardar",
+  "unsaved.message": "Hay cambios sin guardar en \"{name}\". ¿Guardar ahora?",
+  "unsaved.save": "Guardar",
+  "unsaved.discard": "Descartar",
+  "unsaved.cancel": "Cancelar",
+
+  "language.plain_text": "Texto sin formato",
+
+  "explorer.title": "EXPLORADOR",
+  "explorer.refresh": "Actualizar",
+  "explorer.collapse_all": "Contraer todo",
+  "activity.explorer": "Explorador"
+}

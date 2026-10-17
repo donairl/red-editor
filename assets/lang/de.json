@@ -1,0 +1,56 @@
+{
+  "name": "Deutsch",
+
+  "menu.file": "Datei",
+  "menu.view": "Ansicht",
+  "menu.help": "Hilfe",
+  "menu.syntax": "Sprache",
+  "menu.ui_language": "Oberflächensprache",
+
+  "file.new_tab": "Neuer Tab",
+  "file.close_tab": "Tab schließen",
+  "file.open_file": "Datei öffnen...",
+  "file.open_folder": "Ordner öffnen...",
+  "file.save": "Speichern",
+  "file.save_as": "Speichern unter...",
+  "file.exit": "Beenden",
+
+  "view.word_wrap": "Zeilenumbruch",
+  "view.line_numbers": "Zeilennummern",
+
+  "help.about": "Über",
+
+  "toolbar.characters": "Zeichen: {count}",
+  "status.document": "Dokument: {name}{modified}",
+  "status.modified": " [geändert]",
+
+  "doc.untitled": "[Neues Dokument]",
+  "editor.placeholder": "Hier etwas eingeben...",
+
+  "msg.already_open": "Die Datei ist bereits geöffnet.",
+  "msg.opened": "Datei erfolgreich geöffnet.",
+  "msg.too_large": "Die Datei ist zu groß für die Syntaxhervorhebung.",
+  "msg.open_failed": "Datei konnte nicht geöffnet werden: {error}",
+  "msg.saved": "Datei erfolgreich gespeichert.",
+  "msg.save_failed": "Datei konnte nicht gespeichert werden: {error}",
+  "msg.folder_opened": "Ordner geöffnet.",
+  "msg.language_load_failed": "Sprache {file} konnte nicht geladen werden: {error}",
+
+  "about.title": "Über Red Text Editor",
+  "about.version": "Version {version}",
+  "about.description": "Ein einfacher, schneller Texteditor auf Basis von Rust und egui.",
+  "about.close": "Schließen",
+
+  "unsaved.title": "Ungespeicherte Änderungen",
+  "unsaved.message": "\"{name}\" enthält ungespeicherte Änderungen. Jetzt speichern?",
+  "unsaved.save": "Speichern",
+  "unsaved.discard": "Verwerfen",
+  "unsaved.cancel": "Abbrechen",
+
+  "language.plain_text": "Nur Text",
+
+  "explorer.title": "EXPLORER",
+  "explorer.refresh": "Aktualisieren",
+  "explorer.collapse_all": "Alle zuklappen",
+  "activity.explorer": "Explorer"
+}

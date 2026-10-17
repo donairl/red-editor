@@ -11,9 +11,12 @@ use std::path::PathBuf;
 const FALLBACK: &str = "id";
 
 /// Built-in languages, embedded so an installed binary needs no files.
-const BUILTIN: [(&str, &str); 2] = [
+const BUILTIN: [(&str, &str); 5] = [
     ("id", include_str!("../assets/lang/id.json")),
     ("en", include_str!("../assets/lang/en.json")),
+    ("es", include_str!("../assets/lang/es.json")),
+    ("de", include_str!("../assets/lang/de.json")),
+    ("zh", include_str!("../assets/lang/zh.json")),
 ];
 
 /// One language: its code (the file stem) and its strings.
@@ -233,13 +236,14 @@ mod tests {
     #[test]
     fn test_builtin_languages_have_the_same_keys() {
         let id = keys(BUILTIN[0].1);
-        let en = keys(BUILTIN[1].1);
         assert!(id.contains("name"));
-        assert_eq!(
-            id.symmetric_difference(&en).collect::<Vec<_>>(),
-            Vec::<&String>::new(),
-            "id.json and en.json must list the same keys"
-        );
+        for (code, json) in BUILTIN {
+            assert_eq!(
+                id.symmetric_difference(&keys(json)).collect::<Vec<_>>(),
+                Vec::<&String>::new(),
+                "id.json and {code}.json must list the same keys"
+            );
+        }
     }
 
     #[test]
@@ -248,7 +252,13 @@ mod tests {
         assert_eq!(i18n.code(), "id");
         assert_eq!(i18n.t("menu.view"), "Tampilan");
         let locales: Vec<(&str, &str)> = i18n.locales().collect();
-        assert_eq!(locales, vec![("id", "Bahasa Indonesia"), ("en", "English")]);
+        assert_eq!(locales, vec![
+                ("id", "Bahasa Indonesia"),
+                ("de", "Deutsch"),
+                ("en", "English"),
+                ("es", "Español"),
+                ("zh", "中文"),
+            ]);
     }
 
     #[test]
@@ -301,7 +311,7 @@ mod tests {
         let (mut i18n, errors) = I18n::load(std::slice::from_ref(&dir));
         assert!(errors.is_empty());
         let codes: Vec<&str> = i18n.locales().map(|(code, _)| code).collect();
-        assert_eq!(codes, vec!["id", "en", "xx"]);
+        assert_eq!(codes, vec!["id", "de", "en", "es", "xx", "zh"]);
 
         i18n.select("en");
         assert_eq!(i18n.t("menu.view"), "Look", "the file overrides the key");
@@ -323,7 +333,7 @@ mod tests {
         let files: Vec<&str> = errors.iter().map(|e| e.file.as_str()).collect();
         assert_eq!(files, vec!["bad.json", "nested.json"]);
         assert!(errors.iter().all(|e| !e.error.is_empty()));
-        assert_eq!(i18n.locales().count(), 2, "no language added");
+        assert_eq!(i18n.locales().count(), BUILTIN.len(), "no language added");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -331,7 +341,7 @@ mod tests {
     fn test_missing_folders_are_ignored() {
         let (i18n, errors) = I18n::load(&[Path::new("/no/such/rred/folder").to_path_buf()]);
         assert!(errors.is_empty());
-        assert_eq!(i18n.locales().count(), 2);
+        assert_eq!(i18n.locales().count(), BUILTIN.len());
     }
 
     #[test]

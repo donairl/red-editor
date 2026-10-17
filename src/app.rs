@@ -137,10 +137,35 @@ impl Default for TextEditorApp {
     }
 }
 
+/// egui's bundled fonts have no CJK glyphs; borrow one from the system so
+/// Chinese text renders instead of boxes. Silently skipped when none is found.
+fn install_cjk_fallback_font(ctx: &egui::Context) {
+    const CANDIDATES: [&str; 6] = [
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "C:\\Windows\\Fonts\\msyh.ttc",
+    ];
+    let Some(bytes) = CANDIDATES.iter().find_map(|p| std::fs::read(p).ok()) else {
+        return;
+    };
+    let mut fonts = egui::FontDefinitions::default();
+    fonts
+        .font_data
+        .insert("cjk".to_owned(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push("cjk".to_owned());
+    }
+    ctx.set_fonts(fonts);
+}
+
 impl TextEditorApp {
     /// The app as eframe starts it: language files from disk, and the saved
     /// or the system interface language.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        install_cjk_fallback_font(&cc.egui_ctx);
         let (mut i18n, errors) = I18n::load(&i18n::search_dirs());
         let saved = cc
             .storage

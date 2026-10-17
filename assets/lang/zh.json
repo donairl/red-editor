@@ -1,0 +1,56 @@
+{
+  "name": "中文",
+
+  "menu.file": "文件",
+  "menu.view": "视图",
+  "menu.help": "帮助",
+  "menu.syntax": "语言",
+  "menu.ui_language": "界面语言",
+
+  "file.new_tab": "新建标签页",
+  "file.close_tab": "关闭标签页",
+  "file.open_file": "打开文件...",
+  "file.open_folder": "打开文件夹...",
+  "file.save": "保存",
+  "file.save_as": "另存为...",
+  "file.exit": "退出",
+
+  "view.word_wrap": "自动换行",
+  "view.line_numbers": "行号",
+
+  "help.about": "关于",
+
+  "toolbar.characters": "字符数：{count}",
+  "status.document": "文档：{name}{modified}",
+  "status.modified": " [已修改]",
+
+  "doc.untitled": "[新文档]",
+  "editor.placeholder": "在此输入内容...",
+
+  "msg.already_open": "文件已打开。",
+  "msg.opened": "文件打开成功。",
+  "msg.too_large": "文件过大，无法进行语法高亮。",
+  "msg.open_failed": "无法打开文件：{error}",
+  "msg.saved": "文件保存成功。",
+  "msg.save_failed": "无法保存文件：{error}",
+  "msg.folder_opened": "文件夹已打开。",
+  "msg.language_load_failed": "无法加载语言 {file}：{error}",
+
+  "about.title": "关于 Red Text Editor",
+  "about.version": "版本 {version}",
+  "about.description": "基于 Rust 和 egui 的简单快速的文本编辑器。",
+  "about.close": "关闭",
+
+  "unsaved.title": "有未保存的更改",
+  "unsaved.message": "“{name}”有未保存的更改。现在保存吗？",
+  "unsaved.save": "保存",
+  "unsaved.discard": "放弃",
+  "unsaved.cancel": "取消",
+
+  "language.plain_text": "纯文本",
+
+  "explorer.title": "资源管理器",
+  "explorer.refresh": "刷新",
+  "explorer.collapse_all": "全部折叠",
+  "activity.explorer": "资源管理器"
+}
