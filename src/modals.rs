@@ -2,6 +2,8 @@
 
 use eframe::egui;
 
+use crate::i18n::I18n;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PendingAction {
     CloseTab(usize),
@@ -15,50 +17,51 @@ pub enum ModalResponse {
     Cancel,
 }
 
-pub fn show_about_modal(ctx: &egui::Context, open: &mut bool) {
+pub fn show_about_modal(ctx: &egui::Context, open: &mut bool, i18n: &I18n) {
     if !*open {
         return;
     }
 
-    egui::Window::new("Tentang Red Text Editor")
+    egui::Window::new(i18n.t("about.title"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.heading("Red Text Editor");
-                ui.label("Versi 0.1.0");
+                ui.label(i18n.tf("about.version", &[("version", env!("CARGO_PKG_VERSION"))]));
                 ui.add_space(8.0);
-                ui.label("Editor teks sederhana dan cepat berbasis Rust & egui.");
+                ui.label(i18n.t("about.description"));
                 ui.add_space(12.0);
-                if ui.button("Tutup").clicked() {
+                if ui.button(i18n.t("about.close")).clicked() {
                     *open = false;
                 }
             });
         });
 }
 
-pub fn show_unsaved_changes_modal(ctx: &egui::Context, file_name: &str) -> Option<ModalResponse> {
+pub fn show_unsaved_changes_modal(
+    ctx: &egui::Context,
+    file_name: &str,
+    i18n: &I18n,
+) -> Option<ModalResponse> {
     let mut response = None;
 
-    egui::Window::new("Perubahan Belum Disimpan")
+    egui::Window::new(i18n.t("unsaved.title"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.label(format!(
-                "Terdapat perubahan belum disimpan pada \"{}\". Simpan sekarang?",
-                file_name
-            ));
+            ui.label(i18n.tf("unsaved.message", &[("name", file_name)]));
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if ui.button("Simpan").clicked() {
+                if ui.button(i18n.t("unsaved.save")).clicked() {
                     response = Some(ModalResponse::Save);
                 }
-                if ui.button("Abaikan").clicked() {
+                if ui.button(i18n.t("unsaved.discard")).clicked() {
                     response = Some(ModalResponse::Discard);
                 }
-                if ui.button("Batal").clicked() {
+                if ui.button(i18n.t("unsaved.cancel")).clicked() {
                     response = Some(ModalResponse::Cancel);
                 }
             });
@@ -102,12 +105,12 @@ mod tests {
     fn test_show_about_modal() {
         let ctx = egui::Context::default();
         let mut open = false;
-        show_about_modal(&ctx, &mut open);
+        show_about_modal(&ctx, &mut open, &I18n::builtin());
         assert!(!open);
 
         let mut open = true;
         let mut output = ctx.run_ui(Default::default(), |ctx| {
-            show_about_modal(ctx, &mut open);
+            show_about_modal(ctx, &mut open, &I18n::builtin());
         });
         output.textures_delta.clear();
         assert!(open);
@@ -117,7 +120,7 @@ mod tests {
     fn test_show_unsaved_changes_modal_headless() {
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(Default::default(), |ctx| {
-            let response = show_unsaved_changes_modal(ctx, "test.txt");
+            let response = show_unsaved_changes_modal(ctx, "test.txt", &I18n::builtin());
             assert_eq!(response, None);
         });
         output.textures_delta.clear();

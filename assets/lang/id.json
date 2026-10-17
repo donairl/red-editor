@@ -1,0 +1,56 @@
+{
+  "name": "Bahasa Indonesia",
+
+  "menu.file": "File",
+  "menu.view": "Tampilan",
+  "menu.help": "Help",
+  "menu.syntax": "Bahasa",
+  "menu.ui_language": "Bahasa Antarmuka",
+
+  "file.new_tab": "Tab Baru",
+  "file.close_tab": "Tutup Tab",
+  "file.open_file": "Buka File...",
+  "file.open_folder": "Buka Folder...",
+  "file.save": "Simpan",
+  "file.save_as": "Simpan Sebagai...",
+  "file.exit": "Keluar",
+
+  "view.word_wrap": "Bungkus Baris",
+  "view.line_numbers": "Nomor Baris",
+
+  "help.about": "About",
+
+  "toolbar.characters": "Karakter: {count}",
+  "status.document": "Dokumen: {name}{modified}",
+  "status.modified": " [diubah]",
+
+  "doc.untitled": "[Dokumen Baru]",
+  "editor.placeholder": "Ketik sesuatu di sini...",
+
+  "msg.already_open": "File sudah dibuka.",
+  "msg.opened": "File berhasil dibuka.",
+  "msg.too_large": "File terlalu besar untuk syntax highlighting.",
+  "msg.open_failed": "Gagal membuka file: {error}",
+  "msg.saved": "File berhasil disimpan.",
+  "msg.save_failed": "Gagal menyimpan file: {error}",
+  "msg.folder_opened": "Folder dibuka.",
+  "msg.language_load_failed": "Gagal memuat bahasa {file}: {error}",
+
+  "about.title": "Tentang Red Text Editor",
+  "about.version": "Versi {version}",
+  "about.description": "Editor teks sederhana dan cepat berbasis Rust & egui.",
+  "about.close": "Tutup",
+
+  "unsaved.title": "Perubahan Belum Disimpan",
+  "unsaved.message": "Terdapat perubahan belum disimpan pada \"{name}\". Simpan sekarang?",
+  "unsaved.save": "Simpan",
+  "unsaved.discard": "Abaikan",
+  "unsaved.cancel": "Batal",
+
+  "language.plain_text": "Teks Biasa",
+
+  "explorer.title": "EXPLORER",
+  "explorer.refresh": "Muat Ulang",
+  "explorer.collapse_all": "Ciutkan Semua",
+  "activity.explorer": "Explorer"
+}

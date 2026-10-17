@@ -3,6 +3,7 @@ mod app;
 mod file_browser;
 mod gutter;
 mod highlighter;
+mod i18n;
 mod modals;
 mod tab_bar;
 
@@ -20,6 +21,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Red Text Editor",
         options,
-        Box::new(|_cc| Ok(Box::new(TextEditorApp::default()))),
+        Box::new(|cc| Ok(Box::new(TextEditorApp::new(cc)))),
     )
 }

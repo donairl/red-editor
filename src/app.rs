@@ -8,10 +8,12 @@ use crate::activity_bar;
 use crate::file_browser::{self, Explorer};
 use crate::gutter;
 use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
+use crate::i18n::{self, I18n};
 use crate::modals::{self, ModalResponse, PendingAction};
 use crate::tab_bar;
 
-pub const INITIAL_TEXT: &str = "Ketik sesuatu di sini...";
+/// Storage key under which eframe remembers the interface language.
+const UI_LANGUAGE_KEY: &str = "ui_language";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DocumentTab {
@@ -30,10 +32,9 @@ impl Default for DocumentTab {
 
 impl DocumentTab {
     pub fn default_new() -> Self {
-        let initial = String::from(INITIAL_TEXT);
         Self {
-            text_content: initial.clone(),
-            saved_content: initial,
+            text_content: String::new(),
+            saved_content: String::new(),
             current_path: None,
             active_language: Language::PlainText,
             language_override: None,
@@ -57,15 +58,16 @@ impl DocumentTab {
     }
 
     pub fn is_pristine(&self) -> bool {
-        self.current_path.is_none() && !self.is_dirty() && self.text_content == INITIAL_TEXT
+        self.current_path.is_none() && !self.is_dirty() && self.text_content.is_empty()
     }
 
-    pub fn file_display_name(&self) -> String {
+    /// The file name, or `untitled` for a document never saved.
+    pub fn file_display_name(&self, untitled: &str) -> String {
         self.current_path
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "[Dokumen Baru]".to_string())
+            .unwrap_or_else(|| untitled.to_owned())
     }
 
     pub fn effective_language(&self) -> Language {
@@ -73,9 +75,9 @@ impl DocumentTab {
     }
 
     /// How this document appears in the tab strip.
-    pub fn tab_view(&self) -> tab_bar::TabView {
+    pub fn tab_view(&self, untitled: &str) -> tab_bar::TabView {
         tab_bar::TabView {
-            title: self.file_display_name(),
+            title: self.file_display_name(untitled),
             tooltip: self.current_path.as_ref().map(|p| p.display().to_string()),
             language: self.effective_language(),
             dirty: self.is_dirty(),
@@ -113,6 +115,8 @@ pub struct TextEditorApp {
     /// Show the line-number gutter left of the text. On by default, as in
     /// VS Code.
     pub show_line_numbers: bool,
+    /// Interface translations and the language in use.
+    pub i18n: I18n,
 }
 
 impl Default for TextEditorApp {
@@ -128,11 +132,34 @@ impl Default for TextEditorApp {
             highlighter: SyntaxHighlighter::new(),
             word_wrap: false,
             show_line_numbers: true,
+            i18n: I18n::builtin(),
         }
     }
 }
 
 impl TextEditorApp {
+    /// The app as eframe starts it: language files from disk, and the saved
+    /// or the system interface language.
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let (mut i18n, errors) = I18n::load(&i18n::search_dirs());
+        let saved = cc
+            .storage
+            .and_then(|storage| storage.get_string(UI_LANGUAGE_KEY));
+        i18n.choose_initial(saved.as_deref(), i18n::system_language().as_deref());
+        let status_message = errors.first().map(|e| {
+            let message = i18n.tf(
+                "msg.language_load_failed",
+                &[("file", &e.file), ("error", &e.error)],
+            );
+            (message, true)
+        });
+        Self {
+            i18n,
+            status_message,
+            ..Default::default()
+        }
+    }
+
     pub fn active_tab(&self) -> &DocumentTab {
         &self.tabs[self.active_tab_index]
     }
@@ -150,7 +177,17 @@ impl TextEditorApp {
     }
 
     pub fn file_display_name(&self) -> String {
-        self.active_tab().file_display_name()
+        self.active_tab()
+            .file_display_name(self.i18n.t("doc.untitled"))
+    }
+
+    /// Name of `lang` in the menus: translated for plain text, the
+    /// language's own name otherwise.
+    pub fn language_label(&self, lang: Language) -> String {
+        match lang {
+            Language::PlainText => self.i18n.t("language.plain_text").to_owned(),
+            other => other.display_name().to_owned(),
+        }
     }
 
     pub fn window_title(&self) -> String {
@@ -169,11 +206,15 @@ impl TextEditorApp {
     /// Re-selecting the already active language clears the override and returns
     /// to automatic detection.
     pub fn show_language_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("Bahasa", |ui| {
+        let label = self.i18n.t("menu.syntax").to_owned();
+        ui.menu_button(label, |ui| {
             let current = self.effective_language();
             for lang in Language::all() {
                 let selected = *lang == current;
-                if ui.selectable_label(selected, lang.display_name()).clicked() {
+                if ui
+                    .selectable_label(selected, self.language_label(*lang))
+                    .clicked()
+                {
                     self.active_tab_mut().language_override =
                         if selected { None } else { Some(*lang) };
                     ui.close();
@@ -183,18 +224,45 @@ impl TextEditorApp {
     }
 
     pub fn show_view_menu(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.word_wrap, "Bungkus Baris");
-        ui.checkbox(&mut self.show_line_numbers, "Nomor Baris");
+        ui.checkbox(&mut self.word_wrap, self.i18n.t("view.word_wrap"));
+        ui.checkbox(&mut self.show_line_numbers, self.i18n.t("view.line_numbers"));
         ui.separator();
         self.show_language_menu(ui);
+        self.show_ui_language_menu(ui);
+    }
+
+    /// Lists every interface language; picking one switches to it.
+    pub fn show_ui_language_menu(&mut self, ui: &mut egui::Ui) {
+        let label = self.i18n.t("menu.ui_language").to_owned();
+        ui.menu_button(label, |ui| {
+            let current = self.i18n.code().to_owned();
+            let locales: Vec<(String, String)> = self
+                .i18n
+                .locales()
+                .map(|(code, name)| (code.to_owned(), name.to_owned()))
+                .collect();
+            for (code, name) in locales {
+                if ui.selectable_label(code == current, name).clicked() {
+                    self.i18n.select(&code);
+                    ui.close();
+                }
+            }
+        });
     }
 
     /// The document name and the latest status message.
     pub fn show_status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let doc_label = self.file_display_name();
-            let dirty_str = if self.is_dirty() { " [diubah]" } else { "" };
-            ui.label(format!("Dokumen: {doc_label}{dirty_str}"));
+            let modified = if self.is_dirty() {
+                self.i18n.t("status.modified")
+            } else {
+                ""
+            };
+            let name = self.file_display_name();
+            ui.label(
+                self.i18n
+                    .tf("status.document", &[("name", &name), ("modified", modified)]),
+            );
 
             if let Some((msg, is_error)) = &self.status_message {
                 ui.separator();
@@ -209,36 +277,36 @@ impl TextEditorApp {
     }
 
     pub fn show_file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if ui.button("Tab Baru").clicked() {
+        if ui.button(self.i18n.t("file.new_tab")).clicked() {
             self.open_new_tab();
             ui.close();
         }
-        if ui.button("Tutup Tab").clicked() {
+        if ui.button(self.i18n.t("file.close_tab")).clicked() {
             self.trigger_close_tab(self.active_tab_index);
             ui.close();
         }
         ui.separator();
-        if ui.button("Buka File...").clicked() {
+        if ui.button(self.i18n.t("file.open_file")).clicked() {
             self.trigger_open_file();
             ui.close();
         }
-        if ui.button("Buka Folder...").clicked() {
+        if ui.button(self.i18n.t("file.open_folder")).clicked() {
             self.trigger_open_folder();
             ui.close();
         }
         ui.separator();
-        if ui.button("Simpan").clicked() {
+        if ui.button(self.i18n.t("file.save")).clicked() {
             self.save();
             ui.close();
         }
-        if ui.button("Simpan Sebagai...").clicked() {
+        if ui.button(self.i18n.t("file.save_as")).clicked() {
             self.save_as();
             ui.close();
         }
         ui.separator();
         self.show_language_menu(ui);
         ui.separator();
-        if ui.button("Keluar").clicked() {
+        if ui.button(self.i18n.t("file.exit")).clicked() {
             self.trigger_exit(ctx);
             ui.close();
         }
@@ -256,7 +324,7 @@ impl TextEditorApp {
             .position(|t| t.current_path.as_ref() == Some(&path))
         {
             self.active_tab_index = index;
-            self.status_message = Some(("File sudah dibuka.".to_string(), false));
+            self.status_message = Some((self.i18n.t("msg.already_open").to_owned(), false));
             return;
         }
 
@@ -270,15 +338,15 @@ impl TextEditorApp {
                     self.active_tab_index = self.tabs.len() - 1;
                     self.status_message = Some((
                         if exceeds {
-                            "File terlalu besar untuk syntax highlighting.".to_string()
+                            self.i18n.t("msg.too_large").to_owned()
                         } else {
-                            "File berhasil dibuka.".to_string()
+                            self.i18n.t("msg.opened").to_owned()
                         },
                         false,
                     ));
                 }
                 Err(err) => {
-                    self.status_message = Some((format!("Gagal membuka file: {err}"), true));
+                    self.status_message = Some((self.i18n.tf("msg.open_failed", &[("error", &err.to_string())]), true));
                 }
             }
         }
@@ -322,15 +390,15 @@ impl TextEditorApp {
                 tab.current_path = Some(path);
                 self.status_message = Some((
                     if exceeds_limit {
-                        "File terlalu besar untuk syntax highlighting.".to_string()
+                        self.i18n.t("msg.too_large").to_owned()
                     } else {
-                        "File berhasil dibuka.".to_string()
+                        self.i18n.t("msg.opened").to_owned()
                     },
                     false,
                 ));
             }
             Err(err) => {
-                self.status_message = Some((format!("Gagal membuka file: {err}"), true));
+                self.status_message = Some((self.i18n.tf("msg.open_failed", &[("error", &err.to_string())]), true));
             }
         }
     }
@@ -342,11 +410,11 @@ impl TextEditorApp {
         if self.tabs[index].current_path.is_some() {
             match self.tabs[index].save() {
                 Ok(_) => {
-                    self.status_message = Some(("File berhasil disimpan.".to_string(), false));
+                    self.status_message = Some((self.i18n.t("msg.saved").to_owned(), false));
                     true
                 }
                 Err(err) => {
-                    self.status_message = Some((format!("Gagal menyimpan file: {err}"), true));
+                    self.status_message = Some((self.i18n.tf("msg.save_failed", &[("error", &err.to_string())]), true));
                     false
                 }
             }
@@ -384,11 +452,11 @@ impl TextEditorApp {
                     active.saved_content = active.text_content.clone();
                     active.active_language = Language::from_path(&path);
                     active.current_path = Some(path);
-                    self.status_message = Some(("File berhasil disimpan.".to_string(), false));
+                    self.status_message = Some((self.i18n.t("msg.saved").to_owned(), false));
                     true
                 }
                 Err(err) => {
-                    self.status_message = Some((format!("Gagal menyimpan file: {err}"), true));
+                    self.status_message = Some((self.i18n.tf("msg.save_failed", &[("error", &err.to_string())]), true));
                     false
                 }
             }
@@ -411,7 +479,7 @@ impl TextEditorApp {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
             self.explorer = Some(Explorer::new(folder));
             self.show_sidebar = true;
-            self.status_message = Some(("Folder dibuka.".to_string(), false));
+            self.status_message = Some((self.i18n.t("msg.folder_opened").to_owned(), false));
         }
     }
 
@@ -487,7 +555,8 @@ impl TextEditorApp {
 
     /// Draws the tab strip and applies what the user clicked.
     pub fn render_tab_bar(&mut self, ui: &mut egui::Ui) -> tab_bar::TabBarResponse {
-        let views: Vec<tab_bar::TabView> = self.tabs.iter().map(DocumentTab::tab_view).collect();
+        let untitled = self.i18n.t("doc.untitled");
+        let views: Vec<tab_bar::TabView> = self.tabs.iter().map(|t| t.tab_view(untitled)).collect();
         let response = tab_bar::show(ui, &views, self.active_tab_index);
         match response.action {
             Some(tab_bar::TabBarAction::Select(index)) => self.active_tab_index = index,
@@ -531,13 +600,15 @@ fn text_content_exceeds_highlight_limit(content: &str) -> bool {
 /// default `cursor_at_end`, the caret lands off-screen and stays unreachable.
 ///
 /// With `line_numbers` on, the editor's left margin widens to hold the
-/// gutter, which is painted over it once the text is laid out.
+/// gutter, which is painted over it once the text is laid out. `hint` shows
+/// in grey while the document is empty.
 fn render_editor(
     ui: &mut egui::Ui,
     text: &mut String,
     mut layouter: Option<&mut HighlighterLayouter<'_>>,
     word_wrap: bool,
     line_numbers: bool,
+    hint: &str,
 ) {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
@@ -564,6 +635,7 @@ fn render_editor(
             .lock_focus(true)
             .desired_width(f32::INFINITY)
             .min_size(ui.available_size())
+            .hint_text(hint.to_owned())
             // No outline or rounded fill: the editor sits on the central
             // panel's background, the same colour as the active tab.
             .frame(egui::Frame::NONE.inner_margin(margin));
@@ -621,6 +693,10 @@ fn render_editor(
 }
 
 impl eframe::App for TextEditorApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(UI_LANGUAGE_KEY, self.i18n.code().to_owned());
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
@@ -628,19 +704,22 @@ impl eframe::App for TextEditorApp {
         // 1. Top Panel (Menu Bar & Toolbar)
         egui::Panel::top("top_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
+                let [file, view, help] =
+                    ["menu.file", "menu.view", "menu.help"].map(|key| self.i18n.t(key).to_owned());
+
                 // Menu File
-                ui.menu_button("File", |ui| {
+                ui.menu_button(file, |ui| {
                     self.show_file_menu(ui, &ctx);
                 });
 
                 // Menu Tampilan
-                ui.menu_button("Tampilan", |ui| {
+                ui.menu_button(view, |ui| {
                     self.show_view_menu(ui);
                 });
 
                 // Menu Help
-                ui.menu_button("Help", |ui| {
-                    if ui.button("About").clicked() {
+                ui.menu_button(help, |ui| {
+                    if ui.button(self.i18n.t("help.about")).clicked() {
                         self.show_about_modal = true;
                         ui.close();
                     }
@@ -649,7 +728,8 @@ impl eframe::App for TextEditorApp {
 
                 // Info Karakter di sisi kanan
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("Karakter: {}", self.active_tab().text_content.len()));
+                    let count = self.active_tab().text_content.len().to_string();
+                    ui.label(self.i18n.tf("toolbar.characters", &[("count", &count)]));
                 });
             });
         });
@@ -669,7 +749,9 @@ impl eframe::App for TextEditorApp {
             .resizable(false)
             .show_separator_line(false)
             .frame(side_frame)
-            .show(ui, |ui| activity_bar::show(ui, explorer_open))
+            .show(ui, |ui| {
+                activity_bar::show(ui, explorer_open, self.i18n.t("activity.explorer"))
+            })
             .inner;
         if activity.clicked {
             self.toggle_explorer();
@@ -689,7 +771,8 @@ impl eframe::App for TextEditorApp {
                     .frame(side_frame)
                     .show(ui, |ui| {
                         file_to_open =
-                            file_browser::show(ui, explorer, active_file.as_deref()).open_file;
+                            file_browser::show(ui, explorer, active_file.as_deref(), &self.i18n)
+                                .open_file;
                     });
             }
         }
@@ -713,6 +796,7 @@ impl eframe::App for TextEditorApp {
 
             let word_wrap = self.word_wrap;
             let line_numbers = self.show_line_numbers;
+            let hint = self.i18n.t("editor.placeholder");
             let active_idx = self.active_tab_index;
             let language = self.tabs[active_idx].effective_language();
 
@@ -724,6 +808,7 @@ impl eframe::App for TextEditorApp {
                         None,
                         word_wrap,
                         line_numbers,
+                        hint,
                     );
                 } else {
                     let mut layouter = self.highlighter.layouter(language, font_id);
@@ -733,13 +818,14 @@ impl eframe::App for TextEditorApp {
                         Some(&mut layouter),
                         word_wrap,
                         line_numbers,
+                        hint,
                     );
                 }
             });
         });
 
         // 5. Modals & Dialogs
-        modals::show_about_modal(&ctx, &mut self.show_about_modal);
+        modals::show_about_modal(&ctx, &mut self.show_about_modal, &self.i18n);
 
         #[allow(clippy::collapsible_if)]
         if self.pending_action.is_some() {
@@ -747,17 +833,17 @@ impl eframe::App for TextEditorApp {
                 Some(PendingAction::CloseTab(idx)) => self
                     .tabs
                     .get(idx)
-                    .map(|t| t.file_display_name())
+                    .map(|t| t.file_display_name(self.i18n.t("doc.untitled")))
                     .unwrap_or_else(|| self.file_display_name()),
                 Some(PendingAction::Exit) => self
                     .tabs
                     .iter()
                     .find(|t| t.is_dirty())
-                    .map(|t| t.file_display_name())
+                    .map(|t| t.file_display_name(self.i18n.t("doc.untitled")))
                     .unwrap_or_else(|| self.file_display_name()),
                 _ => self.file_display_name(),
             };
-            if let Some(response) = modals::show_unsaved_changes_modal(&ctx, &prompt_name) {
+            if let Some(response) = modals::show_unsaved_changes_modal(&ctx, &prompt_name, &self.i18n) {
                 self.handle_modal_response(&ctx, response);
             }
         }
@@ -1046,7 +1132,7 @@ mod tests {
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.active_tab_index, 0);
         assert!(app.active_tab().is_pristine());
-        assert_eq!(app.active_tab().text_content, INITIAL_TEXT);
+        assert!(app.active_tab().text_content.is_empty());
         assert_eq!(app.active_tab().current_path, None);
     }
 
@@ -1187,7 +1273,7 @@ mod tests {
 
         run_frame_with_events(&ctx, Vec::new(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                super::render_editor(ui, &mut text, None, false, false);
+                super::render_editor(ui, &mut text, None, false, false, "");
             });
         });
         let area = editor_scroll_area(&ctx).expect("editor must render inside a ScrollArea");
@@ -1195,7 +1281,7 @@ mod tests {
 
         let area = scroll_editor_with_wheel(&ctx, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                super::render_editor(ui, &mut text, None, false, false);
+                super::render_editor(ui, &mut text, None, false, false, "");
             });
         });
         assert!(
@@ -1219,7 +1305,7 @@ mod tests {
                 let mut highlighter = SyntaxHighlighter::new();
                 let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                 let mut layouter = highlighter.layouter(Language::Rust, font_id);
-                super::render_editor(ui, &mut text, Some(&mut layouter), false, false);
+                super::render_editor(ui, &mut text, Some(&mut layouter), false, false, "");
             });
         });
         assert!(
@@ -1239,7 +1325,7 @@ mod tests {
         for word_wrap in [false, true] {
             let mut plain = original.clone();
             run_frame_with_events(&ctx, Vec::new(), |ui| {
-                super::render_editor(ui, &mut plain, None, word_wrap, false);
+                super::render_editor(ui, &mut plain, None, word_wrap, false, "");
             });
             assert_eq!(plain, original);
 
@@ -1248,7 +1334,7 @@ mod tests {
                 let mut highlighter = SyntaxHighlighter::new();
                 let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                 let mut layouter = highlighter.layouter(Language::C, font_id);
-                super::render_editor(ui, &mut highlighted, Some(&mut layouter), word_wrap, false);
+                super::render_editor(ui, &mut highlighted, Some(&mut layouter), word_wrap, false, "");
             });
             assert_eq!(highlighted, original);
         }
@@ -1273,9 +1359,9 @@ mod tests {
                 if highlighted {
                     let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                     let mut layouter = highlighter.layouter(Language::Rust, font_id);
-                    super::render_editor(ui, &mut text, Some(&mut layouter), word_wrap, false);
+                    super::render_editor(ui, &mut text, Some(&mut layouter), word_wrap, false, "");
                 } else {
-                    super::render_editor(ui, &mut text, None, word_wrap, false);
+                    super::render_editor(ui, &mut text, None, word_wrap, false, "");
                 }
             });
         });
@@ -1295,9 +1381,9 @@ mod tests {
                 if highlighted {
                     let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                     let mut layouter = highlighter.layouter(Language::Rust, font_id);
-                    super::render_editor(ui, &mut text, Some(&mut layouter), false, false);
+                    super::render_editor(ui, &mut text, Some(&mut layouter), false, false, "");
                 } else {
-                    super::render_editor(ui, &mut text, None, false, false);
+                    super::render_editor(ui, &mut text, None, false, false, "");
                 }
             });
         };
@@ -1451,7 +1537,7 @@ mod tests {
         let mut tree = |events| {
             let mut response = None;
             run_frame_with_events(&ctx, events, |ui| {
-                response = Some(file_browser::show(ui, &mut explorer, None));
+                response = Some(file_browser::show(ui, &mut explorer, None, &I18n::builtin()));
             });
             response.expect("show ran")
         };
@@ -1470,6 +1556,76 @@ mod tests {
         assert_eq!(app.tabs.len(), tabs, "no duplicate tab");
         assert_eq!(app.active_tab().current_path.as_ref(), Some(&notes));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh document is empty and shows the translated placeholder.
+    #[test]
+    fn test_new_document_is_empty_with_a_placeholder_hint() {
+        let app = TextEditorApp::default();
+        assert!(app.active_tab().text_content.is_empty());
+        assert!(app.active_tab().is_pristine());
+
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let hint = app.i18n.t("editor.placeholder");
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| {
+            super::render_editor(ui, &mut text, None, false, true, hint);
+        });
+        assert!(painted_text(&shapes, "Ketik sesuatu di sini...").is_some());
+        assert!(text.is_empty(), "the hint never enters the buffer");
+    }
+
+    #[test]
+    fn test_english_translates_title_status_and_menus() {
+        let mut app = TextEditorApp::default();
+        assert!(app.i18n.select("en"));
+        assert_eq!(app.window_title(), "[New Document] - Red Text Editor");
+
+        let ctx = egui::Context::default();
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_view_menu(ui));
+        for label in ["Word Wrap", "Line Numbers", "Language", "Interface Language"] {
+            assert!(painted_text(&shapes, label).is_some(), "View menu lacks {label}");
+        }
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_status_bar(ui));
+        assert!(painted_text(&shapes, "Document: [New Document]").is_some());
+    }
+
+    #[test]
+    fn test_plain_text_label_is_translated() {
+        let mut app = TextEditorApp::default();
+        assert_eq!(app.language_label(Language::PlainText), "Teks Biasa");
+        app.i18n.select("en");
+        assert_eq!(app.language_label(Language::PlainText), "Plain Text");
+        assert_eq!(app.language_label(Language::Rust), "Rust");
+    }
+
+    /// An in-memory stand-in for eframe's on-disk storage.
+    #[derive(Default)]
+    struct MemoryStorage(std::collections::HashMap<String, String>);
+
+    impl eframe::Storage for MemoryStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn test_save_remembers_the_interface_language() {
+        let mut app = TextEditorApp::default();
+        app.i18n.select("en");
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        assert_eq!(
+            eframe::Storage::get_string(&storage, super::UI_LANGUAGE_KEY).as_deref(),
+            Some("en")
+        );
     }
 
     #[test]
@@ -1507,9 +1663,9 @@ mod tests {
                 if highlighted {
                     let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                     let mut layouter = highlighter.layouter(Language::Rust, font_id);
-                    super::render_editor(ui, text, Some(&mut layouter), word_wrap, line_numbers);
+                    super::render_editor(ui, text, Some(&mut layouter), word_wrap, line_numbers, "");
                 } else {
-                    super::render_editor(ui, text, None, word_wrap, line_numbers);
+                    super::render_editor(ui, text, None, word_wrap, line_numbers, "");
                 }
             });
         })
@@ -1577,7 +1733,7 @@ mod tests {
 
         scroll_editor_with_wheel_delta(&ctx, egui::vec2(-300.0, 0.0), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                super::render_editor(ui, &mut text, None, false, true);
+                super::render_editor(ui, &mut text, None, false, true, "");
             });
         });
         let shapes = render_with_gutter(&ctx, &mut text, false, false, true, Vec::new());
@@ -1640,14 +1796,14 @@ mod tests {
         let mut tab = DocumentTab::default_new();
         tab.text_content.push('!');
         tab.active_language = Language::Php;
-        let view = tab.tab_view();
+        let view = tab.tab_view("[Dokumen Baru]");
         assert_eq!(view.title, "[Dokumen Baru]");
         assert!(view.dirty);
         assert_eq!(view.language, Language::Php);
         assert_eq!(view.tooltip, None);
 
         tab.current_path = Some(PathBuf::from("/tmp/x/index.php"));
-        assert_eq!(tab.tab_view().tooltip.as_deref(), Some("/tmp/x/index.php"));
+        assert_eq!(tab.tab_view("[Dokumen Baru]").tooltip.as_deref(), Some("/tmp/x/index.php"));
     }
 
     #[test]
@@ -1769,12 +1925,12 @@ mod tests {
 
         let title_0 = format!(
             "{}{}",
-            app.tabs[0].file_display_name(),
+            app.tabs[0].file_display_name("[Dokumen Baru]"),
             if app.tabs[0].is_dirty() { " *" } else { "" }
         );
         let title_1 = format!(
             "{}{}",
-            app.tabs[1].file_display_name(),
+            app.tabs[1].file_display_name("[Dokumen Baru]"),
             if app.tabs[1].is_dirty() { " *" } else { "" }
         );
 

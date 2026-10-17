@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::highlighter::Language;
+use crate::i18n::I18n;
 use crate::tab_bar;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -229,6 +230,7 @@ pub fn show(
     ui: &mut egui::Ui,
     explorer: &mut Explorer,
     active_file: Option<&Path>,
+    i18n: &I18n,
 ) -> ExplorerResponse {
     let palette = SidebarPalette::for_visuals(ui.visuals());
     ui.spacing_mut().item_spacing = Vec2::ZERO;
@@ -246,7 +248,7 @@ pub fn show(
     ui.painter().text(
         pos2(title_rect.left() + TITLE_PADDING_X, title_rect.center().y),
         Align2::LEFT_CENTER,
-        "EXPLORER",
+        i18n.t("explorer.title"),
         FontId::proportional(11.0),
         palette.foreground,
     );
@@ -260,14 +262,14 @@ pub fn show(
     // Registered after the header, so they win clicks inside their rects.
     let refresh = ui
         .interact(refresh_rect, section.id.with("refresh"), Sense::click())
-        .on_hover_text("Refresh");
+        .on_hover_text(i18n.t("explorer.refresh"));
     let collapse_all = ui
         .interact(
             collapse_all_rect,
             section.id.with("collapse_all"),
             Sense::click(),
         )
-        .on_hover_text("Collapse All");
+        .on_hover_text(i18n.t("explorer.collapse_all"));
     paint_section_header(
         ui,
         &palette,
@@ -764,7 +766,7 @@ mod tests {
         };
         let mut response = None;
         let mut output = ctx.run_ui(input, |ui| {
-            response = Some(show(ui, explorer, active_file));
+            response = Some(show(ui, explorer, active_file, &I18n::builtin()));
         });
         output.textures_delta.clear();
         (response.expect("show ran"), output.shapes)

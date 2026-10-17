@@ -1,0 +1,56 @@
+{
+  "name": "English",
+
+  "menu.file": "File",
+  "menu.view": "View",
+  "menu.help": "Help",
+  "menu.syntax": "Language",
+  "menu.ui_language": "Interface Language",
+
+  "file.new_tab": "New Tab",
+  "file.close_tab": "Close Tab",
+  "file.open_file": "Open File...",
+  "file.open_folder": "Open Folder...",
+  "file.save": "Save",
+  "file.save_as": "Save As...",
+  "file.exit": "Exit",
+
+  "view.word_wrap": "Word Wrap",
+  "view.line_numbers": "Line Numbers",
+
+  "help.about": "About",
+
+  "toolbar.characters": "Characters: {count}",
+  "status.document": "Document: {name}{modified}",
+  "status.modified": " [modified]",
+
+  "doc.untitled": "[New Document]",
+  "editor.placeholder": "Type something here...",
+
+  "msg.already_open": "File is already open.",
+  "msg.opened": "File opened.",
+  "msg.too_large": "File too large for syntax highlighting.",
+  "msg.open_failed": "Failed to open file: {error}",
+  "msg.saved": "File saved.",
+  "msg.save_failed": "Failed to save file: {error}",
+  "msg.folder_opened": "Folder opened.",
+  "msg.language_load_failed": "Failed to load language {file}: {error}",
+
+  "about.title": "About Red Text Editor",
+  "about.version": "Version {version}",
+  "about.description": "A simple, fast text editor built with Rust & egui.",
+  "about.close": "Close",
+
+  "unsaved.title": "Unsaved Changes",
+  "unsaved.message": "\"{name}\" has unsaved changes. Save now?",
+  "unsaved.save": "Save",
+  "unsaved.discard": "Don't Save",
+  "unsaved.cancel": "Cancel",
+
+  "language.plain_text": "Plain Text",
+
+  "explorer.title": "EXPLORER",
+  "explorer.refresh": "Refresh",
+  "explorer.collapse_all": "Collapse All",
+  "activity.explorer": "Explorer"
+}

@@ -22,8 +22,8 @@ pub struct ActivityBarResponse {
 }
 
 /// Draws the bar down the available height. `explorer_open` lights the
-/// Explorer item and marks it with the accent bar.
-pub fn show(ui: &mut egui::Ui, explorer_open: bool) -> ActivityBarResponse {
+/// Explorer item and marks it with the accent bar; `tooltip` names it.
+pub fn show(ui: &mut egui::Ui, explorer_open: bool, tooltip: &str) -> ActivityBarResponse {
     let palette = SidebarPalette::for_visuals(ui.visuals());
 
     // Right border, over the full height of the panel.
@@ -35,7 +35,7 @@ pub fn show(ui: &mut egui::Ui, explorer_open: bool) -> ActivityBarResponse {
     );
 
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(WIDTH), Sense::click());
-    let response = response.on_hover_text("Explorer");
+    let response = response.on_hover_text(tooltip);
     let painter = ui.painter();
     if explorer_open {
         painter.rect_filled(
@@ -104,7 +104,7 @@ mod tests {
             ..Default::default()
         };
         let mut response = None;
-        let mut output = ctx.run_ui(input, |ui| response = Some(show(ui, explorer_open)));
+        let mut output = ctx.run_ui(input, |ui| response = Some(show(ui, explorer_open, "Explorer")));
         output.textures_delta.clear();
         (response.expect("show ran"), output.shapes)
     }
