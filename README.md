@@ -10,6 +10,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Bungkus baris** (word wrap) yang bisa dinyalakan atau dimatikan (**Tampilan → Bungkus Baris**). Saat mati, baris panjang bisa digeser ke samping.
 - **Explorer dan Activity Bar** seperti VS Code: buka folder, jelajahi isinya sebagai tree, klik file untuk membukanya di tab. Ada tombol **Refresh** dan **Collapse All** di header folder.
 - **Konfirmasi perubahan belum disimpan** saat menutup tab atau keluar dari aplikasi.
+- **Multi bahasa antarmuka** (Indonesia, English, dan bahasa lain lewat file JSON). Pilih di **Tampilan → Bahasa Antarmuka**; pilihan diingat saat aplikasi dibuka lagi. Lihat [Menambah bahasa antarmuka](#menambah-bahasa-antarmuka).
 - Tema terang/gelap mengikuti pengaturan sistem.
 
 ## Kebutuhan
@@ -95,12 +96,35 @@ Kalau dipasang di luar `PATH`, isi `Exec=` dengan path lengkapnya, misalnya `Exe
 | Menu | Isi |
 |---|---|
 | **File** | Tab Baru, Tutup Tab, Buka File…, Buka Folder…, Simpan, Simpan Sebagai…, Bahasa, Keluar |
-| **Tampilan** | Bungkus Baris, Nomor Baris, Bahasa |
+| **Tampilan** | Bungkus Baris, Nomor Baris, Bahasa, Bahasa Antarmuka |
 | **Help** | About |
 
 - Klik ikon **Explorer** di Activity Bar (kolom paling kiri) untuk membuka folder. Setelah folder terbuka, ikon yang sama menyembunyikan atau menampilkan sidebar.
 - Klik folder di tree untuk membuka atau menutupnya, klik file untuk membukanya. File yang sudah terbuka tidak dibuka dua kali; tab-nya yang difokuskan.
 - Isi folder dibaca sekali lalu disimpan. Klik **Refresh** di header folder kalau ada file baru dari luar editor.
+
+## Menambah bahasa antarmuka
+
+Setiap bahasa adalah satu file JSON di `assets/lang/`, dinamai dengan kode bahasanya (`id.json`, `en.json`, `ja.json`, …). Isinya objek datar berisi kunci dan teks; `"name"` adalah nama bahasa yang tampil di menu, dan token seperti `{error}` atau `{name}` diisi otomatis oleh aplikasi.
+
+```json
+{
+  "name": "日本語",
+  "menu.file": "ファイル",
+  "menu.view": "表示",
+  "msg.open_failed": "ファイルを開けませんでした: {error}"
+}
+```
+
+Langkah:
+
+1. Salin `assets/lang/en.json` menjadi `assets/lang/<kode>.json`, lalu terjemahkan nilainya (jangan ubah kuncinya).
+2. Taruh file itu di folder `assets/lang/` di **samping file program** (misalnya `~/.cargo/bin/assets/lang/` untuk hasil `cargo install`, atau `/usr/local/bin/assets/lang/`), atau di `assets/lang/` pada **folder tempat aplikasi dijalankan**.
+3. Buka ulang aplikasi; bahasa baru muncul di **Tampilan → Bahasa Antarmuka**.
+
+Kunci yang tidak ada di file memakai teks Bahasa Indonesia. File dengan kode yang sama dengan bahasa bawaan (`id.json`, `en.json`) hanya menimpa kunci yang ada di dalamnya. Kalau file tidak valid, aplikasi tetap jalan dan menampilkan pesan error di status bar.
+
+Bahasa Indonesia dan English sudah tertanam di dalam program, jadi tetap tersedia walaupun folder `assets/` tidak ikut dipasang. Saat pertama kali dibuka, aplikasi memilih bahasa sistem (`LANG`) kalau tersedia, selain itu English.
 
 ## Pengembangan
 
@@ -123,5 +147,7 @@ Struktur kode:
 | `src/file_browser.rs` | Explorer: tree folder dan sidebar |
 | `src/activity_bar.rs` | Activity Bar |
 | `src/modals.rs` | Dialog About dan konfirmasi simpan |
+| `src/i18n.rs` | Terjemahan antarmuka dari `assets/lang/*.json` |
+| `assets/lang/` | File bahasa antarmuka |
 
 Desain dan rencana tiap fitur ada di `docs/superpowers/specs/` dan `docs/superpowers/plans/`.
