@@ -946,28 +946,34 @@ with:
                 self.show_language_menu(ui);
 ```
 
-- [ ] **Step 6: Verify it compiles**
+- [ ] **Step 6: Remove the interim `#![allow(dead_code)]` from `src/highlighter.rs`**
 
-Run: `cargo check`
+Task 1 added `#![allow(dead_code)]` at the top of `src/highlighter.rs` because the new
+module's `pub` API had no consumers yet, which would otherwise fail `-D warnings` in this
+binary-only crate. This task is where every item in that module finally gets wired
+(`SyntaxHighlighter` is constructed, and `show_language_menu` is called from the File menu and
+status bar), so the exemption is now dead weight and must go.
 
-Expected: compiles cleanly. Note that `render_editor` no longer wraps the editor in a `ScrollArea` — `TextEdit` scrolls itself when given `desired_width(f32::INFINITY)`, so the outer scroll area was redundant.
+Delete the attribute and its explanatory comment from `src/highlighter.rs`.
 
-- [ ] **Step 7: Run the full test suite**
+- [ ] **Step 7: Verify it compiles and is warning-free**
+
+Run: `cargo clippy --all-targets -- -D warnings`
+
+Expected: exit code 0 **without** the attribute. This is the positive proof that every item in
+the module is now genuinely used — if the attribute is still load-bearing, this command fails
+and tells you what is still dead.
+
+- [ ] **Step 8: Run the full test suite**
 
 Run: `cargo test`
 
 Expected: PASS — 14 tests, 0 failures.
 
-- [ ] **Step 8: Run clippy**
-
-Run: `cargo clippy -- -D warnings`
-
-Expected: exit code 0.
-
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/app.rs
+git add src/app.rs src/highlighter.rs
 git commit -m "feat(app): render editor with syntax highlighting and language selector"
 ```
 
