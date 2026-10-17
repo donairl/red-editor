@@ -309,9 +309,7 @@ impl TextEditorApp {
             let old_idx = self.active_tab_index;
             self.active_tab_index = index;
             let result = self.save_as();
-            if !result {
-                self.active_tab_index = old_idx;
-            }
+            self.active_tab_index = old_idx;
             result
         }
     }
@@ -355,11 +353,7 @@ impl TextEditorApp {
     }
 
     pub fn trigger_open_file(&mut self) {
-        if self.is_dirty() {
-            self.pending_action = Some(PendingAction::PromptOpenFile);
-        } else {
-            self.pick_and_open_file();
-        }
+        self.pick_and_open_file();
     }
 
     pub fn pick_and_open_file(&mut self) {
@@ -377,11 +371,7 @@ impl TextEditorApp {
     }
 
     pub fn trigger_open_specific_file(&mut self, path: PathBuf) {
-        if self.is_dirty() {
-            self.pending_action = Some(PendingAction::OpenFile(path));
-        } else {
-            self.open_file_in_tab(path);
-        }
+        self.open_file_in_tab(path);
     }
 
     pub fn trigger_exit(&mut self, ctx: &egui::Context) {
@@ -394,17 +384,48 @@ impl TextEditorApp {
 
     pub fn execute_pending_action(&mut self, ctx: &egui::Context, action: PendingAction) {
         match action {
-            PendingAction::OpenFile(path) => {
-                self.open_file_in_tab(path);
-            }
-            PendingAction::PromptOpenFile => {
-                self.pick_and_open_file();
-            }
             PendingAction::CloseTab(index) => {
                 self.close_tab(index);
             }
             PendingAction::Exit => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    pub fn handle_modal_response(&mut self, ctx: &egui::Context, response: ModalResponse) {
+        if let Some(action) = self.pending_action.take() {
+            match response {
+                ModalResponse::Save => {
+                    let is_exit = action == PendingAction::Exit;
+                    let saved = match action {
+                        PendingAction::CloseTab(idx) => self.save_tab(idx),
+                        PendingAction::Exit => {
+                            if let Some(idx) = self.tabs.iter().position(|t| t.is_dirty()) {
+                                self.save_tab(idx)
+                            } else {
+                                true
+                            }
+                        }
+                    };
+                    if saved {
+                        if is_exit {
+                            if self.any_dirty() {
+                                self.pending_action = Some(PendingAction::Exit);
+                            } else {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        } else {
+                            self.execute_pending_action(ctx, action);
+                        }
+                    }
+                }
+                ModalResponse::Discard => {
+                    self.execute_pending_action(ctx, action);
+                }
+                ModalResponse::Cancel => {
+                    // Action cancelled, do nothing
+                }
             }
         }
     }
@@ -667,17 +688,19 @@ impl eframe::App for TextEditorApp {
             let active_idx = self.active_tab_index;
             let language = self.tabs[active_idx].effective_language();
 
-            if too_large {
-                render_editor(ui, &mut self.tabs[active_idx].text_content, None, word_wrap);
-            } else {
-                let mut layouter = self.highlighter.layouter(language, font_id);
-                render_editor(
-                    ui,
-                    &mut self.tabs[active_idx].text_content,
-                    Some(&mut layouter),
-                    word_wrap,
-                );
-            }
+            ui.push_id(self.active_tab_index, |ui| {
+                if too_large {
+                    render_editor(ui, &mut self.tabs[active_idx].text_content, None, word_wrap);
+                } else {
+                    let mut layouter = self.highlighter.layouter(language, font_id);
+                    render_editor(
+                        ui,
+                        &mut self.tabs[active_idx].text_content,
+                        Some(&mut layouter),
+                        word_wrap,
+                    );
+                }
+            });
         });
 
         // 5. Modals & Dialogs
@@ -700,31 +723,7 @@ impl eframe::App for TextEditorApp {
                 _ => self.file_display_name(),
             };
             if let Some(response) = modals::show_unsaved_changes_modal(&ctx, &prompt_name) {
-                let action = self.pending_action.take().unwrap();
-                match response {
-                    ModalResponse::Save => {
-                        let saved = match action {
-                            PendingAction::CloseTab(idx) => self.save_tab(idx),
-                            PendingAction::Exit => {
-                                if let Some(idx) = self.tabs.iter().position(|t| t.is_dirty()) {
-                                    self.save_tab(idx)
-                                } else {
-                                    true
-                                }
-                            }
-                            _ => self.save(),
-                        };
-                        if saved {
-                            self.execute_pending_action(&ctx, action);
-                        }
-                    }
-                    ModalResponse::Discard => {
-                        self.execute_pending_action(&ctx, action);
-                    }
-                    ModalResponse::Cancel => {
-                        // Action cancelled, do nothing
-                    }
-                }
+                self.handle_modal_response(&ctx, response);
             }
         }
     }
@@ -803,22 +802,34 @@ mod tests {
 
     #[test]
     fn test_trigger_open_specific_file_dirty_vs_clean() {
+        let dir = std::env::temp_dir().join("rred_open_dirty_vs_clean_test");
+        let _ = fs::create_dir_all(&dir);
+        let clean_path = dir.join("clean.txt");
+        let dirty_target = dir.join("dirty_target.txt");
+        let _ = fs::write(&clean_path, "clean content");
+        let _ = fs::write(&dirty_target, "target content");
+
         let mut app = TextEditorApp::default();
-        let target_path = PathBuf::from("/dummy/path.txt");
 
         // Clean: directly attempts to load
-        app.trigger_open_specific_file(target_path.clone());
+        app.trigger_open_specific_file(clean_path.clone());
         assert_eq!(app.pending_action, None);
-        // Because /dummy/path.txt doesn't exist, status_message has an error
-        assert!(app.status_message.as_ref().unwrap().1);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].text_content, "clean content");
 
-        // Dirty: should prompt via pending_action
+        // Dirty: opening a file opens in a new tab without pending actions, keeping dirty tab intact
         app.active_tab_mut().text_content = "Modified".to_string();
-        app.trigger_open_specific_file(target_path.clone());
-        assert_eq!(
-            app.pending_action,
-            Some(PendingAction::OpenFile(target_path))
-        );
+        assert!(app.is_dirty());
+        app.trigger_open_specific_file(dirty_target.clone());
+        assert_eq!(app.pending_action, None);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab_index, 1);
+        assert_eq!(app.tabs[0].text_content, "Modified");
+        assert!(app.tabs[0].is_dirty());
+        assert_eq!(app.tabs[1].text_content, "target content");
+        assert!(!app.tabs[1].is_dirty());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1484,5 +1495,75 @@ mod tests {
 
         assert_eq!(title_0, "[Dokumen Baru] *");
         assert_eq!(title_1, "[Dokumen Baru]");
+    }
+
+    #[test]
+    fn test_multi_dirty_tab_exit_loop() {
+        let dir = std::env::temp_dir().join("rred_multi_dirty_exit");
+        let _ = fs::create_dir_all(&dir);
+        let path1 = dir.join("tab1.txt");
+        let path2 = dir.join("tab2.txt");
+        let _ = fs::write(&path1, "initial 1");
+        let _ = fs::write(&path2, "initial 2");
+
+        let mut app = TextEditorApp::default();
+        app.load_file(path1.clone());
+        app.active_tab_mut().text_content = "modified 1".to_string();
+
+        app.open_new_tab();
+        app.load_file(path2.clone());
+        app.active_tab_mut().text_content = "modified 2".to_string();
+
+        assert_eq!(app.tabs.len(), 2);
+        assert!(app.tabs[0].is_dirty());
+        assert!(app.tabs[1].is_dirty());
+        assert!(app.any_dirty());
+
+        let ctx = egui::Context::default();
+
+        // Trigger exit -> sets pending_action to Exit because any_dirty() is true
+        app.trigger_exit(&ctx);
+        assert_eq!(app.pending_action, Some(PendingAction::Exit));
+
+        // First prompt handles the first dirty tab (tab 0)
+        app.handle_modal_response(&ctx, ModalResponse::Save);
+
+        // Tab 0 should now be saved and clean
+        assert!(!app.tabs[0].is_dirty());
+        assert_eq!(fs::read_to_string(&path1).unwrap(), "modified 1");
+
+        // Tab 1 is still dirty, so pending_action is re-set to Exit (prompting next dirty tab)
+        assert!(app.tabs[1].is_dirty());
+        assert!(app.any_dirty());
+        assert_eq!(app.pending_action, Some(PendingAction::Exit));
+
+        // Second prompt handles tab 1
+        app.handle_modal_response(&ctx, ModalResponse::Save);
+
+        // Now tab 1 is saved and clean
+        assert!(!app.tabs[1].is_dirty());
+        assert_eq!(fs::read_to_string(&path2).unwrap(), "modified 2");
+        assert!(!app.any_dirty());
+
+        // No more dirty tabs -> pending_action is cleared and exit finishes
+        assert_eq!(app.pending_action, None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_save_tab_restores_active_tab_index() {
+        let mut app = TextEditorApp::default();
+        app.open_new_tab();
+        app.active_tab_index = 1;
+
+        let _saved = app.save_tab(0);
+        // Regardless of whether save_as succeeded or failed, active_tab_index must be restored!
+        assert_eq!(app.active_tab_index, 1);
+
+        // Clean up if a file was created by the dialog
+        if let Some(ref path) = app.tabs[0].current_path {
+            let _ = fs::remove_file(path);
+        }
     }
 }

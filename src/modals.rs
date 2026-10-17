@@ -1,12 +1,9 @@
 //! Modal dialog state and UI rendering.
 
 use eframe::egui;
-use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PendingAction {
-    OpenFile(PathBuf),
-    PromptOpenFile,
     CloseTab(usize),
     Exit,
 }
@@ -73,25 +70,20 @@ pub fn show_unsaved_changes_modal(ctx: &egui::Context, file_name: &str) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_pending_action_equality() {
-        let action1 = PendingAction::OpenFile(PathBuf::from("test.txt"));
-        let action2 = PendingAction::OpenFile(PathBuf::from("test.txt"));
-        let action3 = PendingAction::Exit;
-        let action4 = PendingAction::PromptOpenFile;
-        let action5 = PendingAction::CloseTab(1);
-        let action6 = PendingAction::CloseTab(1);
-        let action7 = PendingAction::CloseTab(2);
+        let action1 = PendingAction::Exit;
+        let action2 = PendingAction::Exit;
+        let action3 = PendingAction::CloseTab(1);
+        let action4 = PendingAction::CloseTab(1);
+        let action5 = PendingAction::CloseTab(2);
 
         assert_eq!(action1, action2);
         assert_ne!(action1, action3);
-        assert_ne!(action1, action4);
-        assert_ne!(action3, action4);
-        assert_eq!(action5, action6);
-        assert_ne!(action5, action7);
-        assert_ne!(action5, action3);
+        assert_eq!(action3, action4);
+        assert_ne!(action3, action5);
+        assert_ne!(action5, action1);
     }
 
     #[test]
