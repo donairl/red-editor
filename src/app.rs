@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::file_browser;
-use crate::highlighter::Language;
+use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::modals::{self, ModalResponse, PendingAction};
 
 pub struct TextEditorApp {
@@ -19,6 +19,7 @@ pub struct TextEditorApp {
     pub status_message: Option<(String, bool)>, // (message, is_error)
     pub active_language: Language,
     pub language_override: Option<Language>,
+    pub highlighter: SyntaxHighlighter,
 }
 
 impl Default for TextEditorApp {
@@ -35,6 +36,7 @@ impl Default for TextEditorApp {
             status_message: None,
             active_language: Language::PlainText,
             language_override: None,
+            highlighter: SyntaxHighlighter::new(),
         }
     }
 }
@@ -67,9 +69,6 @@ impl TextEditorApp {
     ///
     /// Re-selecting the already active language clears the override and returns
     /// to automatic detection.
-    // Task 4 renders this in the File menu and the status bar and must delete
-    // the `expect` below along with src/highlighter.rs's `#![allow(dead_code)]`.
-    #[expect(dead_code, reason = "not yet rendered anywhere; Task 4 calls it")]
     pub fn show_language_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Bahasa", |ui| {
             let current = self.effective_language();
@@ -215,6 +214,44 @@ fn text_content_exceeds_highlight_limit(content: &str) -> bool {
     content.len() > HIGHLIGHT_SIZE_LIMIT
 }
 
+/// Renders the multiline editor, optionally through a syntax highlighter.
+///
+/// When `layouter` is `None` the text renders plain, which is what oversized
+/// documents get. Lines are joined back together with `\n` separators so the
+/// buffer round-trips exactly, keeping the caret and selection aligned.
+fn render_editor(ui: &mut egui::Ui, text: &mut String, layouter: Option<&mut HighlighterLayouter<'_>>) {
+    let text_edit = egui::TextEdit::multiline(text)
+        .font(egui::TextStyle::Monospace)
+        .desired_width(f32::INFINITY);
+
+    match layouter {
+        Some(highlighter) => {
+            let mut lay = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
+                let mut job = egui::text::LayoutJob::default();
+                for (index, line) in buf.as_str().split('\n').enumerate() {
+                    if index > 0 {
+                        job.append("\n", 0.0, highlighter.default_format().clone());
+                    }
+                    let line_job = highlighter.highlight_line(line);
+                    let offset = job.text.len();
+                    job.text.push_str(&line_job.text);
+                    for mut section in line_job.sections {
+                        section.byte_range.start += offset;
+                        section.byte_range.end += offset;
+                        job.sections.push(section);
+                    }
+                }
+                job.wrap.max_width = f32::INFINITY;
+                ui.fonts_mut(|f| f.layout_job(job))
+            };
+            ui.add_sized(ui.available_size(), text_edit.layouter(&mut lay));
+        }
+        None => {
+            ui.add_sized(ui.available_size(), text_edit);
+        }
+    }
+}
+
 impl eframe::App for TextEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -242,6 +279,8 @@ impl eframe::App for TextEditorApp {
                         self.save_as();
                         ui.close();
                     }
+                    ui.separator();
+                    self.show_language_menu(ui);
                     ui.separator();
                     if ui.button("Keluar").clicked() {
                         self.trigger_exit(&ctx);
@@ -284,6 +323,8 @@ impl eframe::App for TextEditorApp {
                 let doc_label = self.file_display_name();
                 let dirty_str = if self.is_dirty() { " [diubah]" } else { "" };
                 ui.label(format!("Dokumen: {doc_label}{dirty_str}"));
+                ui.separator();
+                self.show_language_menu(ui);
 
                 if let Some((msg, is_error)) = &self.status_message {
                     ui.separator();
@@ -330,16 +371,28 @@ impl eframe::App for TextEditorApp {
 
         // 4. Central Panel (Main Text Editor Area)
         egui::CentralPanel::default().show(ui, |ui| {
-            let text_style = egui::TextStyle::Monospace;
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.add_sized(
-                    ui.available_size(),
-                    egui::TextEdit::multiline(&mut self.text_content)
-                        .font(text_style)
-                        .lock_focus(true)
-                        .desired_width(f32::INFINITY),
-                );
-            });
+            // `TextEdit::font` resolves this `TextStyle` the same way, so the
+            // caret and selection line up with the highlighted glyphs.
+            let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+            let too_large = text_content_exceeds_highlight_limit(&self.text_content);
+
+            // Split the borrows so the text and the highlighter can be handed to
+            // `render_editor` together.
+            let Self {
+                text_content,
+                highlighter,
+                active_language,
+                language_override,
+                ..
+            } = self;
+            let language = language_override.unwrap_or(*active_language);
+
+            if too_large {
+                render_editor(ui, text_content, None);
+            } else {
+                let mut layouter = highlighter.layouter(language, font_id);
+                render_editor(ui, text_content, Some(&mut layouter));
+            }
         });
 
         // 5. Modals & Dialogs

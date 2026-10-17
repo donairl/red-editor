@@ -3,11 +3,6 @@
 //! Owns language detection and the `syntect`-backed highlighter. `app.rs` never
 //! touches `syntect` types directly — it holds a `Language` value and passes it here.
 
-// The public API below is completed incrementally by the following tasks in this
-// feature; the parts not wired into `main.rs` yet would otherwise fail the
-// `dead_code` lint under `cargo clippy -- -D warnings`.
-#![allow(dead_code)]
-
 use std::path::Path;
 
 use syntect::easy::HighlightLines;
@@ -108,6 +103,8 @@ impl SyntaxHighlighter {
     }
 
     /// The bundled grammar set.
+    // Only the tests need this accessor; the layouter borrows the set directly.
+    #[cfg_attr(not(test), expect(dead_code, reason = "only the tests inspect the raw grammar set"))]
     pub fn syntax_set(&self) -> &SyntaxSet {
         &self.syntax_set
     }
