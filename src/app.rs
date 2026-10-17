@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::file_browser;
 use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::modals::{self, ModalResponse, PendingAction};
+use crate::tab_bar;
 
 pub const INITIAL_TEXT: &str = "Ketik sesuatu di sini...";
 
@@ -67,6 +68,16 @@ impl DocumentTab {
 
     pub fn effective_language(&self) -> Language {
         self.language_override.unwrap_or(self.active_language)
+    }
+
+    /// How this document appears in the tab strip.
+    pub fn tab_view(&self) -> tab_bar::TabView {
+        tab_bar::TabView {
+            title: self.file_display_name(),
+            tooltip: self.current_path.as_ref().map(|p| p.display().to_string()),
+            language: self.effective_language(),
+            dirty: self.is_dirty(),
+        }
     }
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
@@ -430,51 +441,17 @@ impl TextEditorApp {
         }
     }
 
-    pub fn render_tab_bar(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::horizontal()
-            .id_salt("tab_bar_scroll")
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let mut tab_to_close = None;
-                    let mut tab_to_select = None;
-                    for (idx, tab) in self.tabs.iter().enumerate() {
-                        let is_active = idx == self.active_tab_index;
-                        let title = format!(
-                            "{}{}",
-                            tab.file_display_name(),
-                            if tab.is_dirty() { " *" } else { "" }
-                        );
-
-                        ui.push_id(idx, |ui| {
-                            ui.group(|ui| {
-                                ui.style_mut().visuals.widgets.inactive.bg_fill = if is_active {
-                                    ui.visuals().selection.bg_fill.linear_multiply(0.4)
-                                } else {
-                                    egui::Color32::TRANSPARENT
-                                };
-
-                                if ui.selectable_label(is_active, title).clicked() {
-                                    tab_to_select = Some(idx);
-                                }
-                                if ui.small_button("✕").clicked() {
-                                    tab_to_close = Some(idx);
-                                }
-                            });
-                        });
-                    }
-
-                    if ui.button("➕").clicked() {
-                        self.open_new_tab();
-                    }
-
-                    if let Some(idx) = tab_to_select {
-                        self.active_tab_index = idx;
-                    }
-                    if let Some(idx) = tab_to_close {
-                        self.trigger_close_tab(idx);
-                    }
-                });
-            });
+    /// Draws the tab strip and applies what the user clicked.
+    pub fn render_tab_bar(&mut self, ui: &mut egui::Ui) -> tab_bar::TabBarResponse {
+        let views: Vec<tab_bar::TabView> = self.tabs.iter().map(DocumentTab::tab_view).collect();
+        let response = tab_bar::show(ui, &views, self.active_tab_index);
+        match response.action {
+            Some(tab_bar::TabBarAction::Select(index)) => self.active_tab_index = index,
+            Some(tab_bar::TabBarAction::Close(index)) => self.trigger_close_tab(index),
+            Some(tab_bar::TabBarAction::New) => self.open_new_tab(),
+            None => {}
+        }
+        response
     }
 }
 
@@ -529,7 +506,10 @@ fn render_editor(
             .font(egui::TextStyle::Monospace)
             .lock_focus(true)
             .desired_width(f32::INFINITY)
-            .min_size(ui.available_size());
+            .min_size(ui.available_size())
+            // No outline or rounded fill: the editor sits on the central
+            // panel's background, the same colour as the active tab.
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 6)));
 
         match layouter.as_mut() {
             Some(highlighter) => {
@@ -681,9 +661,12 @@ impl eframe::App for TextEditorApp {
         }
 
         // 4. Central Panel (Main Text Editor Area)
-        egui::CentralPanel::default().show(ui, |ui| {
+        // No margin and the active tab's colour, so the active tab and the
+        // editor below it read as one surface, as in VS Code.
+        let editor_fill = tab_bar::TabPalette::for_visuals(ui.visuals()).tab_active;
+        let editor_frame = egui::Frame::NONE.fill(editor_fill);
+        egui::CentralPanel::default().frame(editor_frame).show(ui, |ui| {
             self.render_tab_bar(ui);
-            ui.separator();
 
             // `TextEdit::font` resolves this `TextStyle` the same way, so the
             // caret and selection line up with the highlighted glyphs.
@@ -1088,6 +1071,17 @@ mod tests {
         output.shapes
     }
 
+    /// Moves the pointer to `pos` and clicks the primary button there.
+    fn click_events(pos: egui::Pos2) -> Vec<egui::Event> {
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        vec![egui::Event::PointerMoved(pos), button(true), button(false)]
+    }
+
     /// Where the editor painted `text`, as `(galley rect, clip rect)` in screen
     /// coordinates, or `None` if it was not painted at all.
     fn painted_text(
@@ -1356,92 +1350,45 @@ mod tests {
     fn test_tab_bar_ui_rendering_and_interaction() {
         let ctx = egui::Context::default();
         let mut app = TextEditorApp::default();
-        app.open_new_tab(); // Tab 0: [Dokumen Baru], Tab 1: [Dokumen Baru]
+        app.open_new_tab(); // Tab 0 and Tab 1, both blank
         assert_eq!(app.tabs.len(), 2);
         assert_eq!(app.active_tab_index, 1);
 
-        // Frame 1: render tab bar
-        run_frame_with_events(&ctx, Vec::new(), |ui| {
-            app.render_tab_bar(ui);
-        });
+        let mut bar = None;
+        run_frame_with_events(&ctx, Vec::new(), |ui| bar = Some(app.render_tab_bar(ui)));
+        let tab_0 = bar.take().unwrap().tab_rects[0].center();
 
-        // Click Tab 0 label to switch to Tab 0
-        let click_tab_0 = vec![
-            egui::Event::PointerMoved(egui::pos2(50.0, 17.0)),
-            egui::Event::PointerButton {
-                pos: egui::pos2(50.0, 17.0),
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            },
-            egui::Event::PointerButton {
-                pos: egui::pos2(50.0, 17.0),
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ];
-        run_frame_with_events(&ctx, click_tab_0, |ui| {
-            app.render_tab_bar(ui);
-        });
-        assert_eq!(app.active_tab_index, 0, "Clicking tab 0 label should switch active tab to 0");
+        run_frame_with_events(&ctx, click_events(tab_0), |ui| bar = Some(app.render_tab_bar(ui)));
+        assert_eq!(app.active_tab_index, 0, "clicking tab 0 must activate it");
+        let close_1 = bar.take().unwrap().close_rects[1].center();
 
-        // Click Tab 1 close button to close Tab 1
-        let click_close_tab_1 = vec![
-            egui::Event::PointerMoved(egui::pos2(299.0, 17.0)),
-            egui::Event::PointerButton {
-                pos: egui::pos2(299.0, 17.0),
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            },
-            egui::Event::PointerButton {
-                pos: egui::pos2(299.0, 17.0),
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ];
-        run_frame_with_events(&ctx, click_close_tab_1, |ui| {
-            app.render_tab_bar(ui);
-        });
-        assert_eq!(app.tabs.len(), 1, "Clicking tab 1 close button should close Tab 1");
+        run_frame_with_events(&ctx, click_events(close_1), |ui| bar = Some(app.render_tab_bar(ui)));
+        assert_eq!(app.tabs.len(), 1, "clicking tab 1's close slot must close it");
         assert_eq!(app.active_tab_index, 0);
 
-        // Frame to let layout settle after closing tab 1
-        run_frame_with_events(&ctx, Vec::new(), |ui| {
-            app.render_tab_bar(ui);
-        });
+        run_frame_with_events(&ctx, Vec::new(), |ui| bar = Some(app.render_tab_bar(ui)));
+        let plus = bar.take().unwrap().new_tab_rect.center();
 
-        // Click the "+" button to open a new tab
-        // Let's check where "+" button is after tab 0:
-        // Tab 0 group is ~148px wide + margin. Let's try x=170.0, or check min_rect
-        let mut add_button_center = egui::pos2(0.0, 0.0);
-        run_frame_with_events(&ctx, Vec::new(), |ui| {
-            app.render_tab_bar(ui);
-            add_button_center = egui::pos2(ui.min_rect().max.x - 12.0, 17.0);
-        });
-
-        let click_add_tab = vec![
-            egui::Event::PointerMoved(add_button_center),
-            egui::Event::PointerButton {
-                pos: add_button_center,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            },
-            egui::Event::PointerButton {
-                pos: add_button_center,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ];
-        run_frame_with_events(&ctx, click_add_tab, |ui| {
+        run_frame_with_events(&ctx, click_events(plus), |ui| {
             app.render_tab_bar(ui);
         });
-        assert_eq!(app.tabs.len(), 2, "Clicking '+' button should open a new tab");
+        assert_eq!(app.tabs.len(), 2, "clicking + must open a new tab");
         assert_eq!(app.active_tab_index, 1);
+    }
+
+    #[test]
+    fn test_tab_view_carries_dirty_state_instead_of_a_title_marker() {
+        let mut tab = DocumentTab::default_new();
+        tab.text_content.push('!');
+        tab.active_language = Language::Php;
+        let view = tab.tab_view();
+        assert_eq!(view.title, "[Dokumen Baru]");
+        assert!(view.dirty);
+        assert_eq!(view.language, Language::Php);
+        assert_eq!(view.tooltip, None);
+
+        tab.current_path = Some(PathBuf::from("/tmp/x/index.php"));
+        assert_eq!(tab.tab_view().tooltip.as_deref(), Some("/tmp/x/index.php"));
     }
 
     #[test]
