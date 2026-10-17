@@ -161,7 +161,7 @@ impl TextEditorApp {
         self.active_tab().effective_language()
     }
 
-    /// Draws the "Bahasa" dropdown used by both the File menu and the status bar.
+    /// Draws the "Bahasa" dropdown used by both the File and Tampilan menus.
     ///
     /// Re-selecting the already active language clears the override and returns
     /// to automatic detection.
@@ -175,6 +175,32 @@ impl TextEditorApp {
                         if selected { None } else { Some(*lang) };
                     ui.close();
                 }
+            }
+        });
+    }
+
+    pub fn show_view_menu(&mut self, ui: &mut egui::Ui) {
+        ui.checkbox(&mut self.word_wrap, "Bungkus Baris");
+        ui.checkbox(&mut self.show_line_numbers, "Nomor Baris");
+        ui.separator();
+        self.show_language_menu(ui);
+    }
+
+    /// The document name and the latest status message.
+    pub fn show_status_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let doc_label = self.file_display_name();
+            let dirty_str = if self.is_dirty() { " [diubah]" } else { "" };
+            ui.label(format!("Dokumen: {doc_label}{dirty_str}"));
+
+            if let Some((msg, is_error)) = &self.status_message {
+                ui.separator();
+                let color = if *is_error {
+                    egui::Color32::from_rgb(220, 60, 60)
+                } else {
+                    egui::Color32::from_rgb(60, 180, 60)
+                };
+                ui.colored_label(color, msg);
             }
         });
     }
@@ -596,8 +622,7 @@ impl eframe::App for TextEditorApp {
 
                 // Menu Tampilan
                 ui.menu_button("Tampilan", |ui| {
-                    ui.checkbox(&mut self.word_wrap, "Bungkus Baris");
-                    ui.checkbox(&mut self.show_line_numbers, "Nomor Baris");
+                    self.show_view_menu(ui);
                 });
 
                 // Menu Help
@@ -631,23 +656,7 @@ impl eframe::App for TextEditorApp {
 
         // 2. Bottom Status Bar Panel
         egui::Panel::bottom("status_bar").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let doc_label = self.file_display_name();
-                let dirty_str = if self.is_dirty() { " [diubah]" } else { "" };
-                ui.label(format!("Dokumen: {doc_label}{dirty_str}"));
-                ui.separator();
-                self.show_language_menu(ui);
-
-                if let Some((msg, is_error)) = &self.status_message {
-                    ui.separator();
-                    let color = if *is_error {
-                        egui::Color32::from_rgb(220, 60, 60)
-                    } else {
-                        egui::Color32::from_rgb(60, 180, 60)
-                    };
-                    ui.colored_label(color, msg);
-                }
-            });
+            self.show_status_bar(ui);
         });
 
         // 3. Left Panel (File Browser Sidebar)
@@ -1372,6 +1381,23 @@ mod tests {
             0.0,
             "wrapped text must fit the window width, offset {:?}",
             area.clamped_offset()
+        );
+    }
+
+    /// The language picker sits in the Tampilan menu, not in the status bar.
+    #[test]
+    fn test_language_menu_lives_in_view_menu_not_status_bar() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_status_bar(ui));
+        assert!(
+            painted_text(&shapes, "Bahasa").is_none(),
+            "status bar must not offer Bahasa"
+        );
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_view_menu(ui));
+        assert!(
+            painted_text(&shapes, "Bahasa").is_some(),
+            "Tampilan menu must offer Bahasa"
         );
     }
 
