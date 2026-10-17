@@ -1,3 +1,7 @@
+mod app;
+mod file_browser;
+mod modals;
+
 use eframe::egui;
 
 fn main() -> eframe::Result {

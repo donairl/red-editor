@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 eframe = "0.37" # Gunakan versi terbaru yang stabil
+rfd = "0.17"
 
