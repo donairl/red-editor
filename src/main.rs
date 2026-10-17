@@ -1,5 +1,6 @@
 mod app;
 mod file_browser;
+mod gutter;
 mod highlighter;
 mod modals;
 mod tab_bar;

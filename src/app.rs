@@ -5,6 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::file_browser;
+use crate::gutter;
 use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::modals::{self, ModalResponse, PendingAction};
 use crate::tab_bar;
@@ -106,6 +107,9 @@ pub struct TextEditorApp {
     /// Wrap long lines to the window width. Off by default: lines run on and
     /// the editor scrolls sideways instead.
     pub word_wrap: bool,
+    /// Show the line-number gutter left of the text. On by default, as in
+    /// VS Code.
+    pub show_line_numbers: bool,
 }
 
 impl Default for TextEditorApp {
@@ -120,6 +124,7 @@ impl Default for TextEditorApp {
             status_message: None,
             highlighter: SyntaxHighlighter::new(),
             word_wrap: false,
+            show_line_numbers: true,
         }
     }
 }
@@ -485,11 +490,15 @@ fn text_content_exceeds_highlight_limit(content: &str) -> bool {
 /// `PassState::scroll_target`, which only `ScrollArea::show` drains. Without this
 /// wrapper a document taller than the viewport cannot be scrolled and, with the
 /// default `cursor_at_end`, the caret lands off-screen and stays unreachable.
+///
+/// With `line_numbers` on, the editor's left margin widens to hold the
+/// gutter, which is painted over it once the text is laid out.
 fn render_editor(
     ui: &mut egui::Ui,
     text: &mut String,
     mut layouter: Option<&mut HighlighterLayouter<'_>>,
     word_wrap: bool,
+    line_numbers: bool,
 ) {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
@@ -497,10 +506,19 @@ fn render_editor(
         egui::ScrollArea::both()
     };
     scroll_area.show(ui, |ui| {
+        let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+        let gutter_width =
+            line_numbers.then(|| gutter::width(ui, &font_id, gutter::line_count(text)));
+        let margin = egui::Margin {
+            // `gutter::width` is whole points and fits an `i8`.
+            left: gutter_width.map_or(8, |w| w as i8),
+            ..egui::Margin::symmetric(8, 6)
+        };
+
         // Fill the viewport through `min_size`, not `ui.add_sized`: `add_sized`
         // centres a widget larger than the space it is given, so a line wider
         // than the window pushed the start of every line off the left edge,
-        // beyond the reach of the scroll bar. A plain `ui.add` grows the
+        // beyond the reach of the scroll bar. A plain `show` grows the
         // editor right and down from the top-left corner instead.
         let text_edit = egui::TextEdit::multiline(text)
             .font(egui::TextStyle::Monospace)
@@ -509,9 +527,9 @@ fn render_editor(
             .min_size(ui.available_size())
             // No outline or rounded fill: the editor sits on the central
             // panel's background, the same colour as the active tab.
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 6)));
+            .frame(egui::Frame::NONE.inner_margin(margin));
 
-        match layouter.as_mut() {
+        let output = match layouter.as_mut() {
             Some(highlighter) => {
                 // `TextEdit` calls this every frame. `frame_job` reuses the
                 // cached result, and highlights large documents on a background
@@ -523,18 +541,16 @@ fn render_editor(
                     job.wrap.max_width = if word_wrap { wrap_width } else { f32::INFINITY };
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
-                ui.add(text_edit.layouter(&mut lay));
+                text_edit.layouter(&mut lay).show(ui)
             }
-            None if word_wrap => {
-                ui.add(text_edit);
-            }
+            None if word_wrap => text_edit.show(ui),
             None => {
                 // Mirror egui's stock `TextEdit` layouter so wrap-off plain text
                 // looks identical to the wrapped text: the colour is the
                 // `inactive` widget colour (a text edit does not brighten on
                 // hover), unless the theme overrides it, and every section gets
                 // the same line height.
-                let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                let font_id = font_id.clone();
                 let color = ui
                     .visuals()
                     .override_text_color
@@ -555,8 +571,12 @@ fn render_editor(
                     }
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
-                ui.add(text_edit.layouter(&mut lay));
+                text_edit.layouter(&mut lay).show(ui)
             }
+        };
+
+        if let Some(width) = gutter_width {
+            gutter::paint(ui, &output, &font_id, width);
         }
     });
 }
@@ -577,6 +597,7 @@ impl eframe::App for TextEditorApp {
                 // Menu Tampilan
                 ui.menu_button("Tampilan", |ui| {
                     ui.checkbox(&mut self.word_wrap, "Bungkus Baris");
+                    ui.checkbox(&mut self.show_line_numbers, "Nomor Baris");
                 });
 
                 // Menu Help
@@ -674,12 +695,19 @@ impl eframe::App for TextEditorApp {
             let too_large = text_content_exceeds_highlight_limit(&self.active_tab().text_content);
 
             let word_wrap = self.word_wrap;
+            let line_numbers = self.show_line_numbers;
             let active_idx = self.active_tab_index;
             let language = self.tabs[active_idx].effective_language();
 
             ui.push_id(self.active_tab_index, |ui| {
                 if too_large {
-                    render_editor(ui, &mut self.tabs[active_idx].text_content, None, word_wrap);
+                    render_editor(
+                        ui,
+                        &mut self.tabs[active_idx].text_content,
+                        None,
+                        word_wrap,
+                        line_numbers,
+                    );
                 } else {
                     let mut layouter = self.highlighter.layouter(language, font_id);
                     render_editor(
@@ -687,6 +715,7 @@ impl eframe::App for TextEditorApp {
                         &mut self.tabs[active_idx].text_content,
                         Some(&mut layouter),
                         word_wrap,
+                        line_numbers,
                     );
                 }
             });
@@ -1141,7 +1170,7 @@ mod tests {
 
         run_frame_with_events(&ctx, Vec::new(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                super::render_editor(ui, &mut text, None, false);
+                super::render_editor(ui, &mut text, None, false, false);
             });
         });
         let area = editor_scroll_area(&ctx).expect("editor must render inside a ScrollArea");
@@ -1149,7 +1178,7 @@ mod tests {
 
         let area = scroll_editor_with_wheel(&ctx, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                super::render_editor(ui, &mut text, None, false);
+                super::render_editor(ui, &mut text, None, false, false);
             });
         });
         assert!(
@@ -1173,7 +1202,7 @@ mod tests {
                 let mut highlighter = SyntaxHighlighter::new();
                 let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                 let mut layouter = highlighter.layouter(Language::Rust, font_id);
-                super::render_editor(ui, &mut text, Some(&mut layouter), false);
+                super::render_editor(ui, &mut text, Some(&mut layouter), false, false);
             });
         });
         assert!(
@@ -1193,7 +1222,7 @@ mod tests {
         for word_wrap in [false, true] {
             let mut plain = original.clone();
             run_frame_with_events(&ctx, Vec::new(), |ui| {
-                super::render_editor(ui, &mut plain, None, word_wrap);
+                super::render_editor(ui, &mut plain, None, word_wrap, false);
             });
             assert_eq!(plain, original);
 
@@ -1202,7 +1231,7 @@ mod tests {
                 let mut highlighter = SyntaxHighlighter::new();
                 let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                 let mut layouter = highlighter.layouter(Language::C, font_id);
-                super::render_editor(ui, &mut highlighted, Some(&mut layouter), word_wrap);
+                super::render_editor(ui, &mut highlighted, Some(&mut layouter), word_wrap, false);
             });
             assert_eq!(highlighted, original);
         }
@@ -1227,9 +1256,9 @@ mod tests {
                 if highlighted {
                     let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                     let mut layouter = highlighter.layouter(Language::Rust, font_id);
-                    super::render_editor(ui, &mut text, Some(&mut layouter), word_wrap);
+                    super::render_editor(ui, &mut text, Some(&mut layouter), word_wrap, false);
                 } else {
-                    super::render_editor(ui, &mut text, None, word_wrap);
+                    super::render_editor(ui, &mut text, None, word_wrap, false);
                 }
             });
         });
@@ -1249,9 +1278,9 @@ mod tests {
                 if highlighted {
                     let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                     let mut layouter = highlighter.layouter(Language::Rust, font_id);
-                    super::render_editor(ui, &mut text, Some(&mut layouter), false);
+                    super::render_editor(ui, &mut text, Some(&mut layouter), false, false);
                 } else {
-                    super::render_editor(ui, &mut text, None, false);
+                    super::render_editor(ui, &mut text, None, false, false);
                 }
             });
         };
@@ -1344,6 +1373,139 @@ mod tests {
             "wrapped text must fit the window width, offset {:?}",
             area.clamped_offset()
         );
+    }
+
+    #[test]
+    fn test_line_numbers_default_to_on() {
+        assert!(TextEditorApp::default().show_line_numbers);
+    }
+
+    /// Where the gutter painted the number `n`, and in which colour.
+    fn painted_number(
+        shapes: &[egui::epaint::ClippedShape],
+        n: usize,
+    ) -> Option<(egui::Rect, egui::Color32)> {
+        let label = n.to_string();
+        shapes.iter().find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(shape) if shape.galley.text() == label => Some((
+                egui::Rect::from_min_size(shape.pos, shape.galley.size()),
+                shape.galley.job.sections[0].format.color,
+            )),
+            _ => None,
+        })
+    }
+
+    /// Renders `text` through `render_editor` with the gutter on or off.
+    fn render_with_gutter(
+        ctx: &egui::Context,
+        text: &mut String,
+        highlighted: bool,
+        word_wrap: bool,
+        line_numbers: bool,
+        events: Vec<egui::Event>,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let mut highlighter = SyntaxHighlighter::new();
+        run_frame_with_events(ctx, events, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                if highlighted {
+                    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                    let mut layouter = highlighter.layouter(Language::Rust, font_id);
+                    super::render_editor(ui, text, Some(&mut layouter), word_wrap, line_numbers);
+                } else {
+                    super::render_editor(ui, text, None, word_wrap, line_numbers);
+                }
+            });
+        })
+    }
+
+    /// Each line gets its number, right of the window edge, left of the
+    /// text and level with the line, on every path.
+    #[test]
+    fn test_line_numbers_paint_beside_each_line() {
+        let doc = "alpha\nbeta\ngamma".to_string();
+        for highlighted in [false, true] {
+            for word_wrap in [false, true] {
+                let ctx = egui::Context::default();
+                let mut text = doc.clone();
+                let shapes = render_with_gutter(&ctx, &mut text, highlighted, word_wrap, true, Vec::new());
+                let (galley, _) = painted_text(&shapes, &doc).expect("text painted");
+                let row_h = galley.height() / 3.0;
+                for n in 1..=3 {
+                    let (rect, _) = painted_number(&shapes, n).unwrap_or_else(|| {
+                        panic!("line {n} not numbered (highlighted {highlighted}, wrap {word_wrap})")
+                    });
+                    assert!(rect.left() > 0.0, "number {n} off the left edge: {rect:?}");
+                    assert!(rect.right() < galley.left(), "number {n} overlaps the text");
+                    let line_center = galley.top() + row_h * (n as f32 - 0.5);
+                    assert!(
+                        (rect.center().y - line_center).abs() < 1.0,
+                        "number {n} at y {} but its line is at {line_center}",
+                        rect.center().y
+                    );
+                }
+                assert!(painted_number(&shapes, 4).is_none(), "only 3 lines");
+                assert_eq!(text, doc, "the gutter must not alter the buffer");
+            }
+        }
+    }
+
+    #[test]
+    fn test_hidden_line_numbers_paint_nothing() {
+        let doc = "alpha\nbeta\ngamma".to_string();
+        for highlighted in [false, true] {
+            let ctx = egui::Context::default();
+            let mut text = doc.clone();
+            let shapes = render_with_gutter(&ctx, &mut text, highlighted, false, true, Vec::new());
+            let (with_gutter, _) = painted_text(&shapes, &doc).expect("text painted");
+
+            let shapes = render_with_gutter(&ctx, &mut text, highlighted, false, false, Vec::new());
+            assert!(painted_number(&shapes, 1).is_none());
+            let (without, _) = painted_text(&shapes, &doc).expect("text painted");
+            assert!(
+                without.left() < with_gutter.left(),
+                "hiding the gutter must give its room back to the text: \
+                 {without:?} vs {with_gutter:?}"
+            );
+        }
+    }
+
+    /// Scrolled sideways, the numbers stay put and the text slides under them.
+    #[test]
+    fn test_line_numbers_stick_when_scrolled_sideways() {
+        let ctx = egui::Context::default();
+        let original = wide_document();
+        let mut text = original.clone();
+        let shapes = render_with_gutter(&ctx, &mut text, false, false, true, Vec::new());
+        let (before, _) = painted_number(&shapes, 1).expect("line 1 numbered");
+
+        scroll_editor_with_wheel_delta(&ctx, egui::vec2(-300.0, 0.0), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                super::render_editor(ui, &mut text, None, false, true);
+            });
+        });
+        let shapes = render_with_gutter(&ctx, &mut text, false, false, true, Vec::new());
+        let (after, _) = painted_number(&shapes, 1).expect("line 1 still numbered");
+        let (galley, clip) = painted_text(&shapes, &original).expect("text painted");
+        assert!(galley.left() < clip.left(), "the editor must have scrolled sideways");
+        assert_eq!(after, before, "the gutter must not scroll sideways");
+    }
+
+    /// The caret's line number is brighter than the rest.
+    #[test]
+    fn test_caret_line_number_is_highlighted() {
+        let ctx = egui::Context::default();
+        let doc = "alpha\nbeta\ngamma".to_string();
+        let mut text = doc.clone();
+        let shapes = render_with_gutter(&ctx, &mut text, false, false, true, Vec::new());
+        let (galley, _) = painted_text(&shapes, &doc).expect("text painted");
+        let line2 = egui::pos2(galley.left() + 4.0, galley.top() + galley.height() * 0.5);
+
+        render_with_gutter(&ctx, &mut text, false, false, true, click_events(line2));
+        let shapes = render_with_gutter(&ctx, &mut text, false, false, true, Vec::new());
+        let palette = crate::gutter::GutterPalette::for_visuals(&ctx.global_style().visuals);
+        assert_eq!(painted_number(&shapes, 2).unwrap().1, palette.number_active);
+        assert_eq!(painted_number(&shapes, 1).unwrap().1, palette.number);
+        assert_eq!(painted_number(&shapes, 3).unwrap().1, palette.number);
     }
 
     #[test]
