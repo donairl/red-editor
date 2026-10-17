@@ -9,6 +9,9 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Nomor baris** yang bisa ditampilkan atau disembunyikan (**Tampilan → Nomor Baris**). Nomor baris tempat kursor berada tampil lebih terang.
 - **Bungkus baris** (word wrap) yang bisa dinyalakan atau dimatikan (**Tampilan → Bungkus Baris**). Saat mati, baris panjang bisa digeser ke samping.
 - **Explorer dan Activity Bar** seperti VS Code: buka folder, jelajahi isinya sebagai tree, klik file untuk membukanya di tab. Ada tombol **Refresh** dan **Collapse All** di header folder.
+- **Cari dan ganti** (**Edit → Cari**, **Edit → Ganti**): bar di atas editor dengan hasil yang disorot, opsi huruf besar/kecil, dan Ganti Semua. Ada juga **Ke Baris…** untuk melompat ke nomor baris.
+- **Cari di File** (**Edit → Cari di File**, `Ctrl+Shift+F`): mencari teks di seluruh folder yang sedang dibuka, di thread terpisah. Hasil tampil di panel bawah; klik hasil untuk membuka file di baris itu. File dan folder tersembunyi, `target`, `node_modules`, file di atas 2 MB, dan file non-UTF-8 dilewati; hasil dibatasi 2000.
+- **Menu klik kanan pada tab**: Tutup Tab, Tutup Lainnya, Tutup Tab di Kanan, dan Tutup yang Tersimpan. Tab yang belum disimpan tidak ikut tertutup.
 - **Konfirmasi perubahan belum disimpan** saat menutup tab atau keluar dari aplikasi.
 - **Multi bahasa antarmuka** (Indonesia, English, Español, Deutsch, 中文, dan bahasa lain lewat file JSON). Pilih di **Tampilan → Bahasa Antarmuka**; pilihan diingat saat aplikasi dibuka lagi. Lihat [Menambah bahasa antarmuka](#menambah-bahasa-antarmuka).
 - Tema terang/gelap mengikuti pengaturan sistem.
@@ -96,8 +99,38 @@ Kalau dipasang di luar `PATH`, isi `Exec=` dengan path lengkapnya, misalnya `Exe
 | Menu | Isi |
 |---|---|
 | **File** | Tab Baru, Tutup Tab, Buka File…, Buka Folder…, Simpan, Simpan Sebagai…, Bahasa, Keluar |
+| **Edit** | Urungkan, Ulangi, Potong, Salin, Tempel, Cari, Ganti, Cari di File, Ke Baris… |
 | **Tampilan** | Bungkus Baris, Nomor Baris, Bahasa, Bahasa Antarmuka |
 | **Help** | About |
+
+### Shortcut keyboard
+
+Di macOS, `Ctrl` menjadi `Cmd`.
+
+| Shortcut | Aksi |
+|---|---|
+| `Ctrl+N` | Tab baru |
+| `Ctrl+W` | Tutup tab |
+| `Ctrl+O` | Buka file |
+| `Ctrl+Shift+O` | Buka folder |
+| `Ctrl+S` | Simpan |
+| `Ctrl+Shift+S` | Simpan sebagai |
+| `Ctrl+Q` | Keluar |
+| `Ctrl+B` | Tampilkan/sembunyikan sidebar |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Tab berikutnya / sebelumnya |
+| `Ctrl+Z` | Urungkan |
+| `Ctrl+Y` atau `Ctrl+Shift+Z` | Ulangi |
+| `Ctrl+X` / `Ctrl+C` / `Ctrl+V` | Potong / Salin / Tempel |
+| `Ctrl+F` | Cari |
+| `Ctrl+H` | Ganti |
+| `F3` / `Shift+F3` | Hasil cari berikutnya / sebelumnya |
+| `Ctrl+Shift+F` | Cari di File |
+| `Ctrl+G` | Ke baris |
+| `Esc` | Tutup bar cari, bar ke baris, atau panel Cari di File |
+
+Shortcut juga tampil di sebelah item menu yang bersangkutan.
+
+### Explorer
 
 - Klik ikon **Explorer** di Activity Bar (kolom paling kiri) untuk membuka folder. Setelah folder terbuka, ikon yang sama menyembunyikan atau menampilkan sidebar.
 - Klik folder di tree untuk membuka atau menutupnya, klik file untuk membukanya. File yang sudah terbuka tidak dibuka dua kali; tab-nya yang difokuskan.
@@ -143,6 +176,8 @@ Struktur kode:
 | `src/app.rs` | State aplikasi, menu, panel, editor |
 | `src/tab_bar.rs` | Tab strip bergaya VS Code |
 | `src/gutter.rs` | Gutter nomor baris |
+| `src/find.rs` | Cari/ganti, bar cari dan bar Ke Baris |
+| `src/search.rs` | Cari di File: pencarian folder dan panel hasil |
 | `src/highlighter.rs` | Syntax highlighting (syntect) |
 | `src/file_browser.rs` | Explorer: tree folder dan sidebar |
 | `src/activity_bar.rs` | Activity Bar |
