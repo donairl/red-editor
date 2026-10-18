@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Theme, ThemeSet};
-use syntect::parsing::{SyntaxReference, SyntaxSet};
+use syntect::highlighting::{HighlightIterator, HighlightState, Highlighter, Theme, ThemeSet};
+use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 use eframe::egui;
 
 /// Theme used for all highlighting.
@@ -124,6 +124,30 @@ pub struct SyntaxHighlighter {
 /// Larger ones are highlighted on a background thread and shown as plain text
 /// until the result arrives, so the window never freezes.
 const SYNC_HIGHLIGHT_LIMIT: usize = 8 * 1024;
+
+/// One highlighted line and the parser state *after* it.
+///
+/// The end state is the start state of the next line, so a later edit can
+/// resume highlighting from any preserved line instead of the document start.
+#[derive(Clone)]
+pub struct LineHighlightCache {
+    pub text: String,
+    pub layout: egui::text::LayoutJob,
+    pub parse_state: ParseState,
+    pub highlight_state: HighlightState,
+}
+
+/// Per-document line cache used by [`SyntaxHighlighter::highlight_incremental`].
+///
+/// Keep one per open document: it is only valid for the language and font it
+/// was built with, and is rebuilt from scratch when either changes.
+#[derive(Default, Clone)]
+pub struct DocumentHighlightCache {
+    pub language: Option<Language>,
+    pub font_id: Option<egui::FontId>,
+    pub lines: Vec<LineHighlightCache>,
+    pub full_job: Option<Arc<egui::text::LayoutJob>>,
+}
 
 /// A fully highlighted document together with the inputs that produced it.
 struct DocumentCache {
@@ -514,6 +538,29 @@ mod tests {
     use eframe::egui;
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn test_line_highlight_cache_step() {
+        let highlighter = SyntaxHighlighter::new();
+        let syntax = pick_syntax(&highlighter.syntax_set, Language::Rust);
+        let theme = pick_theme(&highlighter.theme_set);
+        let mut parse_state = ParseState::new(syntax);
+        let mut highlight_state =
+            HighlightState::new(&Highlighter::new(theme), ScopeStack::new());
+        let start_parse = parse_state.clone();
+        let start_highlight = highlight_state.clone();
+        assert!(start_parse == parse_state && start_highlight == highlight_state);
+
+        let ops = parse_state
+            .parse_line("fn main() {\n", &highlighter.syntax_set)
+            .unwrap();
+        assert!(!ops.is_empty());
+        let hl = Highlighter::new(theme);
+        let _ = HighlightIterator::new(&mut highlight_state, &ops, "fn main() {\n", &hl).count();
+        // An open block changes both states, so they no longer equal the start.
+        assert!(start_parse != parse_state);
+        assert!(start_highlight != highlight_state);
+    }
 
     #[test]
     fn test_from_extension_maps_supported_extensions() {
