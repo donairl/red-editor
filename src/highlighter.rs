@@ -180,7 +180,8 @@ struct PendingHighlight {
     text: String,
     /// Plain-text stand-in shown until `result` arrives.
     placeholder: Arc<egui::text::LayoutJob>,
-    result: mpsc::Receiver<egui::text::LayoutJob>,
+    /// The whole document's line cache, so a finished pass leaves the tab warm.
+    result: mpsc::Receiver<DocumentHighlightCache>,
     cancel: Arc<AtomicBool>,
 }
 
@@ -257,12 +258,17 @@ impl SyntaxHighlighter {
         font_id: &egui::FontId,
         text: &str,
     ) -> Arc<egui::text::LayoutJob> {
-        highlight_incremental_with(&self.syntax_set, &self.theme_set, cache, language, font_id, text)
+        let never = AtomicBool::new(false);
+        highlight_incremental_with(&self.syntax_set, &self.theme_set, cache, language, font_id, text, &never)
+            .expect("a pass that is never cancelled always finishes")
     }
 }
 
 /// [`SyntaxHighlighter::highlight_incremental`] over borrowed grammars, so the
-/// layouter can call it without holding the whole highlighter.
+/// layouter and the background worker can call it without the whole highlighter.
+///
+/// Returns `None` if `cancel` is raised part-way through; `cache` then still
+/// describes the previous text.
 fn highlight_incremental_with(
     syntax_set: &SyntaxSet,
     theme_set: &ThemeSet,
@@ -270,7 +276,8 @@ fn highlight_incremental_with(
     language: Language,
     font_id: &egui::FontId,
     text: &str,
-) -> Arc<egui::text::LayoutJob> {
+    cancel: &AtomicBool,
+) -> Option<Arc<egui::text::LayoutJob>> {
     {
         if cache.language != Some(language) || cache.font_id.as_ref() != Some(font_id) {
             cache.lines.clear();
@@ -281,7 +288,7 @@ fn highlight_incremental_with(
         if let Some(job) = &cache.full_job
             && job.text == text
         {
-            return Arc::clone(job);
+            return Some(Arc::clone(job));
         }
 
         let theme = pick_theme(theme_set);
@@ -319,6 +326,10 @@ fn highlight_incremental_with(
         let mut rebuilt = Vec::new();
         let mut converged_at = None;
         for (j, line) in new_lines.iter().enumerate().skip(prefix) {
+            if cancel.load(Ordering::Relaxed) {
+                // Leave the cache untouched: it still describes the old text.
+                return None;
+            }
             if j >= suffix_start_new {
                 let o = suffix_start_old + (j - suffix_start_new);
                 let (old_parse, old_highlight) = state_before(o);
@@ -369,7 +380,7 @@ fn highlight_incremental_with(
 
         let job = Arc::new(job);
         cache.full_job = Some(Arc::clone(&job));
-        job
+        Some(job)
     }
 }
 
@@ -511,6 +522,7 @@ impl<'a> HighlighterLayouter<'a> {
         if text.len() <= SYNC_HIGHLIGHT_LIMIT {
             *self.pending = None;
             if let Some(document) = self.document.as_deref_mut() {
+                let never = AtomicBool::new(false);
                 return highlight_incremental_with(
                     self.syntax_set,
                     self.theme_set,
@@ -518,9 +530,14 @@ impl<'a> HighlighterLayouter<'a> {
                     self.language,
                     &self.default_format.font_id,
                     text,
-                );
+                    &never,
+                )
+                .expect("a pass that is never cancelled always finishes");
             }
             return self.document_job(text);
+        }
+        if self.document.is_some() {
+            return self.large_document_job(text, ctx);
         }
         if let Some(job) = self.cached(text) {
             return job;
@@ -532,8 +549,10 @@ impl<'a> HighlighterLayouter<'a> {
             && pending.text == text
         {
             match pending.result.try_recv() {
-                Ok(job) => {
-                    let job = Arc::new(job);
+                Ok(result) => {
+                    let job = result
+                        .full_job
+                        .unwrap_or_else(|| Arc::clone(&pending.placeholder));
                     self.store(text, &job);
                     *self.pending = None;
                     return job;
@@ -551,6 +570,77 @@ impl<'a> HighlighterLayouter<'a> {
         }
 
         // Nothing usable in flight: replace (and thereby cancel) any old pass.
+        self.spawn_pass(text, ctx)
+    }
+
+    /// A large document with a per-tab line cache.
+    ///
+    /// Once the cache is warm an edit re-parses only the touched lines, which
+    /// is cheap at any document size, so it runs inline and the colors never
+    /// flash to plain text. A cold cache (first open, new language or font) or
+    /// an edit too big to re-parse inside a frame still goes to the background.
+    fn large_document_job(&mut self, text: &str, ctx: &egui::Context) -> Arc<egui::text::LayoutJob> {
+        let document = self.document.take().expect("checked by the caller");
+        let font_id = self.default_format.font_id.clone();
+        let warm = document.language == Some(self.language)
+            && document.font_id.as_ref() == Some(&font_id);
+
+        let job = 'job: {
+            if warm
+                && let Some(job) = &document.full_job
+                && job.text == text
+            {
+                break 'job Arc::clone(job);
+            }
+
+            if let Some(pending) = self.pending.as_ref()
+                && pending.language == self.language
+                && pending.font_id == font_id
+                && pending.text == text
+            {
+                match pending.result.try_recv() {
+                    Ok(result) => {
+                        *document = result;
+                        *self.pending = None;
+                        match document.full_job.clone() {
+                            Some(job) => break 'job job,
+                            None => break 'job self.spawn_pass(text, ctx),
+                        }
+                    }
+                    // Still running, or died without a result: keep the plain
+                    // text rather than respawning it every frame. The next
+                    // edit starts a fresh pass.
+                    _ => break 'job Arc::clone(&pending.placeholder),
+                }
+            }
+
+            if warm
+                && let Some(previous) = &document.full_job
+                && changed_len(&previous.text, text) <= SYNC_HIGHLIGHT_LIMIT
+            {
+                *self.pending = None;
+                let never = AtomicBool::new(false);
+                break 'job highlight_incremental_with(
+                    self.syntax_set,
+                    self.theme_set,
+                    document,
+                    self.language,
+                    &font_id,
+                    text,
+                    &never,
+                )
+                .expect("a pass that is never cancelled always finishes");
+            }
+
+            self.spawn_pass(text, ctx)
+        };
+        self.document = Some(document);
+        job
+    }
+
+    /// Starts a background pass over `text`, cancelling any older one, and
+    /// returns the plain-text stand-in to show until it finishes.
+    fn spawn_pass(&mut self, text: &str, ctx: &egui::Context) -> Arc<egui::text::LayoutJob> {
         let mut plain = egui::text::LayoutJob::single_section(
             text.to_owned(),
             self.default_format.clone(),
@@ -666,22 +756,40 @@ struct Worker {
 }
 
 impl Worker {
-    /// Highlights the whole document, or returns `None` if it was cancelled.
-    fn run(&self) -> Option<egui::text::LayoutJob> {
-        let theme = pick_theme(&self.theme_set);
-        let syntax = pick_syntax(&self.syntax_set, self.language);
-        let default_foreground = theme.settings.foreground;
-        let mut lines = HighlightLines::new(syntax, theme);
-        join_lines(&self.text, &self.default_format, &self.cancel, |line| {
-            highlight_line_with(
-                &mut lines,
-                &self.syntax_set,
-                default_foreground,
-                &self.default_format,
-                line,
-            )
-        })
+    /// Highlights the whole document from a cold cache, or returns `None` if
+    /// it was cancelled.
+    fn run(&self) -> Option<DocumentHighlightCache> {
+        let mut cache = DocumentHighlightCache::default();
+        highlight_incremental_with(
+            &self.syntax_set,
+            &self.theme_set,
+            &mut cache,
+            self.language,
+            &self.default_format.font_id,
+            &self.text,
+            &self.cancel,
+        )?;
+        Some(cache)
     }
+}
+
+/// How many bytes of `new` differ from `old` once the common prefix and suffix
+/// are set aside: a cheap measure of how much an edit has to re-highlight.
+fn changed_len(old: &str, new: &str) -> usize {
+    let prefix = old
+        .bytes()
+        .zip(new.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let max_suffix = old.len().min(new.len()) - prefix;
+    let suffix = old
+        .bytes()
+        .rev()
+        .zip(new.bytes().rev())
+        .take(max_suffix)
+        .take_while(|(a, b)| a == b)
+        .count();
+    new.len() - prefix - suffix
 }
 
 impl SyntaxHighlighter {
@@ -1167,6 +1275,91 @@ mod tests {
 
         let done = wait_for_highlighted(&mut highlighter, &ctx, &new);
         assert_eq!(done.text, new);
+    }
+
+    /// Frames until the background pass behind `cache` lands.
+    fn wait_for_document(
+        highlighter: &mut SyntaxHighlighter,
+        cache: &mut DocumentHighlightCache,
+        ctx: &egui::Context,
+        text: &str,
+    ) -> Arc<egui::text::LayoutJob> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let job = highlighter
+                .layouter(Language::Rust, egui::FontId::monospace(14.0))
+                .with_document_cache(cache)
+                .frame_job(text, ctx);
+            if job.sections.len() > 1 {
+                return job;
+            }
+            assert!(std::time::Instant::now() < deadline, "background pass never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Once the background pass has warmed a large document's cache, a small
+    /// edit is highlighted inline: no plain-text flash, only touched lines redone.
+    #[test]
+    fn test_large_document_edit_is_incremental_once_warm() {
+        let text = big_rust_document();
+        let ctx = egui::Context::default();
+        let mut highlighter = SyntaxHighlighter::new();
+        let mut cache = DocumentHighlightCache::default();
+
+        let first = highlighter
+            .layouter(Language::Rust, egui::FontId::monospace(14.0))
+            .with_document_cache(&mut cache)
+            .frame_job(&text, &ctx);
+        assert_eq!(first.sections.len(), 1, "cold cache starts in the background");
+        wait_for_document(&mut highlighter, &mut cache, &ctx, &text);
+        assert_eq!(cache.lines.len(), text.split('\n').count());
+
+        // Tag an untouched line: a warm edit must carry it over, not re-parse it.
+        let last = cache.lines.len() - 1;
+        cache.lines[last].layout.wrap.max_rows = 7;
+        let edited = text.replacen("compute", "compute_edited", 1);
+        let job = highlighter
+            .layouter(Language::Rust, egui::FontId::monospace(14.0))
+            .with_document_cache(&mut cache)
+            .frame_job(&edited, &ctx);
+        assert_eq!(job.text, edited);
+        assert!(job.sections.len() > 1, "warm edit must stay highlighted");
+        assert_eq!(cache.lines[last].layout.wrap.max_rows, 7, "untouched line was re-parsed");
+    }
+
+    /// An edit too big to re-parse inside a frame goes back to the background.
+    #[test]
+    fn test_large_document_huge_edit_goes_to_background() {
+        let text = big_rust_document();
+        let ctx = egui::Context::default();
+        let mut highlighter = SyntaxHighlighter::new();
+        let mut cache = DocumentHighlightCache::default();
+        let _ = highlighter
+            .layouter(Language::Rust, egui::FontId::monospace(14.0))
+            .with_document_cache(&mut cache)
+            .frame_job(&text, &ctx);
+        wait_for_document(&mut highlighter, &mut cache, &ctx, &text);
+
+        let pasted = format!("{}{text}", "let pasted = 1;\n".repeat(SYNC_HIGHLIGHT_LIMIT));
+        let job = highlighter
+            .layouter(Language::Rust, egui::FontId::monospace(14.0))
+            .with_document_cache(&mut cache)
+            .frame_job(&pasted, &ctx);
+        assert_eq!(job.text, pasted);
+        assert_eq!(job.sections.len(), 1, "huge edit must not block the frame");
+        let done = wait_for_document(&mut highlighter, &mut cache, &ctx, &pasted);
+        assert_eq!(done.text, pasted);
+    }
+
+    #[test]
+    fn test_changed_len_ignores_common_prefix_and_suffix() {
+        assert_eq!(changed_len("abcdef", "abcdef"), 0);
+        assert_eq!(changed_len("abcdef", "abXXdef"), 2);
+        assert_eq!(changed_len("abc", "abcdef"), 3);
+        assert_eq!(changed_len("abcdef", "abc"), 0);
+        assert_eq!(changed_len("", "xyz"), 3);
+        assert_eq!(changed_len("aaa", "aaaa"), 1);
     }
 
     /// Small documents keep the synchronous path: no flash of plain text.
