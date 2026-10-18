@@ -32,6 +32,7 @@ pub enum Language {
     Json,
     Markdown,
     Go,
+    Python,
 }
 
 impl Language {
@@ -49,6 +50,7 @@ impl Language {
             Language::Json,
             Language::Markdown,
             Language::Go,
+            Language::Python,
         ]
     }
 
@@ -67,6 +69,7 @@ impl Language {
             "json" | "jsonc" => Language::Json,
             "md" | "markdown" | "mdown" | "mkd" => Language::Markdown,
             "go" => Language::Go,
+            "py" | "pyw" | "pyi" => Language::Python,
             _ => Language::PlainText,
         }
     }
@@ -95,6 +98,7 @@ impl Language {
             Language::Json => "JSON",
             Language::Markdown => "Markdown",
             Language::Go => "Go",
+            Language::Python => "Python",
         }
     }
 
@@ -111,6 +115,7 @@ impl Language {
             Language::Json => "JSON",
             Language::Markdown => "Markdown",
             Language::Go => "Go",
+            Language::Python => "Python",
         }
     }
 }
@@ -348,9 +353,10 @@ fn highlight_incremental_with(
                     break;
                 }
             }
-            let layout = match parse_state.parse_line(line, syntax_set) {
+            let terminated = with_newline(line);
+            let layout = match parse_state.parse_line(&terminated, syntax_set) {
                 Ok(ops) => ranges_to_job(
-                    HighlightIterator::new(&mut highlight_state, &ops, line, &highlighter),
+                    HighlightIterator::new(&mut highlight_state, &ops, &terminated, &highlighter),
                     default_foreground,
                     &default_format,
                 ),
@@ -439,6 +445,12 @@ fn ranges_to_job<'s>(
     };
     let mut job = egui::text::LayoutJob::default();
     for (style, piece) in ranges {
+        // The parser is fed `line + "\n"` (see `with_newline`); the newline is
+        // not part of the line's text.
+        let piece = piece.strip_suffix('\n').unwrap_or(piece);
+        if piece.is_empty() {
+            continue;
+        }
         if is_default(style.foreground) {
             job.append(piece, 0.0, default_format.clone());
         } else {
@@ -469,10 +481,23 @@ fn highlight_line_with(
     default_format: &egui::text::TextFormat,
     line: &str,
 ) -> egui::text::LayoutJob {
-    match lines.highlight_line(line, syntax_set) {
+    let terminated = with_newline(line);
+    match lines.highlight_line(&terminated, syntax_set) {
         Ok(ranges) => ranges_to_job(ranges, default_foreground, default_format),
         Err(_) => plain_line_job(line, default_format),
     }
+}
+
+/// `line` followed by the newline the grammars expect.
+///
+/// The newline-aware grammar set ends line comments (`#`, `//` in some
+/// grammars) at `\n`. Without it a comment never closes and swallows the next
+/// line.
+fn with_newline(line: &str) -> String {
+    let mut terminated = String::with_capacity(line.len() + 1);
+    terminated.push_str(line);
+    terminated.push('\n');
+    terminated
 }
 
 /// An unformatted single-line job.
@@ -981,6 +1006,9 @@ mod tests {
         assert_eq!(Language::from_extension("json"), Language::Json);
         assert_eq!(Language::from_extension("jsonc"), Language::Json);
         assert_eq!(Language::from_extension("go"), Language::Go);
+        for ext in ["py", "pyw", "pyi"] {
+            assert_eq!(Language::from_extension(ext), Language::Python, "{ext}");
+        }
         for ext in ["md", "markdown", "mdown", "mkd"] {
             assert_eq!(Language::from_extension(ext), Language::Markdown, "{ext}");
         }
@@ -997,6 +1025,7 @@ mod tests {
         assert_eq!(Language::from_extension("JSON"), Language::Json);
         assert_eq!(Language::from_extension("JSONC"), Language::Json);
         assert_eq!(Language::from_extension("GO"), Language::Go);
+        assert_eq!(Language::from_extension("PY"), Language::Python);
         assert_eq!(Language::from_extension("MD"), Language::Markdown);
         assert_eq!(Language::from_extension("Markdown"), Language::Markdown);
     }
@@ -1005,7 +1034,7 @@ mod tests {
     fn test_from_extension_unknown_defaults_to_plain_text() {
         assert_eq!(Language::from_extension("txt"), Language::PlainText);
         assert_eq!(Language::from_extension(""), Language::PlainText);
-        assert_eq!(Language::from_extension("py"), Language::PlainText);
+        assert_eq!(Language::from_extension("rb"), Language::PlainText);
     }
 
     #[test]
@@ -1050,11 +1079,12 @@ mod tests {
         assert_eq!(Language::Json.display_name(), "JSON");
         assert_eq!(Language::Markdown.display_name(), "Markdown");
         assert_eq!(Language::Go.display_name(), "Go");
+        assert_eq!(Language::Python.display_name(), "Python");
     }
 
     #[test]
     fn test_all_lists_every_variant() {
-        assert_eq!(Language::all().len(), 11);
+        assert_eq!(Language::all().len(), 12);
     }
 
     #[test]
@@ -1455,6 +1485,59 @@ mod tests {
                 "{lang:?} produced a single plain section for {line:?}"
             );
         }
+    }
+
+    /// Regression: lines were parsed without their `\n`, so a line comment in
+    /// Python, Go or PHP never closed and swallowed the next line.
+    #[test]
+    fn test_line_comment_does_not_swallow_the_next_line() {
+        for (lang, doc) in [
+            (Language::Python, "x = 1  # c\nclass A(object):"),
+            (Language::Rust, "// c\nfn main() { let x = 1; }"),
+            (Language::Go, "// c\nfunc main() { x := 1 }"),
+            (Language::Php, "<?php // c\n$a = 1;"),
+        ] {
+            let mut highlighter = SyntaxHighlighter::new();
+            let job = highlighter
+                .layouter(lang, egui::FontId::monospace(14.0))
+                .document_job(doc);
+            assert_eq!(job.text, doc);
+            let second = doc.find('\n').unwrap() + 1;
+            let sections = job.sections.iter().filter(|s| s.byte_range.start.0 >= second).count();
+            assert!(sections > 1, "{lang:?}: line after a comment was swallowed");
+        }
+    }
+
+    /// The incremental engine must hand the parser the same terminated lines.
+    #[test]
+    fn test_incremental_line_comment_does_not_swallow_the_next_line() {
+        let highlighter = SyntaxHighlighter::new();
+        let mut cache = DocumentHighlightCache::default();
+        let font_id = egui::FontId::monospace(14.0);
+        let doc = "x = 1  # c\nclass A(object):";
+        let job = highlighter.highlight_incremental(&mut cache, Language::Python, &font_id, doc);
+        assert_eq!(job.text, doc);
+        assert!(cache.lines[1].layout.sections.len() > 1);
+    }
+
+    #[test]
+    fn test_python_is_coloured() {
+        let counts = section_counts(
+            Language::Python,
+            &["def main(name: str) -> int:", "    return len(name) + 1  # note", "class A(object):"],
+        );
+        for (i, count) in counts.iter().enumerate() {
+            assert!(*count > 1, "Python line {i} stayed a single plain section");
+        }
+    }
+
+    #[test]
+    fn test_python_docstring_keeps_state_across_lines() {
+        let counts = section_counts(
+            Language::Python,
+            &["\"\"\"doc start", "def not_code(): pass", "end\"\"\""],
+        );
+        assert_eq!(counts[1], 1, "docstring state was lost between lines");
     }
 
     #[test]
