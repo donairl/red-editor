@@ -9,7 +9,7 @@ use crate::file_browser::{self, Explorer};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::i18n::{self, I18n};
-use crate::markdown_preview::MarkdownPreview;
+use crate::markdown_preview::{MarkdownPreview, ScrollPos, ScrollSync};
 use crate::modals::{self, ModalResponse, PendingAction};
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
@@ -128,6 +128,7 @@ pub struct TextEditorApp {
     /// on a Markdown tab; the choice survives switching to another tab.
     pub show_markdown_preview: bool,
     pub markdown_preview: MarkdownPreview,
+    pub scroll_sync: ScrollSync,
     /// Interface translations and the language in use.
     pub i18n: I18n,
     pub find: FindState,
@@ -169,6 +170,7 @@ impl Default for TextEditorApp {
             zen_mode: false,
             show_markdown_preview: false,
             markdown_preview: MarkdownPreview::default(),
+            scroll_sync: ScrollSync::default(),
             i18n: I18n::builtin(),
             find: FindState::default(),
             goto: GotoState::default(),
@@ -1093,7 +1095,7 @@ fn render_editor(
     line_numbers: bool,
     hint: &str,
 ) {
-    render_editor_with(ui, text, layouter, word_wrap, line_numbers, hint, None, EditorRequest::default());
+    render_editor_with(ui, text, layouter, word_wrap, line_numbers, hint, None, EditorRequest::default(), None);
 }
 
 /// [`render_editor`] with a fixed widget `id` (so the app can find the
@@ -1108,13 +1110,18 @@ fn render_editor_with(
     hint: &str,
     id: Option<egui::Id>,
     request: EditorRequest,
-) {
+    scroll_to: Option<f32>,
+) -> ScrollPos {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
     } else {
         egui::ScrollArea::both()
     };
-    scroll_area.show(ui, |ui| {
+    let scroll_area = match scroll_to {
+        Some(offset) => scroll_area.vertical_scroll_offset(offset),
+        None => scroll_area,
+    };
+    let output = scroll_area.show(ui, |ui| {
         let font_id = egui::TextStyle::Monospace.resolve(ui.style());
         let gutter_width =
             line_numbers.then(|| gutter::width(ui, &font_id, gutter::line_count(text)));
@@ -1237,6 +1244,7 @@ fn render_editor_with(
             ui.scroll_to_rect(rect, None);
         }
     });
+    ScrollPos::of(&output)
 }
 
 impl eframe::App for TextEditorApp {
@@ -1393,7 +1401,9 @@ impl eframe::App for TextEditorApp {
 
         // Markdown preview, right of the editor. Declared before the central
         // panel so the editor takes whatever width is left.
-        if self.show_markdown_preview && self.preview_available() && !self.zen_mode {
+        let previewing = self.show_markdown_preview && self.preview_available() && !self.zen_mode;
+        let mut preview_pos = None;
+        if previewing {
             let half = ui.available_width() / 2.0;
             egui::Panel::right("markdown_preview")
                 .resizable(true)
@@ -1402,7 +1412,8 @@ impl eframe::App for TextEditorApp {
                 .show(ui, |ui| {
                     let too_large = self.i18n.t("preview.too_large");
                     let text = &self.tabs[self.active_tab_index].text_content;
-                    self.markdown_preview.show(ui, text, too_large);
+                    let scroll_to = self.scroll_sync.take_preview_offset();
+                    preview_pos = Some(self.markdown_preview.show(ui, text, too_large, scroll_to));
                 });
         }
 
@@ -1447,9 +1458,11 @@ impl eframe::App for TextEditorApp {
             let active_idx = self.active_tab_index;
             let language = self.tabs[active_idx].effective_language();
 
+            let scroll_to = if previewing { self.scroll_sync.take_editor_offset() } else { None };
+            let mut editor_pos = ScrollPos::default();
             ui.push_id(self.active_tab_index, |ui| {
                 if too_large {
-                    render_editor_with(
+                    editor_pos = render_editor_with(
                         ui,
                         &mut self.tabs[active_idx].text_content,
                         None,
@@ -1458,6 +1471,7 @@ impl eframe::App for TextEditorApp {
                         hint,
                         Some(editor_id),
                         request,
+                        scroll_to,
                     );
                 } else {
                     let tab = &mut self.tabs[active_idx];
@@ -1465,7 +1479,7 @@ impl eframe::App for TextEditorApp {
                         .highlighter
                         .layouter(language, font_id)
                         .with_document_cache(&mut tab.highlight_cache);
-                    render_editor_with(
+                    editor_pos = render_editor_with(
                         ui,
                         &mut tab.text_content,
                         Some(&mut layouter),
@@ -1474,9 +1488,14 @@ impl eframe::App for TextEditorApp {
                         hint,
                         Some(editor_id),
                         request,
+                        scroll_to,
                     );
                 }
             });
+            match preview_pos {
+                Some(preview_pos) => self.scroll_sync.observe(editor_pos, preview_pos),
+                None => self.scroll_sync.reset(),
+            }
         });
 
         // 5. Modals & Dialogs
@@ -1915,7 +1934,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(input, |ui| {
-                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap());
+                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None);
             });
             out.textures_delta.clear();
         };
@@ -2007,7 +2026,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(input, |ui| {
-                super::render_editor_with(ui, &mut text.borrow_mut(), None, false, false, "", Some(id), request.take().unwrap());
+                super::render_editor_with(ui, &mut text.borrow_mut(), None, false, false, "", Some(id), request.take().unwrap(), None);
             });
             out.textures_delta.clear();
         };
@@ -2979,9 +2998,11 @@ mod tests {
     fn test_frame_with_markdown_preview_open_keeps_the_buffer() {
         let ctx = egui::Context::default();
         let mut app = markdown_app();
+        app.active_tab_mut().text_content = "# Heading\n\ntext *here*\n\n".repeat(300);
         let original = app.active_tab().text_content.clone();
         app.show_markdown_preview = true;
-        for _ in 0..2 {
+        // Several frames: the scroll sync needs one to observe and one to apply.
+        for _ in 0..5 {
             run_frame_with_events(&ctx, Vec::new(), |ui| {
                 eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
             });
