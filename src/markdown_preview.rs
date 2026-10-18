@@ -1,9 +1,7 @@
 //! Rendered preview of Markdown documents, shown beside the editor.
 //!
-//! `app.rs` decides when the preview is visible; this module only knows which
-//! files are Markdown and how to draw one.
-
-use std::path::Path;
+//! `app.rs` decides when the preview is visible (a tab whose language is
+//! `Language::Markdown`); this module only knows how to draw one.
 
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
@@ -11,17 +9,6 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 /// Documents past this size are not rendered. The viewer is immediate-mode, so
 /// its cost grows with the document and is paid every frame.
 pub const MAX_PREVIEW_BYTES: usize = 512 * 1024;
-
-/// True when `path` names a Markdown file. Matching is case-insensitive.
-pub fn is_markdown(path: Option<&Path>) -> bool {
-    path.and_then(Path::extension)
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            ["md", "markdown", "mdown", "mkd"]
-                .iter()
-                .any(|known| ext.eq_ignore_ascii_case(known))
-        })
-}
 
 /// True when `text` is too large to render every frame.
 pub fn exceeds_limit(text: &str) -> bool {
@@ -53,22 +40,6 @@ impl MarkdownPreview {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn test_is_markdown_recognises_markdown_extensions() {
-        for name in ["a.md", "a.markdown", "a.mdown", "a.mkd", "README.MD", "x.Markdown"] {
-            assert!(is_markdown(Some(&PathBuf::from(name))), "{name}");
-        }
-    }
-
-    #[test]
-    fn test_is_markdown_rejects_other_files() {
-        for name in ["a.rs", "a.txt", "md", "a.md.bak", "a."] {
-            assert!(!is_markdown(Some(&PathBuf::from(name))), "{name}");
-        }
-        assert!(!is_markdown(None));
-    }
 
     #[test]
     fn test_exceeds_limit_is_inclusive_of_the_limit() {

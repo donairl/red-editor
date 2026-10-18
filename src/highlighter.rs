@@ -30,6 +30,7 @@ pub enum Language {
     TypeScript,
     Html,
     Json,
+    Markdown,
 }
 
 impl Language {
@@ -45,6 +46,7 @@ impl Language {
             Language::TypeScript,
             Language::Html,
             Language::Json,
+            Language::Markdown,
         ]
     }
 
@@ -61,6 +63,7 @@ impl Language {
             "ts" | "mts" | "cts" | "tsx" => Language::TypeScript,
             "html" | "htm" => Language::Html,
             "json" | "jsonc" => Language::Json,
+            "md" | "markdown" | "mdown" | "mkd" => Language::Markdown,
             _ => Language::PlainText,
         }
     }
@@ -87,6 +90,7 @@ impl Language {
             Language::TypeScript => "TypeScript",
             Language::Html => "HTML",
             Language::Json => "JSON",
+            Language::Markdown => "Markdown",
         }
     }
 
@@ -101,6 +105,7 @@ impl Language {
             Language::JavaScript | Language::TypeScript => "JavaScript",
             Language::Html => "HTML",
             Language::Json => "JSON",
+            Language::Markdown => "Markdown",
         }
     }
 }
@@ -970,6 +975,9 @@ mod tests {
         assert_eq!(Language::from_extension("htm"), Language::Html);
         assert_eq!(Language::from_extension("json"), Language::Json);
         assert_eq!(Language::from_extension("jsonc"), Language::Json);
+        for ext in ["md", "markdown", "mdown", "mkd"] {
+            assert_eq!(Language::from_extension(ext), Language::Markdown, "{ext}");
+        }
     }
 
     #[test]
@@ -982,6 +990,8 @@ mod tests {
         assert_eq!(Language::from_extension("HTML"), Language::Html);
         assert_eq!(Language::from_extension("JSON"), Language::Json);
         assert_eq!(Language::from_extension("JSONC"), Language::Json);
+        assert_eq!(Language::from_extension("MD"), Language::Markdown);
+        assert_eq!(Language::from_extension("Markdown"), Language::Markdown);
     }
 
     #[test]
@@ -1030,11 +1040,12 @@ mod tests {
         assert_eq!(Language::TypeScript.display_name(), "TypeScript");
         assert_eq!(Language::Html.display_name(), "HTML");
         assert_eq!(Language::Json.display_name(), "JSON");
+        assert_eq!(Language::Markdown.display_name(), "Markdown");
     }
 
     #[test]
     fn test_all_lists_every_variant() {
-        assert_eq!(Language::all().len(), 9);
+        assert_eq!(Language::all().len(), 10);
     }
 
     #[test]
@@ -1434,6 +1445,17 @@ mod tests {
                 counts[0] > 1,
                 "{lang:?} produced a single plain section for {line:?}"
             );
+        }
+    }
+
+    #[test]
+    fn test_markdown_is_coloured() {
+        let counts = section_counts(
+            Language::Markdown,
+            &["# Heading", "some **bold** and `code`", "- [link](http://x.y)"],
+        );
+        for (i, count) in counts.iter().enumerate() {
+            assert!(*count > 1, "Markdown line {i} stayed a single plain section");
         }
     }
 

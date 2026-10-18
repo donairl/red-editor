@@ -9,7 +9,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 ## Features
 
 - **VS Code-style multi-tab**: Language badge on each tab, `●` indicator for unsaved files, `×` close button on hover, and `+` button for new tabs.
-- **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, and JSON, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting.
+- **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, JSON, and Markdown, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting.
 - **Line numbers** that can be toggled on or off (**View → Line Numbers**). The active line number is highlighted.
 - **Word wrap** that can be toggled on or off (**View → Word Wrap**). When disabled, long lines scroll horizontally.
 - **VS Code-style Explorer and Activity Bar**: Open folders, browse tree hierarchy, click files to open in tabs. Includes **Refresh** and **Collapse All** actions in the folder header.

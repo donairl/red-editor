@@ -9,7 +9,7 @@ use crate::file_browser::{self, Explorer};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::i18n::{self, I18n};
-use crate::markdown_preview::{self, MarkdownPreview};
+use crate::markdown_preview::MarkdownPreview;
 use crate::modals::{self, ModalResponse, PendingAction};
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
@@ -554,9 +554,11 @@ impl TextEditorApp {
     }
 
     /// Enters or leaves zen mode: only the editor is shown, fullscreen.
-    /// Whether the active tab is a Markdown file the preview can show.
+    /// Whether the active tab is Markdown, by file extension or by the
+    /// language picked from the menu, so the preview also works on an
+    /// untitled tab.
     pub fn preview_available(&self) -> bool {
-        markdown_preview::is_markdown(self.active_tab().current_path.as_deref())
+        self.effective_language() == Language::Markdown
     }
 
     /// Shows or hides the Markdown preview. Does nothing on other files.
@@ -2927,6 +2929,7 @@ mod tests {
     fn markdown_app() -> TextEditorApp {
         let mut app = TextEditorApp::default();
         app.active_tab_mut().current_path = Some(PathBuf::from("notes.md"));
+        app.active_tab_mut().active_language = Language::Markdown;
         app.active_tab_mut().text_content = "# Title\n\nsome *text*".into();
         app
     }
@@ -2946,6 +2949,17 @@ mod tests {
         assert!(app.show_markdown_preview);
         app.apply_shortcut(&ctx, ShortcutAction::MarkdownPreview);
         assert!(!app.show_markdown_preview);
+    }
+
+    #[test]
+    fn test_markdown_preview_follows_the_selected_language() {
+        let mut app = TextEditorApp::default();
+        assert!(!app.preview_available());
+        app.active_tab_mut().language_override = Some(Language::Markdown);
+        assert!(app.preview_available(), "picking Markdown enables the preview");
+        app.active_tab_mut().active_language = Language::Markdown;
+        app.active_tab_mut().language_override = Some(Language::PlainText);
+        assert!(!app.preview_available(), "an override away from Markdown turns it off");
     }
 
     #[test]
