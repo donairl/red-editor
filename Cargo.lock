@@ -2741,7 +2741,7 @@ dependencies = [
 
 [[package]]
 name = "red_text_editor"
-version = "0.2.0"
+version = "0.2.6"
 dependencies = [
  "eframe",
  "rfd",
