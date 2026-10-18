@@ -31,6 +31,7 @@ pub enum Language {
     Html,
     Json,
     Markdown,
+    Go,
 }
 
 impl Language {
@@ -47,6 +48,7 @@ impl Language {
             Language::Html,
             Language::Json,
             Language::Markdown,
+            Language::Go,
         ]
     }
 
@@ -64,6 +66,7 @@ impl Language {
             "html" | "htm" => Language::Html,
             "json" | "jsonc" => Language::Json,
             "md" | "markdown" | "mdown" | "mkd" => Language::Markdown,
+            "go" => Language::Go,
             _ => Language::PlainText,
         }
     }
@@ -91,6 +94,7 @@ impl Language {
             Language::Html => "HTML",
             Language::Json => "JSON",
             Language::Markdown => "Markdown",
+            Language::Go => "Go",
         }
     }
 
@@ -106,6 +110,7 @@ impl Language {
             Language::Html => "HTML",
             Language::Json => "JSON",
             Language::Markdown => "Markdown",
+            Language::Go => "Go",
         }
     }
 }
@@ -975,6 +980,7 @@ mod tests {
         assert_eq!(Language::from_extension("htm"), Language::Html);
         assert_eq!(Language::from_extension("json"), Language::Json);
         assert_eq!(Language::from_extension("jsonc"), Language::Json);
+        assert_eq!(Language::from_extension("go"), Language::Go);
         for ext in ["md", "markdown", "mdown", "mkd"] {
             assert_eq!(Language::from_extension(ext), Language::Markdown, "{ext}");
         }
@@ -990,6 +996,7 @@ mod tests {
         assert_eq!(Language::from_extension("HTML"), Language::Html);
         assert_eq!(Language::from_extension("JSON"), Language::Json);
         assert_eq!(Language::from_extension("JSONC"), Language::Json);
+        assert_eq!(Language::from_extension("GO"), Language::Go);
         assert_eq!(Language::from_extension("MD"), Language::Markdown);
         assert_eq!(Language::from_extension("Markdown"), Language::Markdown);
     }
@@ -1003,6 +1010,7 @@ mod tests {
 
     #[test]
     fn test_from_path_handles_full_paths_and_missing_extension() {
+        assert_eq!(Language::from_path(Path::new("/src/cmd/main.go")), Language::Go);
         assert_eq!(
             Language::from_path(Path::new("/home/user/main.rs")),
             Language::Rust
@@ -1041,11 +1049,12 @@ mod tests {
         assert_eq!(Language::Html.display_name(), "HTML");
         assert_eq!(Language::Json.display_name(), "JSON");
         assert_eq!(Language::Markdown.display_name(), "Markdown");
+        assert_eq!(Language::Go.display_name(), "Go");
     }
 
     #[test]
     fn test_all_lists_every_variant() {
-        assert_eq!(Language::all().len(), 10);
+        assert_eq!(Language::all().len(), 11);
     }
 
     #[test]
@@ -1446,6 +1455,24 @@ mod tests {
                 "{lang:?} produced a single plain section for {line:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_go_is_coloured() {
+        let counts = section_counts(
+            Language::Go,
+            &["package main", "func main() {", "\tfmt.Println(\"hi\") // note"],
+        );
+        for (i, count) in counts.iter().enumerate() {
+            assert!(*count > 1, "Go line {i} stayed a single plain section");
+        }
+    }
+
+    #[test]
+    fn test_go_block_comment_keeps_state_across_lines() {
+        let counts = section_counts(Language::Go, &["/* start", "func main() {}", "end */"]);
+        // Inside the comment `func main() {}` is one comment-coloured run.
+        assert_eq!(counts[1], 1, "comment state was lost between lines");
     }
 
     #[test]
