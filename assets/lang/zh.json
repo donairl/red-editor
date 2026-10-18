@@ -48,6 +48,8 @@
   "view.word_wrap": "自动换行",
   "view.line_numbers": "行号",
   "view.zen_mode": "禅模式",
+  "view.markdown_preview": "Markdown 预览",
+  "preview.too_large": "文档过大，无法预览。",
 
   "help.about": "关于",
 

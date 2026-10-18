@@ -19,6 +19,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Unsaved changes confirmation** when closing tabs or quitting the application.
 - **Multilingual interface** (English, Indonesian, Spanish, German, Chinese, and additional languages via JSON files). Select via **View → Interface Language**; preference is persisted across restarts. See [Adding interface languages](#adding-interface-languages).
 - **Zen Mode** (`F11`): Distraction-free full-screen mode showing only the editor; press `Esc` to exit.
+- **Markdown preview** (`Ctrl+Shift+V`): rendered preview of `.md` files in a live split view beside the editor.
 - System light/dark theme detection.
 
 ## Requirements
@@ -105,7 +106,7 @@ If installed outside `PATH`, provide the full binary path for `Exec=`, e.g. `Exe
 |---|---|
 | **File** | New Tab, Close Tab, Open File…, Open Folder…, Save, Save As…, Language, Exit |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line… |
-| **View** | Word Wrap, Line Numbers, Zen Mode, Language, Interface Language |
+| **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Language, Interface Language |
 | **Help** | About |
 
 ### Keyboard Shortcuts
@@ -123,6 +124,7 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+Q` | Exit |
 | `Ctrl+B` | Toggle sidebar |
 | `F11` | Zen mode (full screen, editor only); `Esc` to exit |
+| `Ctrl+Shift+V` | Toggle Markdown preview (`.md` files) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` or `Ctrl+Shift+Z` | Redo |

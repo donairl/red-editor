@@ -48,6 +48,8 @@
   "view.word_wrap": "Word Wrap",
   "view.line_numbers": "Line Numbers",
   "view.zen_mode": "Zen Mode",
+  "view.markdown_preview": "Markdown Preview",
+  "preview.too_large": "Document too large to preview.",
 
   "help.about": "About",
 

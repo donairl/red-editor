@@ -9,6 +9,7 @@ use crate::file_browser::{self, Explorer};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::i18n::{self, I18n};
+use crate::markdown_preview::{self, MarkdownPreview};
 use crate::modals::{self, ModalResponse, PendingAction};
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
@@ -123,6 +124,10 @@ pub struct TextEditorApp {
     pub show_line_numbers: bool,
     /// Distraction-free mode: fullscreen, with only the editor shown.
     pub zen_mode: bool,
+    /// Show the rendered Markdown pane beside the editor. Only takes effect
+    /// on a Markdown tab; the choice survives switching to another tab.
+    pub show_markdown_preview: bool,
+    pub markdown_preview: MarkdownPreview,
     /// Interface translations and the language in use.
     pub i18n: I18n,
     pub find: FindState,
@@ -162,6 +167,8 @@ impl Default for TextEditorApp {
             word_wrap: false,
             show_line_numbers: true,
             zen_mode: false,
+            show_markdown_preview: false,
+            markdown_preview: MarkdownPreview::default(),
             i18n: I18n::builtin(),
             find: FindState::default(),
             goto: GotoState::default(),
@@ -230,6 +237,7 @@ pub mod shortcuts {
     pub const FIND_IN_FILES: KeyboardShortcut = cmd_shift(Key::F);
     pub const GOTO_LINE: KeyboardShortcut = cmd(Key::G);
     pub const ZEN_MODE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F11);
+    pub const MARKDOWN_PREVIEW: KeyboardShortcut = cmd_shift(Key::V);
     pub const FIND: KeyboardShortcut = cmd(Key::F);
     pub const REPLACE: KeyboardShortcut = cmd(Key::H);
     pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
@@ -258,6 +266,7 @@ pub enum ShortcutAction {
     PrevTab,
     GotoLine,
     ZenMode,
+    MarkdownPreview,
     FindInFiles,
     Find,
     Replace,
@@ -273,6 +282,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::FIND_PREV, FindPrev),
         (shortcuts::FIND_NEXT, FindNext),
         (shortcuts::FIND_IN_FILES, FindInFiles),
+        (shortcuts::MARKDOWN_PREVIEW, MarkdownPreview),
         (shortcuts::SAVE_AS, SaveAs),
         (shortcuts::OPEN_FOLDER, OpenFolder),
         (shortcuts::PREV_TAB, PrevTab),
@@ -386,6 +396,20 @@ impl TextEditorApp {
         let ctx = ui.ctx().clone();
         if menu_item(ui, self.i18n.t("view.zen_mode"), &ctx.format_shortcut(&shortcuts::ZEN_MODE)) {
             self.toggle_zen_mode(&ctx);
+        }
+        let preview_label = self.i18n.t("view.markdown_preview");
+        let preview_shortcut = ctx.format_shortcut(&shortcuts::MARKDOWN_PREVIEW);
+        if ui
+            .add_enabled(
+                self.preview_available(),
+                egui::Button::new(preview_label)
+                    .selected(self.show_markdown_preview)
+                    .shortcut_text(preview_shortcut),
+            )
+            .clicked()
+        {
+            self.toggle_markdown_preview();
+            ui.close();
         }
         ui.separator();
         self.show_language_menu(ui);
@@ -530,6 +554,18 @@ impl TextEditorApp {
     }
 
     /// Enters or leaves zen mode: only the editor is shown, fullscreen.
+    /// Whether the active tab is a Markdown file the preview can show.
+    pub fn preview_available(&self) -> bool {
+        markdown_preview::is_markdown(self.active_tab().current_path.as_deref())
+    }
+
+    /// Shows or hides the Markdown preview. Does nothing on other files.
+    pub fn toggle_markdown_preview(&mut self) {
+        if self.preview_available() {
+            self.show_markdown_preview = !self.show_markdown_preview;
+        }
+    }
+
     pub fn toggle_zen_mode(&mut self, ctx: &egui::Context) {
         self.zen_mode = !self.zen_mode;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.zen_mode));
@@ -685,6 +721,7 @@ impl TextEditorApp {
             }
             ShortcutAction::GotoLine => self.open_goto(),
             ShortcutAction::ZenMode => self.toggle_zen_mode(ctx),
+            ShortcutAction::MarkdownPreview => self.toggle_markdown_preview(),
             ShortcutAction::FindInFiles => self.open_search(ctx),
             ShortcutAction::Find => self.open_find(ctx, false),
             ShortcutAction::Replace => self.open_find(ctx, true),
@@ -1352,6 +1389,21 @@ impl eframe::App for TextEditorApp {
             self.trigger_open_specific_file(path);
         }
 
+        // Markdown preview, right of the editor. Declared before the central
+        // panel so the editor takes whatever width is left.
+        if self.show_markdown_preview && self.preview_available() && !self.zen_mode {
+            let half = ui.available_width() / 2.0;
+            egui::Panel::right("markdown_preview")
+                .resizable(true)
+                .default_size(half)
+                .min_size(200.0)
+                .show(ui, |ui| {
+                    let too_large = self.i18n.t("preview.too_large");
+                    let text = &self.tabs[self.active_tab_index].text_content;
+                    self.markdown_preview.show(ui, text, too_large);
+                });
+        }
+
         // 4. Central Panel (Main Text Editor Area)
         // No margin and the active tab's colour, so the active tab and the
         // editor below it read as one surface, as in VS Code.
@@ -1801,6 +1853,7 @@ mod tests {
             (egui::Key::Tab, ctrl, ShortcutAction::NextTab),
             (egui::Key::Tab, ctrl_shift, ShortcutAction::PrevTab),
             (egui::Key::Q, ctrl, ShortcutAction::Exit),
+            (egui::Key::V, ctrl_shift, ShortcutAction::MarkdownPreview),
         ] {
             let mut got = None;
             let mut output = ctx.run_ui(press(key, mods), |ui| {
@@ -2869,6 +2922,57 @@ mod tests {
         assert_eq!(app.pending_action, None);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn markdown_app() -> TextEditorApp {
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().current_path = Some(PathBuf::from("notes.md"));
+        app.active_tab_mut().text_content = "# Title\n\nsome *text*".into();
+        app
+    }
+
+    #[test]
+    fn test_markdown_preview_toggles_only_on_markdown_tabs() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().current_path = Some(PathBuf::from("main.rs"));
+        assert!(!app.preview_available());
+        app.apply_shortcut(&ctx, ShortcutAction::MarkdownPreview);
+        assert!(!app.show_markdown_preview, "no preview for a non-Markdown tab");
+
+        let mut app = markdown_app();
+        assert!(app.preview_available());
+        app.apply_shortcut(&ctx, ShortcutAction::MarkdownPreview);
+        assert!(app.show_markdown_preview);
+        app.apply_shortcut(&ctx, ShortcutAction::MarkdownPreview);
+        assert!(!app.show_markdown_preview);
+    }
+
+    #[test]
+    fn test_markdown_preview_choice_survives_switching_tabs() {
+        let ctx = egui::Context::default();
+        let mut app = markdown_app();
+        app.apply_shortcut(&ctx, ShortcutAction::MarkdownPreview);
+        app.open_new_tab();
+        assert!(!app.preview_available(), "an untitled tab has no preview");
+        assert!(app.show_markdown_preview, "the choice is kept for the next .md tab");
+        app.active_tab_index = 0;
+        assert!(app.preview_available() && app.show_markdown_preview);
+    }
+
+    /// A whole frame with the preview open must run and leave the buffer alone.
+    #[test]
+    fn test_frame_with_markdown_preview_open_keeps_the_buffer() {
+        let ctx = egui::Context::default();
+        let mut app = markdown_app();
+        let original = app.active_tab().text_content.clone();
+        app.show_markdown_preview = true;
+        for _ in 0..2 {
+            run_frame_with_events(&ctx, Vec::new(), |ui| {
+                eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+            });
+        }
+        assert_eq!(app.active_tab().text_content, original);
     }
 
     #[test]

@@ -48,6 +48,8 @@
   "view.word_wrap": "Bungkus Baris",
   "view.line_numbers": "Nomor Baris",
   "view.zen_mode": "Mode Zen",
+  "view.markdown_preview": "Pratinjau Markdown",
+  "preview.too_large": "Dokumen terlalu besar untuk dipratinjau.",
 
   "help.about": "About",
 
