@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::activity_bar;
 use crate::file_browser::{self, Explorer};
 use crate::gutter;
-use crate::highlighter::{HighlighterLayouter, Language, SyntaxHighlighter};
+use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::i18n::{self, I18n};
 use crate::modals::{self, ModalResponse, PendingAction};
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
@@ -24,6 +24,8 @@ pub struct DocumentTab {
     pub current_path: Option<PathBuf>,
     pub active_language: Language,
     pub language_override: Option<Language>,
+    /// Line-by-line highlight state, so an edit only re-parses the lines it touched.
+    pub highlight_cache: DocumentHighlightCache,
 }
 
 impl Default for DocumentTab {
@@ -40,6 +42,7 @@ impl DocumentTab {
             current_path: None,
             active_language: Language::PlainText,
             language_override: None,
+            highlight_cache: DocumentHighlightCache::default(),
         }
     }
 
@@ -52,6 +55,7 @@ impl DocumentTab {
             current_path: Some(path),
             active_language,
             language_override: None,
+            highlight_cache: DocumentHighlightCache::default(),
         })
     }
 
@@ -1389,10 +1393,14 @@ impl eframe::App for TextEditorApp {
                         request,
                     );
                 } else {
-                    let mut layouter = self.highlighter.layouter(language, font_id);
+                    let tab = &mut self.tabs[active_idx];
+                    let mut layouter = self
+                        .highlighter
+                        .layouter(language, font_id)
+                        .with_document_cache(&mut tab.highlight_cache);
                     render_editor_with(
                         ui,
-                        &mut self.tabs[active_idx].text_content,
+                        &mut tab.text_content,
                         Some(&mut layouter),
                         word_wrap,
                         line_numbers,
@@ -2139,6 +2147,39 @@ mod tests {
             area.clamped_offset()
         );
         assert_eq!(text, original, "layouter must not alter the buffer");
+    }
+
+    /// A tab's own line cache is filled by the editor and survives edits and
+    /// other tabs, so only touched lines are re-parsed.
+    #[test]
+    fn test_tab_maintains_incremental_highlight_cache() {
+        let ctx = egui::Context::default();
+        let mut highlighter = SyntaxHighlighter::new();
+        let mut tab_a = DocumentTab::default_new();
+        let mut tab_b = DocumentTab::default_new();
+        tab_a.text_content = "fn one() {}\nfn two() {}".to_string();
+        tab_b.text_content = "fn other() {}".to_string();
+
+        let mut frame = |tab: &mut DocumentTab| {
+            run_frame_with_events(&ctx, Vec::new(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                    let mut layouter = highlighter
+                        .layouter(Language::Rust, font_id)
+                        .with_document_cache(&mut tab.highlight_cache);
+                    super::render_editor(ui, &mut tab.text_content, Some(&mut layouter), false, false, "");
+                });
+            });
+        };
+        frame(&mut tab_a);
+        frame(&mut tab_b);
+        assert_eq!(tab_a.highlight_cache.lines.len(), 2);
+        assert_eq!(tab_b.highlight_cache.lines.len(), 1);
+
+        tab_a.text_content = "fn one() {}\nfn two_edited() {}".to_string();
+        frame(&mut tab_a);
+        assert_eq!(tab_a.highlight_cache.lines[1].text, "fn two_edited() {}");
+        assert_eq!(tab_b.highlight_cache.lines[0].text, "fn other() {}");
     }
 
     /// Both branches of `render_editor` keep the buffer byte-identical.

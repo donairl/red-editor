@@ -149,6 +149,22 @@ pub struct DocumentHighlightCache {
     pub full_job: Option<Arc<egui::text::LayoutJob>>,
 }
 
+/// A cache never takes part in comparing the tab that owns it.
+impl PartialEq for DocumentHighlightCache {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for DocumentHighlightCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DocumentHighlightCache")
+            .field("language", &self.language)
+            .field("lines", &self.lines.len())
+            .finish()
+    }
+}
+
 /// A fully highlighted document together with the inputs that produced it.
 struct DocumentCache {
     language: Language,
@@ -231,6 +247,9 @@ impl SyntaxHighlighter {
     /// state after a re-highlighted line matches the cached one for the same
     /// unchanged trailing line, since everything after it would come out
     /// identical. A change of language or font rebuilds the whole cache.
+    // The runtime path goes through `HighlighterLayouter`, which borrows the
+    // grammars directly; only the tests call this method.
+    #[cfg(test)]
     pub fn highlight_incremental(
         &self,
         cache: &mut DocumentHighlightCache,
@@ -238,6 +257,21 @@ impl SyntaxHighlighter {
         font_id: &egui::FontId,
         text: &str,
     ) -> Arc<egui::text::LayoutJob> {
+        highlight_incremental_with(&self.syntax_set, &self.theme_set, cache, language, font_id, text)
+    }
+}
+
+/// [`SyntaxHighlighter::highlight_incremental`] over borrowed grammars, so the
+/// layouter can call it without holding the whole highlighter.
+fn highlight_incremental_with(
+    syntax_set: &SyntaxSet,
+    theme_set: &ThemeSet,
+    cache: &mut DocumentHighlightCache,
+    language: Language,
+    font_id: &egui::FontId,
+    text: &str,
+) -> Arc<egui::text::LayoutJob> {
+    {
         if cache.language != Some(language) || cache.font_id.as_ref() != Some(font_id) {
             cache.lines.clear();
             cache.full_job = None;
@@ -250,8 +284,8 @@ impl SyntaxHighlighter {
             return Arc::clone(job);
         }
 
-        let theme = pick_theme(&self.theme_set);
-        let syntax = pick_syntax(&self.syntax_set, language);
+        let theme = pick_theme(theme_set);
+        let syntax = pick_syntax(syntax_set, language);
         let highlighter = Highlighter::new(theme);
         let default_foreground = theme.settings.foreground;
         let default_format = egui::text::TextFormat {
@@ -293,7 +327,7 @@ impl SyntaxHighlighter {
                     break;
                 }
             }
-            let layout = match parse_state.parse_line(line, &self.syntax_set) {
+            let layout = match parse_state.parse_line(line, syntax_set) {
                 Ok(ops) => ranges_to_job(
                     HighlightIterator::new(&mut highlight_state, &ops, line, &highlighter),
                     default_foreground,
@@ -367,6 +401,9 @@ pub struct HighlighterLayouter<'a> {
     lines: HighlightLines<'a>,
     cache: &'a mut Option<DocumentCache>,
     pending: &'a mut Option<PendingHighlight>,
+    /// The open document's line cache. When set, small documents are
+    /// highlighted incrementally instead of from scratch after every edit.
+    document: Option<&'a mut DocumentHighlightCache>,
 }
 
 /// Builds a layout job from highlighted `(style, piece)` runs, leaving runs in
@@ -457,6 +494,13 @@ fn join_lines(
 }
 
 impl<'a> HighlighterLayouter<'a> {
+    /// Highlights small documents incrementally through `cache`, the line
+    /// cache of the document being edited.
+    pub fn with_document_cache(mut self, cache: &'a mut DocumentHighlightCache) -> Self {
+        self.document = Some(cache);
+        self
+    }
+
     /// The layout for one frame of the editor. Never blocks for long.
     ///
     /// Small documents are highlighted inline. Larger ones are highlighted on a
@@ -466,6 +510,16 @@ impl<'a> HighlighterLayouter<'a> {
     pub fn frame_job(&mut self, text: &str, ctx: &egui::Context) -> Arc<egui::text::LayoutJob> {
         if text.len() <= SYNC_HIGHLIGHT_LIMIT {
             *self.pending = None;
+            if let Some(document) = self.document.as_deref_mut() {
+                return highlight_incremental_with(
+                    self.syntax_set,
+                    self.theme_set,
+                    document,
+                    self.language,
+                    &self.default_format.font_id,
+                    text,
+                );
+            }
             return self.document_job(text);
         }
         if let Some(job) = self.cached(text) {
@@ -658,6 +712,7 @@ impl SyntaxHighlighter {
             lines: HighlightLines::new(syntax, theme),
             cache: &mut self.cache,
             pending: &mut self.pending,
+            document: None,
         }
     }
 }
