@@ -819,6 +819,16 @@ impl TextEditorApp {
     }
 
     pub fn save_tab(&mut self, index: usize) -> bool {
+        self.save_tab_with(index, pick_save_path)
+    }
+
+    /// [`Self::save_tab`] with the save dialog replaced by `pick_path`, which
+    /// returns `None` when the user cancels.
+    fn save_tab_with(
+        &mut self,
+        index: usize,
+        pick_path: impl FnOnce(&DocumentTab) -> Option<PathBuf>,
+    ) -> bool {
         if index >= self.tabs.len() {
             return false;
         }
@@ -836,7 +846,7 @@ impl TextEditorApp {
         } else {
             let old_idx = self.active_tab_index;
             self.active_tab_index = index;
-            let result = self.save_as();
+            let result = self.save_as_with(pick_path);
             self.active_tab_index = old_idx;
             result
         }
@@ -847,19 +857,11 @@ impl TextEditorApp {
     }
 
     pub fn save_as(&mut self) -> bool {
-        let active = self.active_tab();
-        let dialog = rfd::FileDialog::new();
-        let dialog = if let Some(ref path) = active.current_path {
-            if let Some(parent) = path.parent() {
-                dialog.set_directory(parent)
-            } else {
-                dialog
-            }
-        } else {
-            dialog
-        };
+        self.save_as_with(pick_save_path)
+    }
 
-        if let Some(path) = dialog.save_file() {
+    fn save_as_with(&mut self, pick_path: impl FnOnce(&DocumentTab) -> Option<PathBuf>) -> bool {
+        if let Some(path) = pick_path(self.active_tab()) {
             let text_to_save = self.active_tab().text_content.clone();
             match fs::write(&path, &text_to_save) {
                 Ok(_) => {
@@ -1008,6 +1010,17 @@ const HIGHLIGHT_SIZE_LIMIT: usize = 1024 * 1024;
 /// True when a document is too large to highlight cheaply.
 fn text_content_exceeds_highlight_limit(content: &str) -> bool {
     content.len() > HIGHLIGHT_SIZE_LIMIT
+}
+
+/// Asks the user where to save `tab`, starting in its current folder.
+/// `None` means the dialog was cancelled.
+fn pick_save_path(tab: &DocumentTab) -> Option<PathBuf> {
+    let dialog = rfd::FileDialog::new();
+    let dialog = match tab.current_path.as_ref().and_then(|path| path.parent()) {
+        Some(parent) => dialog.set_directory(parent),
+        None => dialog,
+    };
+    dialog.save_file()
 }
 
 /// Renders the multiline editor, optionally through a syntax highlighter.
@@ -1349,10 +1362,10 @@ impl eframe::App for TextEditorApp {
                 self.render_tab_bar(ui);
             }
 
-            if self.find.visible {
-                if let Some(action) = find::show_bar(ui, &mut self.find, &self.i18n) {
-                    self.apply_find_action(&ctx, action);
-                }
+            if self.find.visible
+                && let Some(action) = find::show_bar(ui, &mut self.find, &self.i18n)
+            {
+                self.apply_find_action(&ctx, action);
             }
             if self.goto.visible {
                 let lines = find::line_count(&self.active_tab().text_content);
@@ -2862,15 +2875,21 @@ mod tests {
     fn test_save_tab_restores_active_tab_index() {
         let mut app = TextEditorApp::default();
         app.open_new_tab();
+        app.tabs[0].text_content = "saved text".into();
         app.active_tab_index = 1;
 
-        let _saved = app.save_tab(0);
-        // Regardless of whether save_as succeeded or failed, active_tab_index must be restored!
+        // Cancelled dialog: nothing saved, active tab untouched.
+        assert!(!app.save_tab_with(0, |_| None));
         assert_eq!(app.active_tab_index, 1);
+        assert!(app.tabs[0].current_path.is_none());
 
-        // Clean up if a file was created by the dialog
-        if let Some(ref path) = app.tabs[0].current_path {
-            let _ = fs::remove_file(path);
-        }
+        // Confirmed dialog: the file is written to tab 0, active tab untouched.
+        let path = std::env::temp_dir().join(format!("red_save_tab_{}.rs", std::process::id()));
+        assert!(app.save_tab_with(0, |_| Some(path.clone())));
+        assert_eq!(app.active_tab_index, 1);
+        assert_eq!(app.tabs[0].current_path.as_deref(), Some(path.as_path()));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "saved text");
+        assert!(!app.tabs[0].is_dirty());
+        let _ = fs::remove_file(&path);
     }
 }
