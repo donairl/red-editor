@@ -222,6 +222,123 @@ impl SyntaxHighlighter {
     }
 }
 
+impl SyntaxHighlighter {
+    /// Highlights `text`, re-parsing only the lines an edit touched.
+    ///
+    /// `cache` holds the previous result with the parser state after every
+    /// line. Unchanged leading lines are kept as they are. Re-highlighting
+    /// resumes from the last preserved line and stops as soon as the parser
+    /// state after a re-highlighted line matches the cached one for the same
+    /// unchanged trailing line, since everything after it would come out
+    /// identical. A change of language or font rebuilds the whole cache.
+    pub fn highlight_incremental(
+        &self,
+        cache: &mut DocumentHighlightCache,
+        language: Language,
+        font_id: &egui::FontId,
+        text: &str,
+    ) -> Arc<egui::text::LayoutJob> {
+        if cache.language != Some(language) || cache.font_id.as_ref() != Some(font_id) {
+            cache.lines.clear();
+            cache.full_job = None;
+            cache.language = Some(language);
+            cache.font_id = Some(font_id.clone());
+        }
+        if let Some(job) = &cache.full_job
+            && job.text == text
+        {
+            return Arc::clone(job);
+        }
+
+        let theme = pick_theme(&self.theme_set);
+        let syntax = pick_syntax(&self.syntax_set, language);
+        let highlighter = Highlighter::new(theme);
+        let default_foreground = theme.settings.foreground;
+        let default_format = egui::text::TextFormat {
+            font_id: font_id.clone(),
+            ..Default::default()
+        };
+        let initial = (
+            ParseState::new(syntax),
+            HighlightState::new(&highlighter, ScopeStack::new()),
+        );
+
+        let new_lines: Vec<&str> = text.split('\n').collect();
+        let old = &cache.lines;
+        let max_common = new_lines.len().min(old.len());
+        let prefix = (0..max_common)
+            .take_while(|&i| old[i].text == new_lines[i])
+            .count();
+        let suffix = (0..max_common - prefix)
+            .take_while(|&k| old[old.len() - 1 - k].text == new_lines[new_lines.len() - 1 - k])
+            .count();
+        let suffix_start_new = new_lines.len() - suffix;
+        let suffix_start_old = old.len() - suffix;
+
+        // The state before old line `index`, i.e. after the line preceding it.
+        let state_before = |index: usize| match index.checked_sub(1) {
+            Some(prev) => (old[prev].parse_state.clone(), old[prev].highlight_state.clone()),
+            None => initial.clone(),
+        };
+
+        let (mut parse_state, mut highlight_state) = state_before(prefix);
+        let mut rebuilt = Vec::new();
+        let mut converged_at = None;
+        for (j, line) in new_lines.iter().enumerate().skip(prefix) {
+            if j >= suffix_start_new {
+                let o = suffix_start_old + (j - suffix_start_new);
+                let (old_parse, old_highlight) = state_before(o);
+                if parse_state == old_parse && highlight_state == old_highlight {
+                    converged_at = Some(o);
+                    break;
+                }
+            }
+            let layout = match parse_state.parse_line(line, &self.syntax_set) {
+                Ok(ops) => ranges_to_job(
+                    HighlightIterator::new(&mut highlight_state, &ops, line, &highlighter),
+                    default_foreground,
+                    &default_format,
+                ),
+                Err(_) => plain_line_job(line, &default_format),
+            };
+            rebuilt.push(LineHighlightCache {
+                text: (*line).to_owned(),
+                layout,
+                parse_state: parse_state.clone(),
+                highlight_state: highlight_state.clone(),
+            });
+        }
+
+        let tail = match converged_at {
+            Some(o) => cache.lines.split_off(o),
+            None => Vec::new(),
+        };
+        cache.lines.truncate(prefix);
+        cache.lines.extend(rebuilt);
+        cache.lines.extend(tail);
+
+        let mut job = egui::text::LayoutJob::default();
+        for (index, line) in cache.lines.iter().enumerate() {
+            if index > 0 {
+                job.append("\n", 0.0, default_format.clone());
+            }
+            let offset = job.text.len();
+            job.text.push_str(&line.layout.text);
+            for section in &line.layout.sections {
+                let mut section = section.clone();
+                section.byte_range.start += offset;
+                section.byte_range.end += offset;
+                job.sections.push(section);
+            }
+        }
+        job.wrap.max_width = f32::INFINITY;
+
+        let job = Arc::new(job);
+        cache.full_job = Some(Arc::clone(&job));
+        job
+    }
+}
+
 impl Default for SyntaxHighlighter {
     fn default() -> Self {
         Self::new()
@@ -252,6 +369,37 @@ pub struct HighlighterLayouter<'a> {
     pending: &'a mut Option<PendingHighlight>,
 }
 
+/// Builds a layout job from highlighted `(style, piece)` runs, leaving runs in
+/// the theme's default color unformatted.
+fn ranges_to_job<'s>(
+    ranges: impl IntoIterator<Item = (syntect::highlighting::Style, &'s str)>,
+    default_foreground: Option<syntect::highlighting::Color>,
+    default_format: &egui::text::TextFormat,
+) -> egui::text::LayoutJob {
+    let is_default = |color: syntect::highlighting::Color| {
+        default_foreground.is_some_and(|fg| fg.r == color.r && fg.g == color.g && fg.b == color.b)
+    };
+    let mut job = egui::text::LayoutJob::default();
+    for (style, piece) in ranges {
+        if is_default(style.foreground) {
+            job.append(piece, 0.0, default_format.clone());
+        } else {
+            job.append(
+                piece,
+                0.0,
+                egui::text::TextFormat {
+                    // egui::FontId is not Copy.
+                    font_id: default_format.font_id.clone(),
+                    color: color_to_egui(style.foreground),
+                    ..default_format.clone()
+                },
+            );
+        }
+    }
+    job.wrap.max_width = f32::INFINITY;
+    job
+}
+
 /// Highlights one line with an already-running parser state.
 ///
 /// A line the grammar cannot parse falls back to unformatted text rather than
@@ -263,35 +411,16 @@ fn highlight_line_with(
     default_format: &egui::text::TextFormat,
     line: &str,
 ) -> egui::text::LayoutJob {
-    let is_default = |color: syntect::highlighting::Color| {
-        default_foreground.is_some_and(|fg| fg.r == color.r && fg.g == color.g && fg.b == color.b)
-    };
-    let mut job = egui::text::LayoutJob::default();
-
     match lines.highlight_line(line, syntax_set) {
-        Ok(ranges) => {
-            for (style, piece) in ranges {
-                if is_default(style.foreground) {
-                    job.append(piece, 0.0, default_format.clone());
-                } else {
-                    job.append(
-                        piece,
-                        0.0,
-                        egui::text::TextFormat {
-                            // egui::FontId is not Copy.
-                            font_id: default_format.font_id.clone(),
-                            color: color_to_egui(style.foreground),
-                            ..default_format.clone()
-                        },
-                    );
-                }
-            }
-        }
-        Err(_) => {
-            job.append(line, 0.0, default_format.clone());
-        }
+        Ok(ranges) => ranges_to_job(ranges, default_foreground, default_format),
+        Err(_) => plain_line_job(line, default_format),
     }
+}
 
+/// An unformatted single-line job.
+fn plain_line_job(line: &str, default_format: &egui::text::TextFormat) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(line, 0.0, default_format.clone());
     job.wrap.max_width = f32::INFINITY;
     job
 }
@@ -538,6 +667,100 @@ mod tests {
     use eframe::egui;
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn test_incremental_highlight_preserves_unmodified_lines() {
+        let highlighter = SyntaxHighlighter::new();
+        let mut cache = DocumentHighlightCache::default();
+        let font_id = egui::FontId::monospace(14.0);
+        let doc1 = "fn foo() {}\nfn bar() {}\nfn baz() {}";
+        highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc1);
+        assert_eq!(cache.lines.len(), 3);
+
+        let doc2 = "fn foo() {}\nfn bar_modified() {}\nfn baz() {}";
+        let job2 = highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc2);
+        assert_eq!(job2.text, doc2);
+        assert_eq!(cache.lines[0].text, "fn foo() {}");
+        assert_eq!(cache.lines[1].text, "fn bar_modified() {}");
+        assert_eq!(cache.lines[2].text, "fn baz() {}");
+    }
+
+    #[test]
+    fn test_incremental_highlight_propagates_multiline_comment() {
+        let highlighter = SyntaxHighlighter::new();
+        let mut cache = DocumentHighlightCache::default();
+        let font_id = egui::FontId::monospace(14.0);
+        let doc1 = "let a = 1;\nlet b = 2;\nlet c = 3;";
+        highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc1);
+
+        let doc2 = "/* let a = 1;\nlet b = 2;\nlet c = 3; */";
+        let job2 = highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc2);
+        assert_eq!(job2.text, doc2);
+        assert_matches_full(&job2, doc2);
+    }
+
+    /// The incremental result must equal a from-scratch highlight.
+    fn assert_matches_full(job: &egui::text::LayoutJob, text: &str) {
+        let mut fresh = SyntaxHighlighter::new();
+        let font_id = egui::FontId::monospace(14.0);
+        let full = fresh.layouter(Language::Rust, font_id).document_job(text);
+        assert_eq!(job.text, full.text);
+        assert_eq!(job.sections.len(), full.sections.len(), "section count differs");
+        for (a, b) in job.sections.iter().zip(full.sections.iter()) {
+            assert_eq!(a.byte_range, b.byte_range);
+            assert_eq!(a.format.color, b.format.color);
+        }
+    }
+
+    #[test]
+    fn test_incremental_highlight_matches_full_across_edits() {
+        let highlighter = SyntaxHighlighter::new();
+        let mut cache = DocumentHighlightCache::default();
+        let font_id = egui::FontId::monospace(14.0);
+        let edits = [
+            "fn a() {}\nlet x = 1;\nlet y = \"s\";\n// end",
+            "fn a() {}\nlet x = 1;\nlet y = \"s\";\n// end\nfn z() {}",
+            "fn a() {}\n/* open\nlet x = 1;\nlet y = \"s\";\n// end\nfn z() {}",
+            "fn a() {}\n/* open */\nlet x = 1;\nlet y = \"s\";\n// end\nfn z() {}",
+            "let x = 1;\nlet y = \"s\";\n// end\nfn z() {}",
+            "",
+            "fn only() {}",
+        ];
+        for doc in edits {
+            let job = highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc);
+            assert_matches_full(&job, doc);
+            assert_eq!(cache.lines.len(), doc.split('\n').count());
+        }
+    }
+
+    #[test]
+    fn test_incremental_highlight_converges_without_touching_tail() {
+        let highlighter = SyntaxHighlighter::new();
+        let mut cache = DocumentHighlightCache::default();
+        let font_id = egui::FontId::monospace(14.0);
+        let doc1 = "let a = 1;\nlet b = 2;\nlet c = 3;";
+        highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc1);
+        // Tag the tail line's cached layout; a convergent edit must carry it over.
+        cache.lines[2].layout.wrap.max_rows = 7;
+
+        let doc2 = "let a = 1;\nlet bb = 22;\nlet c = 3;";
+        highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc2);
+        assert_eq!(cache.lines[2].layout.wrap.max_rows, 7, "tail line was re-highlighted");
+    }
+
+    #[test]
+    fn test_incremental_highlight_rebuilds_on_language_or_font_change() {
+        let highlighter = SyntaxHighlighter::new();
+        let mut cache = DocumentHighlightCache::default();
+        let font_id = egui::FontId::monospace(14.0);
+        let doc = "fn a() {}";
+        let rust = highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc);
+        let plain = highlighter.highlight_incremental(&mut cache, Language::PlainText, &font_id, doc);
+        assert!(rust.sections.len() > plain.sections.len());
+        let bigger = egui::FontId::monospace(20.0);
+        let job = highlighter.highlight_incremental(&mut cache, Language::PlainText, &bigger, doc);
+        assert_eq!(job.sections[0].format.font_id, bigger);
+    }
 
     #[test]
     fn test_line_highlight_cache_step() {
