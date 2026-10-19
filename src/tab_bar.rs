@@ -84,6 +84,7 @@ pub fn badge(language: Language) -> (&'static str, Option<Color32>) {
         Language::JavaScript => ("JS", Some(Color32::from_rgb(0xCB, 0xCB, 0x41))),
         Language::TypeScript => ("TS", Some(Color32::from_rgb(0x51, 0x9A, 0xBA))),
         Language::Html => ("<>", Some(Color32::from_rgb(0xE4, 0x4D, 0x26))),
+        Language::Css => ("#", Some(Color32::from_rgb(0x56, 0x4C, 0xE0))),
         Language::Json => ("{}", Some(Color32::from_rgb(0xCB, 0xB0, 0x41))),
         Language::Python => ("PY", Some(Color32::from_rgb(0x4B, 0x8B, 0xBE))),
         Language::Go => ("GO", Some(Color32::from_rgb(0x51, 0xA8, 0xDA))),

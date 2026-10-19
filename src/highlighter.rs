@@ -29,6 +29,7 @@ pub enum Language {
     /// Shares the `JavaScript` grammar: syntect bundles no TypeScript grammar.
     TypeScript,
     Html,
+    Css,
     Json,
     Markdown,
     Go,
@@ -51,6 +52,7 @@ impl Language {
             Language::JavaScript,
             Language::TypeScript,
             Language::Html,
+            Language::Css,
             Language::Json,
             Language::Markdown,
             Language::Go,
@@ -73,6 +75,7 @@ impl Language {
             "js" | "mjs" | "cjs" | "jsx" => Language::JavaScript,
             "ts" | "mts" | "cts" | "tsx" => Language::TypeScript,
             "html" | "htm" => Language::Html,
+            "css" => Language::Css,
             "json" | "jsonc" => Language::Json,
             "md" | "markdown" | "mdown" | "mkd" => Language::Markdown,
             "go" => Language::Go,
@@ -112,6 +115,7 @@ impl Language {
             Language::JavaScript => "JavaScript",
             Language::TypeScript => "TypeScript",
             Language::Html => "HTML",
+            Language::Css => "CSS",
             Language::Json => "JSON",
             Language::Markdown => "Markdown",
             Language::Go => "Go",
@@ -132,6 +136,7 @@ impl Language {
             Language::Php => "PHP",
             Language::JavaScript | Language::TypeScript => "JavaScript",
             Language::Html => "HTML",
+            Language::Css => "CSS",
             Language::Json => "JSON",
             Language::Markdown => "Markdown",
             Language::Go => "Go",
@@ -1047,6 +1052,8 @@ mod tests {
         assert_eq!(Language::from_extension("htm"), Language::Html);
         assert_eq!(Language::from_extension("json"), Language::Json);
         assert_eq!(Language::from_extension("jsonc"), Language::Json);
+        assert_eq!(Language::from_extension("css"), Language::Css);
+        assert_eq!(Language::from_extension("CSS"), Language::Css);
         assert_eq!(Language::from_extension("go"), Language::Go);
         for ext in ["py", "pyw", "pyi"] {
             assert_eq!(Language::from_extension(ext), Language::Python, "{ext}");
@@ -1143,6 +1150,7 @@ mod tests {
         assert_eq!(Language::Markdown.display_name(), "Markdown");
         assert_eq!(Language::Go.display_name(), "Go");
         assert_eq!(Language::Python.display_name(), "Python");
+        assert_eq!(Language::Css.display_name(), "CSS");
         assert_eq!(Language::Blade.display_name(), "Blade");
         assert_eq!(Language::Twig.display_name(), "Twig");
         assert_eq!(Language::Smarty.display_name(), "Smarty");
@@ -1150,7 +1158,7 @@ mod tests {
 
     #[test]
     fn test_all_lists_every_variant() {
-        assert_eq!(Language::all().len(), 15);
+        assert_eq!(Language::all().len(), 16);
     }
 
     #[test]
@@ -1584,6 +1592,23 @@ mod tests {
         let job = highlighter.highlight_incremental(&mut cache, Language::Python, &font_id, doc);
         assert_eq!(job.text, doc);
         assert!(cache.lines[1].layout.sections.len() > 1);
+    }
+
+    #[test]
+    fn test_css_is_coloured() {
+        let counts = section_counts(
+            Language::Css,
+            &[".card > a:hover {", "  color: #ff0000; margin: 0 auto; /* note */", "@media (min-width: 600px) {}"],
+        );
+        for (i, count) in counts.iter().enumerate() {
+            assert!(*count > 1, "CSS line {i} stayed a single plain section");
+        }
+    }
+
+    #[test]
+    fn test_css_block_comment_keeps_state_across_lines() {
+        let counts = section_counts(Language::Css, &["/* start", "a { color: red }", "end */"]);
+        assert_eq!(counts[1], 1, "comment state was lost between lines");
     }
 
     #[test]
