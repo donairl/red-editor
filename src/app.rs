@@ -597,19 +597,28 @@ impl TextEditorApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some((line, col)) = self.status_position {
                         let (line, col) = (line.to_string(), col.to_string());
-                        ui.label(self.i18n.tf("status.position", &[("line", &line), ("col", &col)]));
+                        ui.label(
+                            self.i18n
+                                .tf("status.position", &[("line", &line), ("col", &col)]),
+                        );
                     }
                     if self.status_bookmarks > 0 {
                         let count = self.status_bookmarks.to_string();
                         let color = gutter::GutterPalette::for_visuals(ui.visuals()).bookmark;
-                        let label = egui::RichText::new(self.i18n.tf("status.bookmarks", &[("count", &count)]))
-                            .small()
-                            .color(color);
+                        let label = egui::RichText::new(
+                            self.i18n.tf("status.bookmarks", &[("count", &count)]),
+                        )
+                        .small()
+                        .color(color);
                         let badge = egui::Button::new(label)
                             .stroke(egui::Stroke::new(1.0, color))
                             .corner_radius(8)
                             .selected(self.show_bookmarks);
-                        if ui.add(badge).on_hover_text(self.i18n.t("bookmark.show_list")).clicked() {
+                        if ui
+                            .add(badge)
+                            .on_hover_text(self.i18n.t("bookmark.show_list"))
+                            .clicked()
+                        {
                             self.show_bookmarks = !self.show_bookmarks;
                         }
                     }
@@ -742,7 +751,11 @@ impl TextEditorApp {
         let mut texts = tab.text_content.split('\n').zip(1..);
         tab.bookmarks
             .lines()
-            .filter_map(|line| texts.find(|&(_, n)| n == line).map(|(text, _)| (line, text)))
+            .filter_map(|line| {
+                texts
+                    .find(|&(_, n)| n == line)
+                    .map(|(text, _)| (line, text))
+            })
             .collect()
     }
 
@@ -1782,11 +1795,18 @@ fn render_editor_with(
 
         // Where the right-click menu was opened, for its bookmark item: the
         // click that opens it, a long touch included, records the spot.
-        if let (true, Some(id), Some(pointer)) =
-            (output.response.secondary_clicked(), id, ui.input(|i| i.pointer.interact_pos()))
-        {
-            let at = output.galley.cursor_from_pos(pointer - output.galley_pos).index.0;
-            ui.ctx().data_mut(|d| d.insert_temp(id.with(CONTEXT_CHAR), at));
+        if let (true, Some(id), Some(pointer)) = (
+            output.response.secondary_clicked(),
+            id,
+            ui.input(|i| i.pointer.interact_pos()),
+        ) {
+            let at = output
+                .galley
+                .cursor_from_pos(pointer - output.galley_pos)
+                .index
+                .0;
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(id.with(CONTEXT_CHAR), at));
         }
 
         let mut cursor_range = output.cursor_range;
@@ -2614,7 +2634,18 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(input, |ui| {
-                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None, &mut Bookmarks::default());
+                super::render_editor_with(
+                    ui,
+                    &mut text,
+                    None,
+                    false,
+                    false,
+                    "",
+                    Some(id),
+                    request.take().unwrap(),
+                    None,
+                    &mut Bookmarks::default(),
+                );
             });
             out.textures_delta.clear();
         };
@@ -2706,7 +2737,18 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(input, |ui| {
-                super::render_editor_with(ui, &mut text.borrow_mut(), None, false, false, "", Some(id), request.take().unwrap(), None, &mut Bookmarks::default());
+                super::render_editor_with(
+                    ui,
+                    &mut text.borrow_mut(),
+                    None,
+                    false,
+                    false,
+                    "",
+                    Some(id),
+                    request.take().unwrap(),
+                    None,
+                    &mut Bookmarks::default(),
+                );
             });
             out.textures_delta.clear();
         };
@@ -2736,7 +2778,18 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(input, |ui| {
-                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None, &mut Bookmarks::default());
+                super::render_editor_with(
+                    ui,
+                    &mut text,
+                    None,
+                    false,
+                    false,
+                    "",
+                    Some(id),
+                    request.take().unwrap(),
+                    None,
+                    &mut Bookmarks::default(),
+                );
             });
             out.textures_delta.clear();
         };
@@ -2776,7 +2829,18 @@ mod tests {
             };
             let mut editor = None;
             let mut out = ctx.run_ui(input, |ui| {
-                let (_, response) = super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None, &mut Bookmarks::default());
+                let (_, response) = super::render_editor_with(
+                    ui,
+                    &mut text,
+                    None,
+                    false,
+                    false,
+                    "",
+                    Some(id),
+                    request.take().unwrap(),
+                    None,
+                    &mut Bookmarks::default(),
+                );
                 response.context_menu(|ui| {
                     ui.label("menu");
                 });
@@ -3545,7 +3609,18 @@ mod tests {
                 app.show_status_bar(ui);
                 let text = &mut app.active_tab_mut().text_content;
                 let request = request.take().unwrap_or_default();
-                super::render_editor_with(ui, text, None, false, false, "", Some(id), request, None, &mut Bookmarks::default());
+                super::render_editor_with(
+                    ui,
+                    text,
+                    None,
+                    false,
+                    false,
+                    "",
+                    Some(id),
+                    request,
+                    None,
+                    &mut Bookmarks::default(),
+                );
             })
         };
         let key = |key| egui::Event::Key {
@@ -3618,7 +3693,10 @@ mod tests {
         };
 
         toggle_via_menu(&mut app, "Tambah Bookmark");
-        assert_eq!(app.active_tab().bookmarks.lines().collect::<Vec<_>>(), vec![2]);
+        assert_eq!(
+            app.active_tab().bookmarks.lines().collect::<Vec<_>>(),
+            vec![2]
+        );
         toggle_via_menu(&mut app, "Hapus Bookmark");
         assert_eq!(app.active_tab().bookmarks.len(), 0);
     }
@@ -3633,7 +3711,18 @@ mod tests {
         let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let request = EditorRequest::default();
-                super::render_editor_with(ui, &mut text, None, false, true, "", None, request, None, &mut bookmarks);
+                super::render_editor_with(
+                    ui,
+                    &mut text,
+                    None,
+                    false,
+                    true,
+                    "",
+                    None,
+                    request,
+                    None,
+                    &mut bookmarks,
+                );
             });
         });
         let color = crate::gutter::GutterPalette::for_visuals(&ctx.global_style().visuals).bookmark;
@@ -3646,7 +3735,10 @@ mod tests {
             .collect();
         assert_eq!(marks.len(), 1, "one bookmarked line");
         let (number, _) = painted_number(&shapes, 2).expect("line 2 numbered");
-        assert!((marks[0].center().y - number.center().y).abs() < 1.0, "level with line 2");
+        assert!(
+            (marks[0].center().y - number.center().y).abs() < 1.0,
+            "level with line 2"
+        );
         assert!(marks[0].right() < number.left());
     }
 
@@ -3662,10 +3754,28 @@ mod tests {
             let mut request = Some(request);
             run_frame_with_events(&ctx, events, |ui| {
                 let request = request.take().unwrap_or_default();
-                super::render_editor_with(ui, &mut text, None, false, true, "", Some(id), request, None, &mut bookmarks);
+                super::render_editor_with(
+                    ui,
+                    &mut text,
+                    None,
+                    false,
+                    true,
+                    "",
+                    Some(id),
+                    request,
+                    None,
+                    &mut bookmarks,
+                );
             });
         };
-        frame(Vec::new(), EditorRequest { focus: true, select: Some((0, 0)), ..Default::default() });
+        frame(
+            Vec::new(),
+            EditorRequest {
+                focus: true,
+                select: Some((0, 0)),
+                ..Default::default()
+            },
+        );
         let enter = egui::Event::Key {
             key: egui::Key::Enter,
             physical_key: None,
@@ -3693,19 +3803,27 @@ mod tests {
                 matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text().starts_with("Di-bookmark"))
             })
         };
-        assert!(!badge_shown(&status(&mut app, Vec::new())), "no badge without bookmarks");
+        assert!(
+            !badge_shown(&status(&mut app, Vec::new())),
+            "no badge without bookmarks"
+        );
 
         app.toggle_bookmark(1);
         app.toggle_bookmark(3);
         let mut state = egui::text_edit::TextEditState::default();
         state
             .cursor
-            .set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(2))));
+            .set_char_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new(2),
+            )));
         state.store(&ctx, app.editor_id());
         let shapes = status(&mut app, Vec::new());
         let (badge, _) = painted_text(&shapes, "Di-bookmark: 2").expect("badge");
         let (position, _) = painted_text(&shapes, "Baris 2, Kolom 1").expect("caret position");
-        assert!(badge.right() < position.left(), "the caret position stays rightmost");
+        assert!(
+            badge.right() < position.left(),
+            "the caret position stays rightmost"
+        );
 
         assert!(!app.show_bookmarks);
         status(&mut app, click_events(badge.center()));
@@ -3734,11 +3852,19 @@ mod tests {
         };
         // A window is sized, unseen, on its first frame.
         frame(&mut app, Vec::new());
-        let (row, _) = painted_text(&frame(&mut app, Vec::new()), "Baris 3: gamma").expect("row of line 3");
-        assert!(painted_text(&frame(&mut app, Vec::new()), "Baris 2: beta").is_some(), "text trimmed");
+        let (row, _) =
+            painted_text(&frame(&mut app, Vec::new()), "Baris 3: gamma").expect("row of line 3");
+        assert!(
+            painted_text(&frame(&mut app, Vec::new()), "Baris 2: beta").is_some(),
+            "text trimmed"
+        );
 
         frame(&mut app, click_events(row.center()));
-        assert_eq!(app.editor_request.goto, Some(13), "caret at the start of line 3");
+        assert_eq!(
+            app.editor_request.goto,
+            Some(13),
+            "caret at the start of line 3"
+        );
         assert!(app.show_bookmarks);
     }
 

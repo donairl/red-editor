@@ -5,6 +5,8 @@
 
 use std::collections::BTreeSet;
 
+/// The bookmarked lines of one document, with the text they were last
+/// checked against.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bookmarks {
     lines: BTreeSet<usize>,
@@ -30,10 +32,14 @@ impl Bookmarks {
         self.lines.insert(line)
     }
 
+    /// Whether `line` is bookmarked.
+    #[must_use]
     pub fn contains(&self, line: usize) -> bool {
         self.lines.contains(&line)
     }
 
+    /// Number of bookmarked lines.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.lines.len()
     }
@@ -105,6 +111,8 @@ fn follow_edit(lines: &BTreeSet<usize>, old: &str, new: &str) -> BTreeSet<usize>
             Some(if start < prefix {
                 bookmark
             } else if start >= old_end {
+                // No underflow: a line starting at or after `old_end` is at
+                // least `old_last`.
                 bookmark + new_last - old_last
             } else {
                 bookmark.min(new_last)
@@ -139,7 +147,11 @@ mod tests {
         assert!(bookmarks.toggle(1, "a\nb\nc"));
         assert!(bookmarks.contains(2));
         assert_eq!(bookmarks.len(), 2);
-        assert_eq!(bookmarks.lines().collect::<Vec<_>>(), vec![1, 2], "top to bottom");
+        assert_eq!(
+            bookmarks.lines().collect::<Vec<_>>(),
+            vec![1, 2],
+            "top to bottom"
+        );
 
         assert!(!bookmarks.toggle(2, "a\nb\nc"));
         assert!(!bookmarks.contains(2));
