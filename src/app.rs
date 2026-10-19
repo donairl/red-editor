@@ -488,16 +488,7 @@ impl TextEditorApp {
             self.send_editor_key(egui::Key::Y);
         }
         ui.separator();
-        if item(ui, self.i18n.t("edit.cut"), &shortcuts::CUT) {
-            self.cut_selection(ctx);
-        }
-        if item(ui, self.i18n.t("edit.copy"), &shortcuts::COPY) {
-            self.copy_selection(ctx);
-        }
-        if item(ui, self.i18n.t("edit.paste"), &shortcuts::PASTE) {
-            self.editor_request.focus = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-        }
+        self.show_clipboard_items(ui, ctx);
         ui.separator();
         if item(ui, self.i18n.t("edit.find"), &shortcuts::FIND) {
             self.open_find(ctx, false);
@@ -524,6 +515,34 @@ impl TextEditorApp {
             self.prettify_document();
             ui.close();
         }
+    }
+
+    /// Cut, Copy and Paste, shared by the Edit menu and the editor's
+    /// right-click menu.
+    fn show_clipboard_items(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
+            menu_item(ui, label, &ctx.format_shortcut(shortcut))
+        };
+        if item(ui, self.i18n.t("edit.cut"), &shortcuts::CUT) {
+            self.cut_selection(ctx);
+        }
+        if item(ui, self.i18n.t("edit.copy"), &shortcuts::COPY) {
+            self.copy_selection(ctx);
+        }
+        if item(ui, self.i18n.t("edit.paste"), &shortcuts::PASTE) {
+            self.paste_clipboard(ctx);
+        }
+    }
+
+    /// The editor's right-click menu. Opening it takes the focus like a click
+    /// on the menu bar: the selection stays painted, and the editor gets both
+    /// back when the menu closes.
+    fn show_editor_context_menu(&mut self, ctx: &egui::Context, editor: &egui::Response) {
+        if editor.secondary_clicked() && ctx.memory(|m| m.has_focus(editor.id)) {
+            self.menu_focus = Some(editor.id);
+            ctx.memory_mut(|m| m.surrender_focus(editor.id));
+        }
+        editor.context_menu(|ui| self.show_clipboard_items(ui, ctx));
     }
 
     /// Re-indents the active document in place, reporting the outcome in the
@@ -608,6 +627,13 @@ impl TextEditorApp {
             ctx.data_mut(|d| d.remove::<find::Range>(self.saved_selection_id()));
         }
         self.editor_request.focus = true;
+    }
+
+    /// Edit > Paste: the editor pastes at the caret, over the selection once
+    /// it is restored (see [`Self::return_focus_after_menu`]).
+    fn paste_clipboard(&mut self, ctx: &egui::Context) {
+        self.editor_request.focus = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
     }
 
     /// Notes that a click on the menu bar (`menu_bar`) took the focus from
@@ -1248,7 +1274,8 @@ fn selection_rects(galley: &egui::Galley, (start, end): find::Range) -> Vec<egui
 }
 
 /// [`render_editor`] with a fixed widget `id` (so the app can find the
-/// editor's state) and a one-shot `request` to act on.
+/// editor's state) and a one-shot `request` to act on. Also returns the
+/// editor's response, for its right-click menu.
 #[allow(clippy::too_many_arguments)]
 fn render_editor_with(
     ui: &mut egui::Ui,
@@ -1260,7 +1287,7 @@ fn render_editor_with(
     id: Option<egui::Id>,
     request: EditorRequest,
     scroll_to: Option<f32>,
-) -> ScrollPos {
+) -> (ScrollPos, egui::Response) {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
     } else {
@@ -1331,6 +1358,15 @@ fn render_editor_with(
             }
         }
 
+        // egui moves the caret to any press, a right one included; a
+        // right-click inside the selection must keep it for the menu.
+        let right_press = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary));
+        let before_press = id
+            .filter(|_| right_press)
+            .and_then(|id| egui::TextEdit::load_state(ui.ctx(), id))
+            .and_then(|state| state.cursor.char_range())
+            .filter(|range| !range.is_empty());
+
         // Reserved before `show` so the selection is painted under the text.
         let inactive_shape = request
             .inactive_selection
@@ -1386,11 +1422,25 @@ fn render_editor_with(
             gutter::paint(ui, &output, &font_id, width);
         }
 
+        let mut cursor_range = output.cursor_range;
+        if let (Some(before), Some(id), Some(pointer)) =
+            (before_press, id, ui.input(|i| i.pointer.interact_pos()))
+        {
+            let at = output.galley.cursor_from_pos(pointer - output.galley_pos).index.0;
+            let (a, b) = (before.primary.index.0, before.secondary.index.0);
+            if output.response.contains_pointer() && (a.min(b)..=a.max(b)).contains(&at) {
+                let mut state = output.state.clone();
+                state.cursor.set_char_range(Some(before));
+                state.store(ui.ctx(), id);
+                cursor_range = Some(before);
+                ui.ctx().request_repaint();
+            }
+        }
+
         // Remembered while focused: a click on a menu takes the focus, and
         // from the next frame egui keeps only the caret.
         if let (Some(id), true) = (id, output.response.has_focus()) {
-            let saved: Option<find::Range> = output
-                .cursor_range
+            let saved: Option<find::Range> = cursor_range
                 .map(|r| {
                     let (a, b) = (r.primary.index.0, r.secondary.index.0);
                     (a.min(b), a.max(b))
@@ -1446,8 +1496,9 @@ fn render_editor_with(
         if let Some(rect) = request.reveal.and_then(span) {
             ui.scroll_to_rect(rect, None);
         }
+        output.response.response.clone()
     });
-    ScrollPos::of(&output)
+    (ScrollPos::of(&output), output.inner)
 }
 
 impl eframe::App for TextEditorApp {
@@ -1669,10 +1720,9 @@ impl eframe::App for TextEditorApp {
             let language = self.tabs[active_idx].effective_language();
 
             let scroll_to = if previewing { self.scroll_sync.take_editor_offset() } else { None };
-            let mut editor_pos = ScrollPos::default();
-            ui.push_id(self.active_tab_index, |ui| {
+            let (editor_pos, editor) = ui.push_id(self.active_tab_index, |ui| {
                 if too_large {
-                    editor_pos = render_editor_with(
+                    render_editor_with(
                         ui,
                         &mut self.tabs[active_idx].text_content,
                         None,
@@ -1682,14 +1732,14 @@ impl eframe::App for TextEditorApp {
                         Some(editor_id),
                         request,
                         scroll_to,
-                    );
+                    )
                 } else {
                     let tab = &mut self.tabs[active_idx];
                     let mut layouter = self
                         .highlighter
                         .layouter(language, font_id)
                         .with_document_cache(&mut tab.highlight_cache);
-                    editor_pos = render_editor_with(
+                    render_editor_with(
                         ui,
                         &mut tab.text_content,
                         Some(&mut layouter),
@@ -1699,9 +1749,11 @@ impl eframe::App for TextEditorApp {
                         Some(editor_id),
                         request,
                         scroll_to,
-                    );
+                    )
                 }
-            });
+            })
+            .inner;
+            self.show_editor_context_menu(&ctx, &editor);
             match preview_pos {
                 Some(preview_pos) => self.scroll_sync.observe(editor_pos, preview_pos),
                 None => self.scroll_sync.reset(),
@@ -2291,6 +2343,62 @@ mod tests {
 
         frame(EditorRequest { focus: true, select: saved, ..Default::default() });
         assert_eq!(selection(&ctx), Some((0, 5)), "the selection is back");
+    }
+
+    /// Right-clicks `char` index `at` of "hello world", selected `(0, 5)`,
+    /// and returns the selection afterwards and whether the menu opened.
+    fn right_click_selected_editor(at: f32) -> (find::Range, bool) {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique(("editor", 0));
+        let mut text = "hello world".to_owned();
+        let mut frame = |events: Vec<egui::Event>, request: EditorRequest| {
+            let mut request = Some(request);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let mut editor = None;
+            let mut out = ctx.run_ui(input, |ui| {
+                let (_, response) = super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None);
+                response.context_menu(|ui| {
+                    ui.label("menu");
+                });
+                editor = Some(response);
+            });
+            out.textures_delta.clear();
+            editor.unwrap()
+        };
+        let editor = frame(Vec::new(), EditorRequest { focus: true, select: Some((0, 5)), ..Default::default() });
+        frame(Vec::new(), EditorRequest::default());
+
+        let font_id = egui::TextStyle::Monospace.resolve(&ctx.global_style());
+        let char_width = ctx.fonts_mut(|f| f.glyph_width(&font_id, 'a'));
+        // The editor's inner margin is 8 points left and 6 on top.
+        let pos = editor.rect.min + egui::vec2(8.0 + at * char_width, 10.0);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(pos), button(true)], EditorRequest::default());
+        let editor = frame(vec![button(false)], EditorRequest::default());
+        assert!(editor.secondary_clicked());
+
+        let range = egui::TextEdit::load_state(&ctx, id).unwrap().cursor.char_range().unwrap();
+        let (a, b) = (range.primary.index.0, range.secondary.index.0);
+        ((a.min(b), a.max(b)), egui::Popup::is_any_open(&ctx))
+    }
+
+    #[test]
+    fn test_right_click_inside_the_selection_keeps_it() {
+        assert_eq!(right_click_selected_editor(2.5), ((0, 5), true));
+    }
+
+    #[test]
+    fn test_right_click_outside_the_selection_moves_the_caret() {
+        assert_eq!(right_click_selected_editor(8.0), ((8, 8), true));
     }
 
     /// An app whose editor lost `range` of "hello world" to a menu click.
