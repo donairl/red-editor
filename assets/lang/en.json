@@ -57,6 +57,7 @@
   "view.console": "Console",
   "preview.too_large": "Document too large to preview.",
 
+  "help.home": "Home",
   "help.about": "About",
 
   "toolbar.characters": "Characters: {count}",

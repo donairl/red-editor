@@ -57,6 +57,7 @@
   "view.console": "Consola",
   "preview.too_large": "Documento demasiado grande para la vista previa.",
 
+  "help.home": "Inicio",
   "help.about": "Acerca de",
 
   "toolbar.characters": "Caracteres: {count}",

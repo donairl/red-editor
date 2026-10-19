@@ -21,6 +21,9 @@ use crate::terminal::{self, Terminal};
 /// Storage key under which eframe remembers the interface language.
 const UI_LANGUAGE_KEY: &str = "ui_language";
 
+/// The project page, opened by Help > Home.
+const HOME_URL: &str = "https://github.com/donairl/red-editor/";
+
 /// Seconds between checks for open files changed by other programs.
 const DISK_CHECK_SECS: f64 = 2.0;
 
@@ -529,6 +532,17 @@ impl TextEditorApp {
                 }
             }
         });
+    }
+
+    pub fn show_help_menu(&mut self, ui: &mut egui::Ui) {
+        if ui.button(self.i18n.t("help.home")).clicked() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(HOME_URL));
+            ui.close();
+        }
+        if ui.button(self.i18n.t("help.about")).clicked() {
+            self.show_about_modal = true;
+            ui.close();
+        }
     }
 
     /// The document name and the latest status message, and the caret's
@@ -1824,10 +1838,7 @@ impl eframe::App for TextEditorApp {
 
                 // Menu Help
                 ui.menu_button(help, |ui| {
-                    if ui.button(self.i18n.t("help.about")).clicked() {
-                        self.show_about_modal = true;
-                        ui.close();
-                    }
+                    self.show_help_menu(ui);
                 });
 
 
@@ -3437,6 +3448,45 @@ mod tests {
         assert!(painted_text(&shapes, "Baris 2, Kolom 3").is_some(), "down arrow");
         let shapes = step(&mut app, vec![key(egui::Key::ArrowRight)], EditorRequest::default());
         assert!(painted_text(&shapes, "Baris 2, Kolom 4").is_some(), "right arrow");
+    }
+
+    /// Help > Home opens the project page in the browser.
+    #[test]
+    fn test_help_home_opens_the_project_page() {
+        let mut app = TextEditorApp::default();
+        let ctx = egui::Context::default();
+        let frame = |app: &mut TextEditorApp, events| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.show_help_menu(ui));
+            output.textures_delta.clear();
+            output
+        };
+        let home = frame(&mut app, Vec::new())
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Beranda" => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .expect("Home item");
+        let output = frame(&mut app, click_events(home.center()));
+        let opened: Vec<&str> = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::OpenUrl(open) => Some(open.url.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(opened, ["https://github.com/donairl/red-editor/"]);
+        assert!(!app.show_about_modal, "Home is not About");
     }
 
     #[test]

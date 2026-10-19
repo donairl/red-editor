@@ -57,6 +57,7 @@
   "view.console": "控制台",
   "preview.too_large": "文档过大，无法预览。",
 
+  "help.home": "主页",
   "help.about": "关于",
 
   "toolbar.characters": "字符数：{count}",
