@@ -149,6 +149,8 @@ pub struct EditorRequest {
     pub key: Option<egui::Key>,
     /// Put the caret at this `char` index and scroll to it.
     pub goto: Option<usize>,
+    /// Select this `char` range (restores a selection after a menu click).
+    pub select: Option<find::Range>,
     /// Scroll this `char` range into view.
     pub reveal: Option<find::Range>,
     /// Paint this `char` range as the current find match. Set every frame.
@@ -479,12 +481,10 @@ impl TextEditorApp {
         }
         ui.separator();
         if item(ui, self.i18n.t("edit.cut"), &shortcuts::CUT) {
-            self.editor_request.focus = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestCut);
+            self.cut_selection(ctx);
         }
         if item(ui, self.i18n.t("edit.copy"), &shortcuts::COPY) {
-            self.editor_request.focus = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestCopy);
+            self.copy_selection(ctx);
         }
         if item(ui, self.i18n.t("edit.paste"), &shortcuts::PASTE) {
             self.editor_request.focus = true;
@@ -543,16 +543,57 @@ impl TextEditorApp {
         self.editor_request.key = Some(key);
     }
 
+    fn saved_selection_id(&self) -> egui::Id {
+        self.editor_id().with("saved_selection")
+    }
+
     fn editor_id(&self) -> egui::Id {
         egui::Id::unique(("editor", self.active_tab_index))
     }
 
     /// The editor's selection as sorted `char` indices, or just the caret.
     fn editor_selection(&self, ctx: &egui::Context) -> Option<find::Range> {
+        // egui collapses the selection while the editor lacks focus (a menu
+        // is open), so prefer the one remembered from the last focused frame.
+        if let Some(range) = ctx.data(|d| d.get_temp::<find::Range>(self.saved_selection_id())) {
+            return Some(range);
+        }
         let state = egui::TextEdit::load_state(ctx, self.editor_id())?;
         let range = state.cursor.char_range()?;
         let (a, b) = (range.primary.index.0, range.secondary.index.0);
         Some((a.min(b), a.max(b)))
+    }
+
+    /// The selected text, if any. Read from the remembered selection: opening
+    /// a menu takes focus off the editor, so the editor cannot answer a copy.
+    fn selected_text(&self, ctx: &egui::Context) -> Option<(find::Range, String)> {
+        let (a, b) = self.editor_selection(ctx).filter(|(a, b)| a < b)?;
+        let text = self.active_tab().text_content.chars().skip(a).take(b - a).collect();
+        Some(((a, b), text))
+    }
+
+    /// Edit > Copy: puts the selection on the clipboard and returns focus to
+    /// the editor with the selection restored.
+    fn copy_selection(&mut self, ctx: &egui::Context) {
+        if let Some((range, text)) = self.selected_text(ctx) {
+            ctx.copy_text(text);
+            self.editor_request.select = Some(range);
+        }
+        self.editor_request.focus = true;
+    }
+
+    /// Edit > Cut: copies the selection, then deletes it.
+    fn cut_selection(&mut self, ctx: &egui::Context) {
+        if let Some(((a, b), text)) = self.selected_text(ctx) {
+            ctx.copy_text(text);
+            let content = &mut self.active_tab_mut().text_content;
+            let start = content.char_indices().nth(a).map_or(content.len(), |(i, _)| i);
+            let end = content.char_indices().nth(b).map_or(content.len(), |(i, _)| i);
+            content.replace_range(start..end, "");
+            self.editor_request.goto = Some(a);
+            ctx.data_mut(|d| d.remove::<find::Range>(self.saved_selection_id()));
+        }
+        self.editor_request.focus = true;
     }
 
     /// Opens the find bar, seeded with a one-line selection, if any.
@@ -1253,6 +1294,37 @@ fn render_editor_with(
 
         if let Some(width) = gutter_width {
             gutter::paint(ui, &output, &font_id, width);
+        }
+
+        if let (Some(id), true) = (id, output.response.has_focus()) {
+            let saved = output
+                .cursor_range
+                .map(|r| {
+                    let (a, b) = (r.primary.index, r.secondary.index);
+                    (a.min(b), a.max(b))
+                })
+                .filter(|(a, b)| a < b);
+            ui.ctx().data_mut(|d| {
+                let key = id.with("saved_selection");
+                match saved {
+                    Some(range) => {
+                        d.insert_temp(key, range);
+                    }
+                    None => {
+                        d.remove::<find::Range>(key);
+                    }
+                }
+            });
+        }
+
+        if let (Some(range), Some(id)) = (request.select, id) {
+            let mut state = output.state.clone();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(range.0),
+                egui::text::CCursor::new(range.1),
+            )));
+            state.store(ui.ctx(), id);
+            ui.ctx().request_repaint();
         }
 
         if let (Some(index), Some(id)) = (request.goto, id) {
