@@ -42,7 +42,7 @@
   "msg.replaced": "{count} diganti.",
   "msg.prettified": "Dokumen dirapikan.",
   "msg.prettify_failed": "Gagal merapikan: {error}",
-  "msg.prettify_unsupported": "Prettify hanya mendukung JSON dan HTML.",
+  "msg.prettify_unsupported": "Prettify mendukung JSON, HTML, dan bahasa dengan formatter terpasang (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Buka File...",
   "file.open_folder": "Buka Folder...",
   "file.save": "Simpan",

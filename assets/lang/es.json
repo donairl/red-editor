@@ -42,7 +42,7 @@
   "msg.replaced": "{count} reemplazados.",
   "msg.prettified": "Documento formateado.",
   "msg.prettify_failed": "No se puede formatear: {error}",
-  "msg.prettify_unsupported": "Embellecer solo admite JSON y HTML.",
+  "msg.prettify_unsupported": "Embellecer admite JSON, HTML y lenguajes con formateador instalado (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Abrir archivo...",
   "file.open_folder": "Abrir carpeta...",
   "file.save": "Guardar",

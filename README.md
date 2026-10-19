@@ -19,7 +19,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Unsaved changes confirmation** when closing tabs or quitting the application.
 - **Multilingual interface** (English, Indonesian, Spanish, German, Chinese, and additional languages via JSON files). Select via **View → Interface Language**; preference is persisted across restarts. See [Adding interface languages](#adding-interface-languages).
 - **Zen Mode** (`F11`): Distraction-free full-screen mode showing only the editor; press `Esc` to exit.
-- **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON and HTML documents in place.
+- **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON and HTML in place, and Rust, Go, C/C++, Python and JS/TS through the installed formatter (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Markdown preview** (`Ctrl+Shift+V`): rendered preview of `.md` files in a live split view beside the editor.
 - System light/dark theme detection.
 
@@ -126,7 +126,7 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+B` | Toggle sidebar |
 | `F11` | Zen mode (full screen, editor only); `Esc` to exit |
 | `Ctrl+Shift+V` | Toggle Markdown preview (`.md` files) |
-| `Ctrl+Shift+I` | Prettify the document (JSON, HTML) |
+| `Ctrl+Shift+I` | Prettify the document |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` or `Ctrl+Shift+Z` | Redo |
@@ -186,7 +186,7 @@ Source structure:
 | `src/app.rs` | Application state, menus, panels, editor |
 | `src/tab_bar.rs` | VS Code-style tab strip |
 | `src/gutter.rs` | Line number gutter |
-| `src/prettify.rs` | Prettify: JSON and HTML re-indenting |
+| `src/prettify.rs` | Prettify: JSON/HTML in-process, other languages via external formatters |
 | `src/find.rs` | Find/replace, find bar, and Go to Line bar |
 | `src/search.rs` | Find in Files: directory search and results panel |
 | `src/highlighter.rs` | Syntax highlighting (syntect) |

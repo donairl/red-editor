@@ -1,6 +1,15 @@
-//! Re-indents a document: JSON and HTML.
+//! Re-indents a document: JSON and HTML in-process, other languages through
+//! the formatter installed on the machine (`rustfmt`, `gofmt`, ...).
+
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use crate::highlighter::Language;
+
+/// How long an external formatter may run before it is given up on.
+const EXTERNAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 const INDENT: &str = "  ";
 
@@ -14,7 +23,21 @@ const VOID_ELEMENTS: [&str; 14] = [
 
 /// Whether [`prettify`] knows how to format `language`.
 pub fn supports(language: Language) -> bool {
-    matches!(language, Language::Json | Language::Html)
+    matches!(language, Language::Json | Language::Html) || !formatters(language).is_empty()
+}
+
+/// External formatters for `language`, best first. Each reads the document
+/// on stdin and writes the result to stdout.
+fn formatters(language: Language) -> &'static [&'static [&'static str]] {
+    match language {
+        Language::Rust => &[&["rustfmt", "--edition", "2024"]],
+        Language::Go => &[&["gofmt"]],
+        Language::C | Language::Cpp => &[&["clang-format"]],
+        Language::Python => &[&["ruff", "format", "-"], &["black", "-q", "-"]],
+        Language::JavaScript => &[&["prettier", "--stdin-filepath", "file.js"]],
+        Language::TypeScript => &[&["prettier", "--stdin-filepath", "file.ts"]],
+        _ => &[],
+    }
 }
 
 /// The re-indented `text`, or why it could not be formatted.
@@ -22,8 +45,68 @@ pub fn prettify(language: Language, text: &str) -> Result<String, String> {
     match language {
         Language::Json => json(text),
         Language::Html => Ok(html(text)),
-        _ => Err("unsupported language".to_owned()),
+        _ => external(language, text),
     }
+}
+
+/// Runs the first installed formatter for `language` over `text`.
+fn external(language: Language, text: &str) -> Result<String, String> {
+    let candidates = formatters(language);
+    if candidates.is_empty() {
+        return Err("unsupported language".to_owned());
+    }
+    for argv in candidates {
+        match run_formatter(argv, text) {
+            Err(RunError::NotInstalled) => continue,
+            Err(RunError::Failed(message)) => return Err(message),
+            Ok(out) => return Ok(out),
+        }
+    }
+    let names: Vec<&str> = candidates.iter().map(|argv| argv[0]).collect();
+    Err(format!("{} not installed", names.join(" / ")))
+}
+
+enum RunError {
+    NotInstalled,
+    Failed(String),
+}
+
+fn run_formatter(argv: &[&str], text: &str) -> Result<String, RunError> {
+    let mut child = Command::new(argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => RunError::NotInstalled,
+            _ => RunError::Failed(format!("{}: {e}", argv[0])),
+        })?;
+    let mut stdin = child.stdin.take().expect("stdin was piped");
+    let input = text.to_owned();
+    // Feed stdin from a thread so a formatter that writes before it has read
+    // everything cannot deadlock on full pipes.
+    std::thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+    let (tx, rx) = mpsc::channel();
+    let pid = child.id();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    let output = match rx.recv_timeout(EXTERNAL_TIMEOUT) {
+        Ok(result) => result.map_err(|e| RunError::Failed(format!("{}: {e}", argv[0])))?,
+        Err(_) => {
+            let _ = Command::new("kill").arg(pid.to_string()).status();
+            return Err(RunError::Failed(format!("{} timed out", argv[0])));
+        }
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let first = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("failed");
+        return Err(RunError::Failed(format!("{}: {first}", argv[0])));
+    }
+    String::from_utf8(output.stdout).map_err(|e| RunError::Failed(format!("{}: {e}", argv[0])))
 }
 
 /// Pretty-prints JSON without reordering keys or touching number and string
@@ -242,7 +325,28 @@ mod tests {
 
     #[test]
     fn test_unsupported_language() {
-        assert!(!supports(Language::Rust));
-        assert!(prettify(Language::Rust, "fn main(){}").is_err());
+        assert!(!supports(Language::PlainText));
+        assert!(prettify(Language::PlainText, "x").is_err());
+    }
+
+    fn installed(tool: &str) -> bool {
+        Command::new(tool).arg("--version").output().is_ok()
+    }
+
+    #[test]
+    fn test_rust_uses_rustfmt() {
+        if !installed("rustfmt") {
+            return;
+        }
+        assert_eq!(prettify(Language::Rust, "fn main(){let x=1;}").unwrap(), "fn main() {\n    let x = 1;\n}\n");
+    }
+
+    #[test]
+    fn test_external_syntax_error_reports_tool() {
+        if !installed("rustfmt") {
+            return;
+        }
+        let err = prettify(Language::Rust, "fn main( {").unwrap_err();
+        assert!(err.starts_with("rustfmt:"), "{err}");
     }
 }

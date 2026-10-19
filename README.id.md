@@ -19,7 +19,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Konfirmasi perubahan belum disimpan** saat menutup tab atau keluar dari aplikasi.
 - **Multi bahasa antarmuka** (Indonesia, English, Español, Deutsch, 中文, dan bahasa lain lewat file JSON). Pilih di **Tampilan → Bahasa Antarmuka**; pilihan diingat saat aplikasi dibuka lagi. Lihat [Menambah bahasa antarmuka](#menambah-bahasa-antarmuka).
 - **Zen mode** (`F11`): mode layar penuh tanpa gangguan, sembunyikan semua panel selain editor; tekan `Esc` untuk keluar.
-- **Prettify** (**Edit → Rapikan**, `Ctrl+Shift+I`): merapikan indentasi dokumen JSON dan HTML langsung di editor.
+- **Prettify** (**Edit → Rapikan**, `Ctrl+Shift+I`): merapikan JSON dan HTML langsung di editor, serta Rust, Go, C/C++, Python, JS/TS lewat formatter yang terpasang (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Pratinjau Markdown** (`Ctrl+Shift+V`): hasil render file `.md` dalam tampilan terbelah langsung di samping editor.
 - Tema terang/gelap mengikuti pengaturan sistem.
 
@@ -126,7 +126,7 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | `Ctrl+B` | Tampilkan/sembunyikan sidebar |
 | `F11` | Zen mode (layar penuh, hanya editor); `Esc` untuk keluar |
 | `Ctrl+Shift+V` | Tampilkan/sembunyikan pratinjau Markdown (file `.md`) |
-| `Ctrl+Shift+I` | Rapikan dokumen (JSON, HTML) |
+| `Ctrl+Shift+I` | Rapikan dokumen |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Tab berikutnya / sebelumnya |
 | `Ctrl+Z` | Urungkan |
 | `Ctrl+Y` atau `Ctrl+Shift+Z` | Ulangi |
