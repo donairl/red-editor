@@ -62,6 +62,7 @@
   "toolbar.characters": "Karakter: {count}",
   "status.document": "Dokumen: {name}{modified}",
   "status.modified": " [diubah]",
+  "status.position": "Baris {line}, Kolom {col}",
 
   "doc.untitled": "[Dokumen Baru]",
   "editor.placeholder": "Ketik sesuatu di sini...",

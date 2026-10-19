@@ -107,6 +107,14 @@ pub fn line_start(text: &str, line: usize) -> usize {
         .sum()
 }
 
+/// 1-based line and column of the `char` index `at`, clamped to the end of
+/// `text`. Columns count `char`s.
+pub fn line_col(text: &str, at: usize) -> (usize, usize) {
+    let before = &text[..byte_offset(text, at)];
+    let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+    (line_count(before), before[line_start..].chars().count() + 1)
+}
+
 /// Number of lines in `text`; an empty text has one.
 pub fn line_count(text: &str) -> usize {
     text.split('\n').count()
@@ -331,6 +339,19 @@ mod tests {
         assert_eq!(line_start(text, 4), 8);
         assert_eq!(line_start(text, 99), 8, "clamps to the last line");
         assert_eq!(line_start("héé\nx", 2), 4, "counts chars, not bytes");
+    }
+
+    #[test]
+    fn test_line_col_is_one_based_in_chars() {
+        let text = "ab\ncde\n\nf";
+        assert_eq!(line_col(text, 0), (1, 1));
+        assert_eq!(line_col(text, 2), (1, 3), "before the newline");
+        assert_eq!(line_col(text, 3), (2, 1));
+        assert_eq!(line_col(text, 7), (3, 1), "empty line");
+        assert_eq!(line_col(text, 9), (4, 2), "end of the text");
+        assert_eq!(line_col(text, 99), (4, 2), "clamps to the end");
+        assert_eq!(line_col("héé\nxé", 6), (2, 3), "counts chars, not bytes");
+        assert_eq!(line_col("", 0), (1, 1));
     }
 
     #[test]

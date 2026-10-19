@@ -117,6 +117,8 @@ pub struct TextEditorApp {
     pub pending_action: Option<PendingAction>,
     pub show_about_modal: bool,
     pub status_message: Option<(String, bool)>, // (message, is_error)
+    /// The caret's line and column as the status bar last showed them.
+    status_position: Option<(usize, usize)>,
     pub highlighter: SyntaxHighlighter,
     /// Wrap long lines to the window width. Off by default: lines run on and
     /// the editor scrolls sideways instead.
@@ -180,6 +182,7 @@ impl Default for TextEditorApp {
             pending_action: None,
             show_about_modal: false,
             status_message: None,
+            status_position: None,
             highlighter: SyntaxHighlighter::new(),
             word_wrap: false,
             show_line_numbers: true,
@@ -475,8 +478,10 @@ impl TextEditorApp {
         });
     }
 
-    /// The document name and the latest status message.
+    /// The document name and the latest status message, and the caret's
+    /// line and column at the right end.
     pub fn show_status_bar(&mut self, ui: &mut egui::Ui) {
+        self.status_position = self.caret_position(ui.ctx());
         ui.horizontal(|ui| {
             let modified = if self.is_dirty() {
                 self.i18n.t("status.modified")
@@ -498,7 +503,21 @@ impl TextEditorApp {
                 };
                 ui.colored_label(color, msg);
             }
+
+            if let Some((line, col)) = self.status_position {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (line, col) = (line.to_string(), col.to_string());
+                    ui.label(self.i18n.tf("status.position", &[("line", &line), ("col", &col)]));
+                });
+            }
         });
+    }
+
+    /// 1-based line and column of the editor's caret, once it has one.
+    fn caret_position(&self, ctx: &egui::Context) -> Option<(usize, usize)> {
+        let state = egui::TextEdit::load_state(ctx, self.editor_id())?;
+        let caret = state.cursor.char_range()?.primary.index.0;
+        Some(find::line_col(&self.active_tab().text_content, caret))
     }
 
     pub fn show_edit_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1917,6 +1936,12 @@ impl eframe::App for TextEditorApp {
         }
 
         self.return_focus_after_menu(&ctx);
+
+        // The status bar is drawn before the editor moves the caret; draw
+        // the frame again when it shows a stale position.
+        if !self.zen_mode && self.caret_position(&ctx) != self.status_position {
+            ctx.request_repaint();
+        }
     }
 }
 
@@ -3097,6 +3122,91 @@ mod tests {
         });
         assert!(painted_text(&shapes, "Ketik sesuatu di sini...").is_some());
         assert!(text.is_empty(), "the hint never enters the buffer");
+    }
+
+    /// The caret's line and column sit at the right end of the status bar,
+    /// once the editor has a caret; the document name stays on the left.
+    #[test]
+    fn test_status_bar_shows_the_caret_position_on_the_right() {
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "ab\ncde\n".to_string();
+        let ctx = egui::Context::default();
+        let status = |app: &mut TextEditorApp| {
+            run_frame_with_events(&ctx, Vec::new(), |ui| app.show_status_bar(ui))
+        };
+        // Where the first text starting with `prefix` was painted.
+        let starting = |shapes: &[egui::epaint::ClippedShape], prefix: &str| {
+            shapes.iter().find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(shape) if shape.galley.text().starts_with(prefix) => {
+                    Some(egui::Rect::from_min_size(shape.pos, shape.galley.size()))
+                }
+                _ => None,
+            })
+        };
+
+        let before = status(&mut app);
+        assert_eq!(starting(&before, "Baris"), None, "no caret yet, no position");
+        let document = starting(&before, "Dokumen:").expect("document label");
+
+        let mut state = egui::text_edit::TextEditState::default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(5))));
+        state.store(&ctx, app.editor_id());
+        let after = status(&mut app);
+        let (position, _) = painted_text(&after, "Baris 2, Kolom 3").expect("caret position");
+        assert_eq!(
+            starting(&after, "Dokumen:"),
+            Some(document),
+            "the left side does not move"
+        );
+        assert!(position.left() > document.right());
+        assert!(position.right() > 780.0, "right-aligned in the 800 pt window");
+
+        assert!(app.i18n.select("en"));
+        assert!(painted_text(&status(&mut app), "Ln 2, Col 3").is_some());
+    }
+
+    /// Typing and the arrow keys move the caret; the status bar follows on
+    /// the next frame, as it is drawn before the editor.
+    #[test]
+    fn test_status_bar_position_follows_typing_and_arrows() {
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "ab\ncde".to_string();
+        let ctx = egui::Context::default();
+        let id = app.editor_id();
+        // The status bar, then the editor: every frame shows the editor, or
+        // egui drops its focus.
+        let frame = |app: &mut TextEditorApp, events, request: EditorRequest| {
+            let mut request = Some(request);
+            run_frame_with_events(&ctx, events, |ui| {
+                app.show_status_bar(ui);
+                let text = &mut app.active_tab_mut().text_content;
+                let request = request.take().unwrap_or_default();
+                super::render_editor_with(ui, text, None, false, false, "", Some(id), request, None);
+            })
+        };
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let step = |app: &mut TextEditorApp, events, request| {
+            frame(app, events, request);
+            frame(app, Vec::new(), EditorRequest::default())
+        };
+
+        let shapes = step(&mut app, Vec::new(), EditorRequest { focus: true, select: Some((0, 0)), ..Default::default() });
+        assert!(painted_text(&shapes, "Baris 1, Kolom 1").is_some());
+        let shapes = step(&mut app, vec![egui::Event::Text("xy".into())], EditorRequest::default());
+        assert_eq!(app.active_tab().text_content, "xyab\ncde");
+        assert!(painted_text(&shapes, "Baris 1, Kolom 3").is_some(), "typing moves the caret");
+        let shapes = step(&mut app, vec![key(egui::Key::ArrowDown)], EditorRequest::default());
+        assert!(painted_text(&shapes, "Baris 2, Kolom 3").is_some(), "down arrow");
+        let shapes = step(&mut app, vec![key(egui::Key::ArrowRight)], EditorRequest::default());
+        assert!(painted_text(&shapes, "Baris 2, Kolom 4").is_some(), "right arrow");
     }
 
     #[test]

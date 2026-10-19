@@ -62,6 +62,7 @@
   "toolbar.characters": "字符数：{count}",
   "status.document": "文档：{name}{modified}",
   "status.modified": " [已修改]",
+  "status.position": "行 {line}，列 {col}",
 
   "doc.untitled": "[新文档]",
   "editor.placeholder": "在此输入内容...",

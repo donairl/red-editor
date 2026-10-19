@@ -62,6 +62,7 @@
   "toolbar.characters": "Characters: {count}",
   "status.document": "Document: {name}{modified}",
   "status.modified": " [modified]",
+  "status.position": "Ln {line}, Col {col}",
 
   "doc.untitled": "[New Document]",
   "editor.placeholder": "Type something here...",
