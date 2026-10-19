@@ -19,6 +19,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Unsaved changes confirmation** when closing tabs or quitting the application.
 - **Multilingual interface** (English, Indonesian, Spanish, German, Chinese, and additional languages via JSON files). Select via **View → Interface Language**; preference is persisted across restarts. See [Adding interface languages](#adding-interface-languages).
 - **Zen Mode** (`F11`): Distraction-free full-screen mode showing only the editor; press `Esc` to exit.
+- **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON and HTML documents in place.
 - **Markdown preview** (`Ctrl+Shift+V`): rendered preview of `.md` files in a live split view beside the editor.
 - System light/dark theme detection.
 
@@ -105,7 +106,7 @@ If installed outside `PATH`, provide the full binary path for `Exec=`, e.g. `Exe
 | Menu | Items |
 |---|---|
 | **File** | New Tab, Close Tab, Open File…, Open Folder…, Save, Save As…, Language, Exit |
-| **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line… |
+| **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line…, Prettify |
 | **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Language, Interface Language |
 | **Help** | About |
 
@@ -125,6 +126,7 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+B` | Toggle sidebar |
 | `F11` | Zen mode (full screen, editor only); `Esc` to exit |
 | `Ctrl+Shift+V` | Toggle Markdown preview (`.md` files) |
+| `Ctrl+Shift+I` | Prettify the document (JSON, HTML) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` or `Ctrl+Shift+Z` | Redo |
@@ -184,6 +186,7 @@ Source structure:
 | `src/app.rs` | Application state, menus, panels, editor |
 | `src/tab_bar.rs` | VS Code-style tab strip |
 | `src/gutter.rs` | Line number gutter |
+| `src/prettify.rs` | Prettify: JSON and HTML re-indenting |
 | `src/find.rs` | Find/replace, find bar, and Go to Line bar |
 | `src/search.rs` | Find in Files: directory search and results panel |
 | `src/highlighter.rs` | Syntax highlighting (syntect) |

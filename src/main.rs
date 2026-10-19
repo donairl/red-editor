@@ -7,6 +7,7 @@ mod highlighter;
 mod i18n;
 mod markdown_preview;
 mod modals;
+mod prettify;
 mod search;
 mod tab_bar;
 

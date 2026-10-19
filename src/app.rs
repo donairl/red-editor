@@ -11,6 +11,7 @@ use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, 
 use crate::i18n::{self, I18n};
 use crate::markdown_preview::{MarkdownPreview, ScrollPos, ScrollSync};
 use crate::modals::{self, ModalResponse, PendingAction};
+use crate::prettify;
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
 use crate::tab_bar;
@@ -238,6 +239,7 @@ pub mod shortcuts {
     pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
     pub const FIND_IN_FILES: KeyboardShortcut = cmd_shift(Key::F);
     pub const GOTO_LINE: KeyboardShortcut = cmd(Key::G);
+    pub const PRETTIFY: KeyboardShortcut = cmd_shift(Key::I);
     pub const ZEN_MODE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F11);
     pub const MARKDOWN_PREVIEW: KeyboardShortcut = cmd_shift(Key::V);
     pub const FIND: KeyboardShortcut = cmd(Key::F);
@@ -267,6 +269,7 @@ pub enum ShortcutAction {
     NextTab,
     PrevTab,
     GotoLine,
+    Prettify,
     ZenMode,
     MarkdownPreview,
     FindInFiles,
@@ -285,6 +288,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::FIND_NEXT, FindNext),
         (shortcuts::FIND_IN_FILES, FindInFiles),
         (shortcuts::MARKDOWN_PREVIEW, MarkdownPreview),
+        (shortcuts::PRETTIFY, Prettify),
         (shortcuts::SAVE_AS, SaveAs),
         (shortcuts::OPEN_FOLDER, OpenFolder),
         (shortcuts::PREV_TAB, PrevTab),
@@ -499,6 +503,39 @@ impl TextEditorApp {
         if item(ui, self.i18n.t("edit.goto_line"), &shortcuts::GOTO_LINE) {
             self.open_goto();
         }
+        ui.separator();
+        let prettify_label = self.i18n.t("edit.prettify");
+        let prettify_shortcut = ctx.format_shortcut(&shortcuts::PRETTIFY);
+        if ui
+            .add_enabled(
+                prettify::supports(self.effective_language()),
+                egui::Button::new(prettify_label).shortcut_text(prettify_shortcut),
+            )
+            .clicked()
+        {
+            self.prettify_document();
+            ui.close();
+        }
+    }
+
+    /// Re-indents the active document in place, reporting the outcome in the
+    /// status bar.
+    pub fn prettify_document(&mut self) {
+        let language = self.effective_language();
+        let message = if !prettify::supports(language) {
+            (self.i18n.t("msg.prettify_unsupported").to_owned(), true)
+        } else {
+            match prettify::prettify(language, &self.active_tab().text_content) {
+                Ok(text) => {
+                    if text != self.active_tab().text_content {
+                        self.active_tab_mut().text_content = text;
+                    }
+                    (self.i18n.t("msg.prettified").to_owned(), false)
+                }
+                Err(error) => (self.i18n.tf("msg.prettify_failed", &[("error", &error)]), true),
+            }
+        };
+        self.status_message = Some(message);
     }
 
     fn send_editor_key(&mut self, key: egui::Key) {
@@ -724,6 +761,7 @@ impl TextEditorApp {
                 self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
             }
             ShortcutAction::GotoLine => self.open_goto(),
+            ShortcutAction::Prettify => self.prettify_document(),
             ShortcutAction::ZenMode => self.toggle_zen_mode(ctx),
             ShortcutAction::MarkdownPreview => self.toggle_markdown_preview(),
             ShortcutAction::FindInFiles => self.open_search(ctx),
