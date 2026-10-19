@@ -9,7 +9,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 ## Fitur
 
 - **Banyak tab** bergaya VS Code: badge bahasa di tiap tab, titik `●` untuk file yang belum disimpan, tombol `×` saat di-hover, tombol `+` untuk tab baru.
-- **Syntax highlighting** untuk Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS, JSON, Markdown, Go, Python, serta template Blade (`.blade.php`), Twig (`.twig`), dan Smarty (`.tpl`), dikenali dari ekstensi file. Bahasa bisa diganti manual lewat menu **Tampilan → Bahasa**. File di atas 1 MB ditampilkan tanpa highlighting.
+- **Syntax highlighting** untuk Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (juga `.scss` dan `.less`), JSON, Markdown, Go, Python, serta template Blade (`.blade.php`), Twig (`.twig`), dan Smarty (`.tpl`), dikenali dari ekstensi file. Bahasa bisa diganti manual lewat menu **Tampilan → Bahasa**. File di atas 1 MB ditampilkan tanpa highlighting.
 - **Nomor baris** yang bisa ditampilkan atau disembunyikan (**Tampilan → Nomor Baris**). Nomor baris tempat kursor berada tampil lebih terang.
 - **Bungkus baris** (word wrap) yang bisa dinyalakan atau dimatikan (**Tampilan → Bungkus Baris**). Saat mati, baris panjang bisa digeser ke samping.
 - **Explorer dan Activity Bar** seperti VS Code: buka folder, jelajahi isinya sebagai tree, klik file untuk membukanya di tab. Ada tombol **Refresh** dan **Collapse All** di header folder.
@@ -19,7 +19,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Konfirmasi perubahan belum disimpan** saat menutup tab atau keluar dari aplikasi.
 - **Multi bahasa antarmuka** (Indonesia, English, Español, Deutsch, 中文, dan bahasa lain lewat file JSON). Pilih di **Tampilan → Bahasa Antarmuka**; pilihan diingat saat aplikasi dibuka lagi. Lihat [Menambah bahasa antarmuka](#menambah-bahasa-antarmuka).
 - **Zen mode** (`F11`): mode layar penuh tanpa gangguan, sembunyikan semua panel selain editor; tekan `Esc` untuk keluar.
-- **Prettify** (**Edit → Rapikan**, `Ctrl+Shift+I`): merapikan JSON dan HTML langsung di editor, serta Rust, Go, C/C++, Python, JS/TS lewat formatter yang terpasang (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
+- **Prettify** (**Edit → Rapikan**, `Ctrl+Shift+I`): merapikan JSON, HTML, dan CSS langsung di editor, serta Rust, Go, C/C++, Python, JS/TS lewat formatter yang terpasang (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Pratinjau Markdown** (`Ctrl+Shift+V`): hasil render file `.md` dalam tampilan terbelah langsung di samping editor.
 - Tema terang/gelap mengikuti pengaturan sistem.
 

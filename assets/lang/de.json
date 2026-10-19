@@ -42,7 +42,7 @@
   "msg.replaced": "{count} ersetzt.",
   "msg.prettified": "Dokument formatiert.",
   "msg.prettify_failed": "Formatieren fehlgeschlagen: {error}",
-  "msg.prettify_unsupported": "Formatieren unterstützt JSON, HTML und Sprachen mit installiertem Formatierer (Rust, Go, C/C++, Python, JS/TS).",
+  "msg.prettify_unsupported": "Formatieren unterstützt JSON, HTML, CSS und Sprachen mit installiertem Formatierer (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Datei öffnen...",
   "file.open_folder": "Ordner öffnen...",
   "file.save": "Speichern",

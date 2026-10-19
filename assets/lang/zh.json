@@ -42,7 +42,7 @@
   "msg.replaced": "已替换 {count} 处。",
   "msg.prettified": "文档已格式化。",
   "msg.prettify_failed": "无法格式化：{error}",
-  "msg.prettify_unsupported": "美化支持 JSON、HTML 以及已安装格式化工具的语言（Rust、Go、C/C++、Python、JS/TS）。",
+  "msg.prettify_unsupported": "美化支持 JSON、HTML、CSS 以及已安装格式化工具的语言（Rust、Go、C/C++、Python、JS/TS）。",
   "file.open_file": "打开文件...",
   "file.open_folder": "打开文件夹...",
   "file.save": "保存",

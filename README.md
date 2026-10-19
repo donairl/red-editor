@@ -9,7 +9,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 ## Features
 
 - **VS Code-style multi-tab**: Language badge on each tab, `●` indicator for unsaved files, `×` close button on hover, and `+` button for new tabs.
-- **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS, JSON, Markdown, Go, Python, and the Blade (`.blade.php`), Twig (`.twig`), and Smarty (`.tpl`) templates, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting.
+- **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (also `.scss` and `.less`), JSON, Markdown, Go, Python, and the Blade (`.blade.php`), Twig (`.twig`), and Smarty (`.tpl`) templates, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting.
 - **Line numbers** that can be toggled on or off (**View → Line Numbers**). The active line number is highlighted.
 - **Word wrap** that can be toggled on or off (**View → Word Wrap**). When disabled, long lines scroll horizontally.
 - **VS Code-style Explorer and Activity Bar**: Open folders, browse tree hierarchy, click files to open in tabs. Includes **Refresh** and **Collapse All** actions in the folder header.
@@ -19,7 +19,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Unsaved changes confirmation** when closing tabs or quitting the application.
 - **Multilingual interface** (English, Indonesian, Spanish, German, Chinese, and additional languages via JSON files). Select via **View → Interface Language**; preference is persisted across restarts. See [Adding interface languages](#adding-interface-languages).
 - **Zen Mode** (`F11`): Distraction-free full-screen mode showing only the editor; press `Esc` to exit.
-- **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON and HTML in place, and Rust, Go, C/C++, Python and JS/TS through the installed formatter (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
+- **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON, HTML and CSS in place, and Rust, Go, C/C++, Python and JS/TS through the installed formatter (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Markdown preview** (`Ctrl+Shift+V`): rendered preview of `.md` files in a live split view beside the editor.
 - System light/dark theme detection.
 
@@ -186,7 +186,7 @@ Source structure:
 | `src/app.rs` | Application state, menus, panels, editor |
 | `src/tab_bar.rs` | VS Code-style tab strip |
 | `src/gutter.rs` | Line number gutter |
-| `src/prettify.rs` | Prettify: JSON/HTML in-process, other languages via external formatters |
+| `src/prettify.rs` | Prettify: JSON/HTML/CSS in-process, other languages via external formatters |
 | `src/find.rs` | Find/replace, find bar, and Go to Line bar |
 | `src/search.rs` | Find in Files: directory search and results panel |
 | `src/highlighter.rs` | Syntax highlighting (syntect) |

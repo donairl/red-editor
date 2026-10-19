@@ -1,4 +1,4 @@
-//! Re-indents a document: JSON and HTML in-process, other languages through
+//! Re-indents a document: JSON, HTML and CSS in-process, other languages through
 //! the formatter installed on the machine (`rustfmt`, `gofmt`, ...).
 
 use std::io::Write;
@@ -23,7 +23,7 @@ const VOID_ELEMENTS: [&str; 14] = [
 
 /// Whether [`prettify`] knows how to format `language`.
 pub fn supports(language: Language) -> bool {
-    matches!(language, Language::Json | Language::Html) || !formatters(language).is_empty()
+    matches!(language, Language::Json | Language::Html | Language::Css) || !formatters(language).is_empty()
 }
 
 /// External formatters for `language`, best first. Each reads the document
@@ -45,6 +45,7 @@ pub fn prettify(language: Language, text: &str) -> Result<String, String> {
     match language {
         Language::Json => json(text),
         Language::Html => Ok(html(text)),
+        Language::Css => css(text),
         _ => external(language, text),
     }
 }
@@ -162,6 +163,144 @@ fn json(text: &str) -> Result<String, String> {
     }
     out.push('\n');
     Ok(out)
+}
+
+/// Re-indents CSS: one declaration per line, one selector of a list per line,
+/// two spaces per nesting level. Comments and strings stay verbatim; other
+/// whitespace collapses. Unbalanced braces, strings or comments are errors.
+fn css(text: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(text.len() * 2);
+    let mut depth = 0usize;
+    let mut segment = String::new();
+    let mut parens = 0usize;
+    let mut chars = text.chars().peekable();
+    let emit = |out: &mut String, depth: usize, s: &str| {
+        for _ in 0..depth {
+            out.push_str(INDENT);
+        }
+        out.push_str(s);
+        out.push('\n');
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            '"' | '\'' => {
+                segment.push(c);
+                loop {
+                    let s = chars.next().ok_or("unterminated string")?;
+                    segment.push(s);
+                    if s == '\\' {
+                        segment.extend(chars.next());
+                    } else if s == c {
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                let mut comment = String::from("/*");
+                chars.next();
+                let mut closed = false;
+                while let Some(s) = chars.next() {
+                    comment.push(s);
+                    if s == '*' && chars.next_if_eq(&'/').is_some() {
+                        comment.push('/');
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    return Err("unterminated comment".to_owned());
+                }
+                if segment.trim().is_empty() {
+                    segment.clear();
+                    emit(&mut out, depth, &comment);
+                } else {
+                    segment.push_str(&comment);
+                }
+            }
+            '(' => {
+                parens += 1;
+                segment.push(c);
+            }
+            ')' => {
+                parens = parens.saturating_sub(1);
+                segment.push(c);
+            }
+            '{' if parens == 0 => {
+                let selector = css_selector(segment.trim(), depth);
+                out.push_str(&selector);
+                out.push_str(" {\n");
+                segment.clear();
+                depth += 1;
+            }
+            ';' if parens == 0 => {
+                if !segment.trim().is_empty() {
+                    emit(&mut out, depth, &format!("{};", css_declaration(segment.trim())));
+                }
+                segment.clear();
+            }
+            '}' if parens == 0 => {
+                if !segment.trim().is_empty() {
+                    emit(&mut out, depth, &format!("{};", css_declaration(segment.trim())));
+                    segment.clear();
+                }
+                depth = depth.checked_sub(1).ok_or("unmatched }")?;
+                emit(&mut out, depth, "}");
+            }
+            c if c.is_whitespace() => {
+                if !segment.is_empty() && !segment.ends_with(' ') {
+                    segment.push(' ');
+                }
+            }
+            c => segment.push(c),
+        }
+    }
+    if depth != 0 {
+        return Err("unclosed {".to_owned());
+    }
+    if !segment.trim().is_empty() {
+        emit(&mut out, 0, segment.trim());
+    }
+    Ok(out)
+}
+
+/// `prop:value` as `prop: value`; at-rules such as `@import` are untouched.
+fn css_declaration(segment: &str) -> String {
+    if segment.starts_with('@') {
+        return segment.to_owned();
+    }
+    match segment.split_once(':') {
+        Some((property, value)) => format!("{}: {}", property.trim_end(), value.trim_start()),
+        None => segment.to_owned(),
+    }
+}
+
+/// A selector list with one selector per line; at-rule preludes stay on one line.
+fn css_selector(segment: &str, depth: usize) -> String {
+    let indent = INDENT.repeat(depth);
+    if segment.starts_with('@') {
+        return format!("{indent}{segment}");
+    }
+    let mut parts = Vec::new();
+    let (mut start, mut nesting, mut quote) = (0, 0usize, None);
+    for (i, c) in segment.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(' | '[') => nesting += 1,
+            (None, ')' | ']') => nesting = nesting.saturating_sub(1),
+            (None, ',') if nesting == 0 => {
+                parts.push(segment[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(segment[start..].trim());
+    parts
+        .iter()
+        .map(|part| format!("{indent}{part}"))
+        .collect::<Vec<_>>()
+        .join(",\n")
 }
 
 /// A piece of an HTML document.
@@ -321,6 +460,41 @@ mod tests {
     #[test]
     fn test_html_stray_close_tag_does_not_underflow() {
         assert_eq!(prettify(Language::Html, "</div><p>x</p>").unwrap(), "</div>\n<p>\n  x\n</p>\n");
+    }
+
+    #[test]
+    fn test_css_formats_rules() {
+        let out = prettify(
+            Language::Css,
+            "@import url(\"a.css\");a,b>c:hover{color:red;margin:0 auto}@media (min-width:600px){.x{background:url(data:image/png;base64,AA==)}}",
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "@import url(\"a.css\");\na,\nb>c:hover {\n  color: red;\n  margin: 0 auto;\n}\n@media (min-width:600px) {\n  .x {\n    background: url(data:image/png;base64,AA==);\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn test_css_keeps_comments_and_strings() {
+        let src = "/* a\n  b */\na::after{content:\"x;{}\" /* in */;}";
+        assert_eq!(
+            prettify(Language::Css, src).unwrap(),
+            "/* a\n  b */\na::after {\n  content: \"x;{}\" /* in */;\n}\n"
+        );
+    }
+
+    #[test]
+    fn test_css_is_idempotent() {
+        let once = prettify(Language::Css, "a,b{color:red}@media x{c{d:e}}").unwrap();
+        assert_eq!(prettify(Language::Css, &once).unwrap(), once);
+    }
+
+    #[test]
+    fn test_css_unbalanced_is_error() {
+        for bad in ["a{", "a}", "a{b:\"x}", "a{/* x}"] {
+            assert!(prettify(Language::Css, bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

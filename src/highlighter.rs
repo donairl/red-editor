@@ -75,7 +75,8 @@ impl Language {
             "js" | "mjs" | "cjs" | "jsx" => Language::JavaScript,
             "ts" | "mts" | "cts" | "tsx" => Language::TypeScript,
             "html" | "htm" => Language::Html,
-            "css" => Language::Css,
+            // syntect bundles no SCSS or Less grammar; plain CSS covers most of both.
+            "css" | "scss" | "less" => Language::Css,
             "json" | "jsonc" => Language::Json,
             "md" | "markdown" | "mdown" | "mkd" => Language::Markdown,
             "go" => Language::Go,
@@ -1054,6 +1055,8 @@ mod tests {
         assert_eq!(Language::from_extension("jsonc"), Language::Json);
         assert_eq!(Language::from_extension("css"), Language::Css);
         assert_eq!(Language::from_extension("CSS"), Language::Css);
+        assert_eq!(Language::from_extension("scss"), Language::Css);
+        assert_eq!(Language::from_extension("less"), Language::Css);
         assert_eq!(Language::from_extension("go"), Language::Go);
         for ext in ["py", "pyw", "pyi"] {
             assert_eq!(Language::from_extension(ext), Language::Python, "{ext}");

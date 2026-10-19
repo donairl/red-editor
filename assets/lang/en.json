@@ -42,7 +42,7 @@
   "msg.replaced": "{count} replaced.",
   "msg.prettified": "Document formatted.",
   "msg.prettify_failed": "Cannot format: {error}",
-  "msg.prettify_unsupported": "Prettify supports JSON, HTML and languages with an installed formatter (Rust, Go, C/C++, Python, JS/TS).",
+  "msg.prettify_unsupported": "Prettify supports JSON, HTML, CSS and languages with an installed formatter (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Open File...",
   "file.open_folder": "Open Folder...",
   "file.save": "Save",
