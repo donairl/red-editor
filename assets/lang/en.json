@@ -64,6 +64,13 @@
   "status.document": "Document: {name}{modified}",
   "status.modified": " [modified]",
   "status.position": "Ln {line}, Col {col}",
+  "status.bookmarks": "Bookmarked: {count}",
+  "bookmark.add": "Add Bookmark",
+  "bookmark.remove": "Remove Bookmark",
+  "bookmark.title": "Bookmarks",
+  "bookmark.line": "Line {line}",
+  "bookmark.empty": "No bookmarked lines yet.",
+  "bookmark.show_list": "Show bookmarked lines",
 
   "doc.untitled": "[New Document]",
   "editor.placeholder": "Type something here...",

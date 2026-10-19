@@ -106,6 +106,43 @@ pub fn show_disk_conflict_modal(
     choice
 }
 
+/// Lists the bookmarked `(line, text)` rows of the active document above
+/// the status bar. It stays open while the user jumps between them; the
+/// caret's line is shown selected. Returns the line picked.
+pub fn show_bookmarks_panel(
+    ctx: &egui::Context,
+    open: &mut bool,
+    rows: &[(usize, &str)],
+    caret_line: Option<usize>,
+    i18n: &I18n,
+) -> Option<usize> {
+    let mut picked = None;
+    egui::Window::new(i18n.t("bookmark.title"))
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(320.0)
+        .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -36.0])
+        .show(ctx, |ui| {
+            if rows.is_empty() {
+                ui.weak(i18n.t("bookmark.empty"));
+                return;
+            }
+            egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                for &(line, text) in rows {
+                    let number = i18n.tf("bookmark.line", &[("line", &line.to_string())]);
+                    let row = egui::Button::selectable(caret_line == Some(line), format!("{number}: {}", text.trim()))
+                        .truncate()
+                        .min_size(egui::vec2(ui.available_width(), 0.0));
+                    if ui.add(row).clicked() {
+                        picked = Some(line);
+                    }
+                }
+            });
+        });
+    picked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,6 +197,21 @@ mod tests {
             assert_eq!(choice, None, "nothing clicked");
         });
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn test_show_bookmarks_panel_headless() {
+        let ctx = egui::Context::default();
+        let mut open = true;
+        let rows = [(2, "  let x = 1;"), (9, "x")];
+        for rows in [&rows[..], &[]] {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let picked = show_bookmarks_panel(ui.ctx(), &mut open, rows, Some(9), &I18n::builtin());
+                assert_eq!(picked, None, "nothing clicked");
+            });
+            output.textures_delta.clear();
+        }
+        assert!(open);
     }
 
     #[test]

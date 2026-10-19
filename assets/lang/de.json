@@ -64,6 +64,13 @@
   "status.document": "Dokument: {name}{modified}",
   "status.modified": " [geändert]",
   "status.position": "Zeile {line}, Spalte {col}",
+  "status.bookmarks": "Lesezeichen: {count}",
+  "bookmark.add": "Lesezeichen hinzufügen",
+  "bookmark.remove": "Lesezeichen entfernen",
+  "bookmark.title": "Lesezeichen",
+  "bookmark.line": "Zeile {line}",
+  "bookmark.empty": "Noch keine Zeilen mit Lesezeichen.",
+  "bookmark.show_list": "Zeilen mit Lesezeichen anzeigen",
 
   "doc.untitled": "[Neues Dokument]",
   "editor.placeholder": "Hier etwas eingeben...",

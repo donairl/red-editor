@@ -12,6 +12,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (also `.scss` and `.less`), JSON, Markdown, Go, Python, SQL, and the Blade (`.blade.php`), Twig (`.twig`), and Smarty (`.tpl`) templates, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting.
 - **SQL inside strings**: a string literal in Rust, C, C++, PHP, JavaScript, TypeScript, Go or Python that reads as an SQL statement (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) has its SQL keywords coloured, across multi-line strings too. Upper-case keywords are enough; lower case needs a second clause (`select … from`), so UI text like "Select a file" stays a plain string.
 - **Line numbers** that can be toggled on or off (**View → Line Numbers**). The active line number is highlighted.
+- **Line bookmarks**: right-click a line in the editor and pick **Add Bookmark** (or **Remove Bookmark**). Bookmarked lines get a marker in the gutter and follow their line as you edit. A **Bookmarked: N** badge in the status bar opens the list of bookmarked lines; click one to jump to it. Bookmarks last for the session.
 - **Word wrap** that can be toggled on or off (**View → Word Wrap**). When disabled, long lines scroll horizontally.
 - **VS Code-style Explorer and Activity Bar**: Open folders, browse tree hierarchy, click files to open in tabs. Includes **Refresh** and **Collapse All** actions in the folder header.
 - **Find and Replace** (**Edit → Find**, **Edit → Replace**): Toolbar above the editor with highlighted search matches, case sensitivity option, and Replace All. Also includes **Go to Line…** to jump directly to a line number.
@@ -186,7 +187,8 @@ Source structure:
 | `src/main.rs` | Entry point, window initialization |
 | `src/app.rs` | Application state, menus, panels, editor |
 | `src/tab_bar.rs` | VS Code-style tab strip |
-| `src/gutter.rs` | Line number gutter |
+| `src/gutter.rs` | Line number gutter and bookmark markers |
+| `src/bookmarks.rs` | Line bookmarks that follow edits |
 | `src/prettify.rs` | Prettify: JSON/HTML/CSS in-process, other languages via external formatters |
 | `src/find.rs` | Find/replace, find bar, and Go to Line bar |
 | `src/search.rs` | Find in Files: directory search and results panel |
@@ -194,7 +196,7 @@ Source structure:
 | `src/embedded_sql.rs` | SQL colouring inside string literals |
 | `src/file_browser.rs` | Explorer: folder tree and sidebar |
 | `src/activity_bar.rs` | Activity Bar |
-| `src/modals.rs` | About dialog and unsaved changes confirmation |
+| `src/modals.rs` | About dialog, unsaved changes confirmation, bookmark list |
 | `src/i18n.rs` | UI localization loaded from `assets/lang/*.json` |
 | `assets/lang/` | Interface language files |
 

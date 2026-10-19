@@ -64,6 +64,13 @@
   "status.document": "Documento: {name}{modified}",
   "status.modified": " [modificado]",
   "status.position": "Lín. {line}, col. {col}",
+  "status.bookmarks": "Con marcador: {count}",
+  "bookmark.add": "Añadir marcador",
+  "bookmark.remove": "Quitar marcador",
+  "bookmark.title": "Marcadores",
+  "bookmark.line": "Línea {line}",
+  "bookmark.empty": "Aún no hay líneas con marcador.",
+  "bookmark.show_list": "Mostrar líneas con marcador",
 
   "doc.untitled": "[Documento nuevo]",
   "editor.placeholder": "Escribe algo aquí...",

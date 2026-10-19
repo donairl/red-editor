@@ -64,6 +64,13 @@
   "status.document": "Dokumen: {name}{modified}",
   "status.modified": " [diubah]",
   "status.position": "Baris {line}, Kolom {col}",
+  "status.bookmarks": "Di-bookmark: {count}",
+  "bookmark.add": "Tambah Bookmark",
+  "bookmark.remove": "Hapus Bookmark",
+  "bookmark.title": "Bookmark",
+  "bookmark.line": "Baris {line}",
+  "bookmark.empty": "Belum ada baris yang di-bookmark.",
+  "bookmark.show_list": "Tampilkan daftar bookmark",
 
   "doc.untitled": "[Dokumen Baru]",
   "editor.placeholder": "Ketik sesuatu di sini...",

@@ -1,10 +1,12 @@
 //! VS Code-style line-number gutter painted beside the editor.
 //!
 //! The editor reserves room for the gutter through its left margin; this
-//! module only measures that room and paints the numbers into it.
+//! module only measures that room and paints the numbers, and a marker on
+//! each bookmarked line, into it.
 
 use eframe::egui::{self, Align2, Color32, FontId, Galley, Rect, pos2};
 
+use crate::bookmarks::Bookmarks;
 use crate::tab_bar::TabPalette;
 
 /// Space between the left edge and the widest number.
@@ -14,6 +16,10 @@ const PAD_RIGHT: f32 = 16.0;
 /// Room is kept for at least this many digits, so the text does not shift
 /// sideways while a short document grows past 9 or 99 lines.
 const MIN_DIGITS: usize = 3;
+/// The bookmark marker: a bar in the left padding, this far from the edge
+/// and this wide.
+const MARK_INSET: f32 = 2.0;
+const MARK_WIDTH: f32 = 4.0;
 
 /// Number colours, after VS Code's "Dark Modern" and "Light Modern".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +27,8 @@ pub struct GutterPalette {
     pub number: Color32,
     /// The number of the line holding the caret.
     pub number_active: Color32,
+    /// The marker beside a bookmarked line.
+    pub bookmark: Color32,
     /// Same as the editor, so the gutter reads as part of it.
     pub background: Color32,
 }
@@ -29,12 +37,14 @@ impl GutterPalette {
     pub const DARK: GutterPalette = GutterPalette {
         number: Color32::from_rgb(0x6E, 0x76, 0x81),
         number_active: Color32::from_rgb(0xCC, 0xCC, 0xCC),
+        bookmark: Color32::from_rgb(0x37, 0x94, 0xFF),
         background: TabPalette::DARK.tab_active,
     };
 
     pub const LIGHT: GutterPalette = GutterPalette {
         number: Color32::from_rgb(0x6E, 0x76, 0x81),
         number_active: Color32::from_rgb(0x17, 0x11, 0x84),
+        bookmark: Color32::from_rgb(0x00, 0x5F, 0xB8),
         background: TabPalette::LIGHT.tab_active,
     };
 
@@ -88,9 +98,10 @@ fn line_of_char(galley: &Galley, char_index: usize) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Number {
     line: usize,
-    /// Vertical centre of the line's first row, in screen coordinates.
-    center_y: f32,
+    /// Vertical extent of the line's first row, in screen coordinates.
+    row: egui::Rangef,
     active: bool,
+    bookmarked: bool,
 }
 
 /// The numbers of the lines whose first row overlaps `visible`.
@@ -101,6 +112,7 @@ fn visible_numbers(
     galley_top: f32,
     visible: egui::Rangef,
     active_line: Option<usize>,
+    bookmarks: &Bookmarks,
 ) -> Vec<Number> {
     let mut numbers = Vec::new();
     let mut line = 1;
@@ -113,8 +125,9 @@ fn visible_numbers(
         if starts_line && rect.bottom() >= visible.min {
             numbers.push(Number {
                 line,
-                center_y: rect.center().y,
+                row: rect.y_range(),
                 active: active_line == Some(line),
+                bookmarked: bookmarks.contains(line),
             });
         }
         starts_line = row.ends_with_newline;
@@ -134,6 +147,7 @@ pub fn paint(
     output: &egui::text_edit::TextEditOutput,
     font_id: &FontId,
     width: f32,
+    bookmarks: &Bookmarks,
 ) {
     let palette = GutterPalette::for_visuals(ui.visuals());
     let clip = ui.clip_rect();
@@ -155,14 +169,20 @@ pub fn paint(
         output.galley_pos.y,
         clip.y_range(),
         active_line,
+        bookmarks,
     ) {
+        if number.bookmarked {
+            let mark_left = rect.left() + MARK_INSET;
+            let mark = Rect::from_x_y_ranges(mark_left..=mark_left + MARK_WIDTH, number.row);
+            painter.rect_filled(mark, 1.0, palette.bookmark);
+        }
         let color = if number.active {
             palette.number_active
         } else {
             palette.number
         };
         painter.text(
-            pos2(x, number.center_y),
+            pos2(x, number.row.center()),
             Align2::RIGHT_CENTER,
             number.line.to_string(),
             font_id.clone(),
@@ -187,6 +207,8 @@ mod tests {
             Color32::from_rgb(0xCC, 0xCC, 0xCC)
         );
         assert_eq!(GutterPalette::DARK.background, TabPalette::DARK.tab_active);
+        assert_ne!(GutterPalette::DARK.bookmark, GutterPalette::DARK.number);
+        assert_ne!(GutterPalette::LIGHT.bookmark, GutterPalette::LIGHT.number);
         assert_eq!(
             GutterPalette::LIGHT.number_active,
             Color32::from_rgb(0x17, 0x11, 0x84)
@@ -276,11 +298,17 @@ mod tests {
     #[test]
     fn test_only_first_row_of_a_wrapped_line_is_numbered() {
         let galley = with_ui(|ui| layout(ui, "aaaa aaaa aaaa\nb", 40.0));
-        let numbers = visible_numbers(&galley, 0.0, egui::Rangef::new(0.0, 1e6), Some(2));
+        let numbers = visible_numbers(
+            &galley,
+            0.0,
+            egui::Rangef::new(0.0, 1e6),
+            Some(2),
+            &Bookmarks::default(),
+        );
         let lines: Vec<usize> = numbers.iter().map(|n| n.line).collect();
         assert_eq!(lines, vec![1, 2]);
         let last = galley.rows.last().unwrap().rect();
-        assert_eq!(numbers[1].center_y, last.center().y);
+        assert_eq!(numbers[1].row, last.y_range());
         assert!(!numbers[0].active);
         assert!(numbers[1].active);
     }
@@ -291,12 +319,23 @@ mod tests {
         let row_h = galley.rows[0].rect().height();
         // Galley placed at y = 100; show only rows 2 and 3 (lines 2..=3).
         let visible = egui::Rangef::new(100.0 + row_h * 1.5, 100.0 + row_h * 2.5);
-        let numbers = visible_numbers(&galley, 100.0, visible, None);
+        let numbers = visible_numbers(&galley, 100.0, visible, None, &Bookmarks::default());
         let lines: Vec<usize> = numbers.iter().map(|n| n.line).collect();
         assert_eq!(lines, vec![2, 3]);
         assert_eq!(
-            numbers[0].center_y,
+            numbers[0].row.center(),
             100.0 + galley.rows[1].rect().center().y
         );
+    }
+
+    #[test]
+    fn test_bookmarked_lines_are_flagged() {
+        let text = "1\n2\n3";
+        let galley = with_ui(|ui| layout(ui, text, f32::INFINITY));
+        let mut bookmarks = Bookmarks::default();
+        bookmarks.toggle(2, text);
+        let numbers = visible_numbers(&galley, 0.0, egui::Rangef::new(0.0, 1e6), None, &bookmarks);
+        let flagged: Vec<bool> = numbers.iter().map(|n| n.bookmarked).collect();
+        assert_eq!(flagged, vec![false, true, false]);
     }
 }

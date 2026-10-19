@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::activity_bar;
+use crate::bookmarks::Bookmarks;
 use crate::file_browser::{self, Explorer};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
@@ -27,6 +28,9 @@ const HOME_URL: &str = "https://github.com/donairl/red-editor/";
 /// Seconds between checks for open files changed by other programs.
 const DISK_CHECK_SECS: f64 = 2.0;
 
+/// Under the editor's id, the `char` index it was last right-clicked at.
+const CONTEXT_CHAR: &str = "context_char";
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DocumentTab {
     pub text_content: String,
@@ -42,6 +46,8 @@ pub struct DocumentTab {
     /// The file changed on disk while this tab had unsaved edits; the user
     /// is asked which version to keep.
     pub disk_conflict: bool,
+    /// Lines the user bookmarked; they follow edits.
+    pub bookmarks: Bookmarks,
 }
 
 /// Modified time and size of a file: when either moves, the file changed.
@@ -70,6 +76,7 @@ impl DocumentTab {
             highlight_cache: DocumentHighlightCache::default(),
             disk_stamp: None,
             disk_conflict: false,
+            bookmarks: Bookmarks::default(),
         }
     }
 
@@ -87,6 +94,7 @@ impl DocumentTab {
             highlight_cache: DocumentHighlightCache::default(),
             disk_stamp,
             disk_conflict: false,
+            bookmarks: Bookmarks::default(),
         })
     }
 
@@ -115,6 +123,11 @@ impl DocumentTab {
 
     pub fn is_dirty(&self) -> bool {
         self.text_content != self.saved_content
+    }
+
+    /// Moves the bookmarks along with the edits made since the last call.
+    pub fn sync_bookmarks(&mut self) {
+        self.bookmarks.sync(&self.text_content);
     }
 
     pub fn is_pristine(&self) -> bool {
@@ -172,6 +185,10 @@ pub struct TextEditorApp {
     pub status_message: Option<(String, bool)>, // (message, is_error)
     /// The caret's line and column as the status bar last showed them.
     status_position: Option<(usize, usize)>,
+    /// The bookmark count the status bar last showed.
+    status_bookmarks: usize,
+    /// Show the window listing the active document's bookmarks.
+    pub show_bookmarks: bool,
     /// egui's clock when the open files were last compared with the disk.
     last_disk_check: f64,
     pub highlighter: SyntaxHighlighter,
@@ -238,6 +255,8 @@ impl Default for TextEditorApp {
             show_about_modal: false,
             status_message: None,
             status_position: None,
+            status_bookmarks: 0,
+            show_bookmarks: false,
             last_disk_check: 0.0,
             highlighter: SyntaxHighlighter::new(),
             word_wrap: false,
@@ -546,9 +565,12 @@ impl TextEditorApp {
     }
 
     /// The document name and the latest status message, and the caret's
-    /// line and column at the right end.
+    /// line and column at the right end, after a badge counting the
+    /// bookmarks that opens their list.
     pub fn show_status_bar(&mut self, ui: &mut egui::Ui) {
         self.status_position = self.caret_position(ui.ctx());
+        self.active_tab_mut().sync_bookmarks();
+        self.status_bookmarks = self.active_tab().bookmarks.len();
         ui.horizontal(|ui| {
             let modified = if self.is_dirty() {
                 self.i18n.t("status.modified")
@@ -571,10 +593,26 @@ impl TextEditorApp {
                 ui.colored_label(color, msg);
             }
 
-            if let Some((line, col)) = self.status_position {
+            if self.status_position.is_some() || self.status_bookmarks > 0 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (line, col) = (line.to_string(), col.to_string());
-                    ui.label(self.i18n.tf("status.position", &[("line", &line), ("col", &col)]));
+                    if let Some((line, col)) = self.status_position {
+                        let (line, col) = (line.to_string(), col.to_string());
+                        ui.label(self.i18n.tf("status.position", &[("line", &line), ("col", &col)]));
+                    }
+                    if self.status_bookmarks > 0 {
+                        let count = self.status_bookmarks.to_string();
+                        let color = gutter::GutterPalette::for_visuals(ui.visuals()).bookmark;
+                        let label = egui::RichText::new(self.i18n.tf("status.bookmarks", &[("count", &count)]))
+                            .small()
+                            .color(color);
+                        let badge = egui::Button::new(label)
+                            .stroke(egui::Stroke::new(1.0, color))
+                            .corner_radius(8)
+                            .selected(self.show_bookmarks);
+                        if ui.add(badge).on_hover_text(self.i18n.t("bookmark.show_list")).clicked() {
+                            self.show_bookmarks = !self.show_bookmarks;
+                        }
+                    }
                 });
             }
         });
@@ -652,7 +690,60 @@ impl TextEditorApp {
             self.menu_focus = Some(editor.id);
             ctx.memory_mut(|m| m.surrender_focus(editor.id));
         }
-        editor.context_menu(|ui| self.show_clipboard_items(ui, ctx));
+        editor.context_menu(|ui| {
+            self.show_clipboard_items(ui, ctx);
+            if let Some(line) = self.context_line(ctx) {
+                ui.separator();
+                let key = if self.active_tab().bookmarks.contains(line) {
+                    "bookmark.remove"
+                } else {
+                    "bookmark.add"
+                };
+                if ui.button(self.i18n.t(key)).clicked() {
+                    self.toggle_bookmark(line);
+                    ui.close();
+                }
+            }
+        });
+    }
+
+    /// The line the editor was last right-clicked on, else the caret's.
+    fn context_line(&self, ctx: &egui::Context) -> Option<usize> {
+        ctx.data(|d| d.get_temp::<usize>(self.editor_id().with(CONTEXT_CHAR)))
+            .map(|at| find::line_col(&self.active_tab().text_content, at).0)
+            .or_else(|| self.caret_position(ctx).map(|(line, _)| line))
+    }
+
+    /// Adds or removes the bookmark on `line` of the active document.
+    pub fn toggle_bookmark(&mut self, line: usize) {
+        let tab = self.active_tab_mut();
+        tab.bookmarks.toggle(line, &tab.text_content);
+    }
+
+    /// The list of the active document's bookmarks, while it is open;
+    /// picking one moves the caret there.
+    fn show_bookmarks_window(&mut self, ctx: &egui::Context) {
+        if !self.show_bookmarks || self.zen_mode {
+            return;
+        }
+        let rows = self.bookmarked_rows();
+        let caret_line = self.caret_position(ctx).map(|(line, _)| line);
+        let mut open = true;
+        let picked = modals::show_bookmarks_panel(ctx, &mut open, &rows, caret_line, &self.i18n);
+        self.show_bookmarks = open;
+        if let Some(line) = picked {
+            self.goto_line(line);
+        }
+    }
+
+    /// The active document's bookmarked lines, with their text.
+    fn bookmarked_rows(&self) -> Vec<(usize, &str)> {
+        let tab = self.active_tab();
+        let mut texts = tab.text_content.split('\n').zip(1..);
+        tab.bookmarks
+            .lines()
+            .filter_map(|line| texts.find(|&(_, n)| n == line).map(|(text, _)| (line, text)))
+            .collect()
     }
 
     /// Re-indents the active document in place, reporting the outcome in the
@@ -1497,7 +1588,18 @@ fn render_editor(
     line_numbers: bool,
     hint: &str,
 ) {
-    render_editor_with(ui, text, layouter, word_wrap, line_numbers, hint, None, EditorRequest::default(), None);
+    render_editor_with(
+        ui,
+        text,
+        layouter,
+        word_wrap,
+        line_numbers,
+        hint,
+        None,
+        EditorRequest::default(),
+        None,
+        &mut Bookmarks::default(),
+    );
 }
 
 /// Rectangles covering the `char` range `(start, end)` of `galley`, one per
@@ -1527,8 +1629,9 @@ fn selection_rects(galley: &egui::Galley, (start, end): find::Range) -> Vec<egui
 }
 
 /// [`render_editor`] with a fixed widget `id` (so the app can find the
-/// editor's state) and a one-shot `request` to act on. Also returns the
-/// editor's response, for its right-click menu.
+/// editor's state) and a one-shot `request` to act on. `bookmarks` follow
+/// the edits and are marked in the gutter. Also returns the editor's
+/// response, for its right-click menu.
 #[allow(clippy::too_many_arguments)]
 fn render_editor_with(
     ui: &mut egui::Ui,
@@ -1540,6 +1643,7 @@ fn render_editor_with(
     id: Option<egui::Id>,
     request: EditorRequest,
     scroll_to: Option<f32>,
+    bookmarks: &mut Bookmarks,
 ) -> (ScrollPos, egui::Response) {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
@@ -1671,8 +1775,18 @@ fn render_editor_with(
             }
         };
 
+        bookmarks.sync(text);
         if let Some(width) = gutter_width {
-            gutter::paint(ui, &output, &font_id, width);
+            gutter::paint(ui, &output, &font_id, width, bookmarks);
+        }
+
+        // Where the right-click menu was opened, for its bookmark item: the
+        // click that opens it, a long touch included, records the spot.
+        if let (true, Some(id), Some(pointer)) =
+            (output.response.secondary_clicked(), id, ui.input(|i| i.pointer.interact_pos()))
+        {
+            let at = output.galley.cursor_from_pos(pointer - output.galley_pos).index.0;
+            ui.ctx().data_mut(|d| d.insert_temp(id.with(CONTEXT_CHAR), at));
         }
 
         let mut cursor_range = output.cursor_range;
@@ -2005,10 +2119,11 @@ impl eframe::App for TextEditorApp {
 
             let scroll_to = if previewing { self.scroll_sync.take_editor_offset() } else { None };
             let (editor_pos, editor) = ui.push_id(self.active_tab_index, |ui| {
+                let tab = &mut self.tabs[active_idx];
                 if too_large {
                     render_editor_with(
                         ui,
-                        &mut self.tabs[active_idx].text_content,
+                        &mut tab.text_content,
                         None,
                         word_wrap,
                         line_numbers,
@@ -2016,9 +2131,9 @@ impl eframe::App for TextEditorApp {
                         Some(editor_id),
                         request,
                         scroll_to,
+                        &mut tab.bookmarks,
                     )
                 } else {
-                    let tab = &mut self.tabs[active_idx];
                     let mut layouter = self
                         .highlighter
                         .layouter(language, font_id)
@@ -2033,6 +2148,7 @@ impl eframe::App for TextEditorApp {
                         Some(editor_id),
                         request,
                         scroll_to,
+                        &mut tab.bookmarks,
                     )
                 }
             })
@@ -2046,6 +2162,8 @@ impl eframe::App for TextEditorApp {
 
         // 5. Modals & Dialogs
         modals::show_about_modal(&ctx, &mut self.show_about_modal, &self.i18n);
+
+        self.show_bookmarks_window(&ctx);
 
         #[allow(clippy::collapsible_if)]
         if self.pending_action.is_some() {
@@ -2075,9 +2193,12 @@ impl eframe::App for TextEditorApp {
 
         self.return_focus_after_menu(&ctx);
 
-        // The status bar is drawn before the editor moves the caret; draw
-        // the frame again when it shows a stale position.
-        if !self.zen_mode && self.caret_position(&ctx) != self.status_position {
+        // The status bar is drawn before the editor moves the caret and its
+        // edits move the bookmarks; draw the frame again when it is stale.
+        if !self.zen_mode
+            && (self.caret_position(&ctx) != self.status_position
+                || self.active_tab().bookmarks.len() != self.status_bookmarks)
+        {
             ctx.request_repaint();
         }
     }
@@ -2493,7 +2614,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(input, |ui| {
-                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None);
+                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None, &mut Bookmarks::default());
             });
             out.textures_delta.clear();
         };
@@ -2585,7 +2706,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(input, |ui| {
-                super::render_editor_with(ui, &mut text.borrow_mut(), None, false, false, "", Some(id), request.take().unwrap(), None);
+                super::render_editor_with(ui, &mut text.borrow_mut(), None, false, false, "", Some(id), request.take().unwrap(), None, &mut Bookmarks::default());
             });
             out.textures_delta.clear();
         };
@@ -2615,7 +2736,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(input, |ui| {
-                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None);
+                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None, &mut Bookmarks::default());
             });
             out.textures_delta.clear();
         };
@@ -2655,7 +2776,7 @@ mod tests {
             };
             let mut editor = None;
             let mut out = ctx.run_ui(input, |ui| {
-                let (_, response) = super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None);
+                let (_, response) = super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None, &mut Bookmarks::default());
                 response.context_menu(|ui| {
                     ui.label("menu");
                 });
@@ -3424,7 +3545,7 @@ mod tests {
                 app.show_status_bar(ui);
                 let text = &mut app.active_tab_mut().text_content;
                 let request = request.take().unwrap_or_default();
-                super::render_editor_with(ui, text, None, false, false, "", Some(id), request, None);
+                super::render_editor_with(ui, text, None, false, false, "", Some(id), request, None, &mut Bookmarks::default());
             })
         };
         let key = |key| egui::Event::Key {
@@ -3448,6 +3569,177 @@ mod tests {
         assert!(painted_text(&shapes, "Baris 2, Kolom 3").is_some(), "down arrow");
         let shapes = step(&mut app, vec![key(egui::Key::ArrowRight)], EditorRequest::default());
         assert!(painted_text(&shapes, "Baris 2, Kolom 4").is_some(), "right arrow");
+    }
+
+    /// The editor's right-click menu toggles the bookmark of the line under
+    /// the pointer: "Tambah Bookmark" adds it, "Hapus Bookmark" removes it.
+    #[test]
+    fn test_context_menu_toggles_the_bookmark_of_the_clicked_line() {
+        let mut app = TextEditorApp::default();
+        let doc = "alpha\nbeta\ngamma";
+        app.active_tab_mut().text_content = doc.into();
+        let ctx = egui::Context::default();
+        let id = app.editor_id();
+        let frame = |app: &mut TextEditorApp, events| {
+            run_frame_with_events(&ctx, events, |ui| {
+                let tab = &mut app.tabs[0];
+                let (_, editor) = super::render_editor_with(
+                    ui,
+                    &mut tab.text_content,
+                    None,
+                    false,
+                    true,
+                    "",
+                    Some(id),
+                    EditorRequest::default(),
+                    None,
+                    &mut tab.bookmarks,
+                );
+                app.show_editor_context_menu(ui.ctx(), &editor);
+            })
+        };
+        let (galley, _) = painted_text(&frame(&mut app, Vec::new()), doc).expect("text painted");
+        let line2 = egui::pos2(galley.left() + 4.0, galley.center().y);
+        // Right-clicks line 2 and clicks the menu item `label`.
+        let toggle_via_menu = |app: &mut TextEditorApp, label: &str| {
+            let right = |pressed| egui::Event::PointerButton {
+                pos: line2,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(app, vec![egui::Event::PointerMoved(line2), right(true)]);
+            frame(app, vec![right(false)]);
+            let (item, _) = painted_text(&frame(app, Vec::new()), label)
+                .unwrap_or_else(|| panic!("menu item {label:?}"));
+            frame(app, click_events(item.center()));
+            // The closed menu still covers line 2 for one frame.
+            frame(app, Vec::new());
+        };
+
+        toggle_via_menu(&mut app, "Tambah Bookmark");
+        assert_eq!(app.active_tab().bookmarks.lines().collect::<Vec<_>>(), vec![2]);
+        toggle_via_menu(&mut app, "Hapus Bookmark");
+        assert_eq!(app.active_tab().bookmarks.len(), 0);
+    }
+
+    /// A bookmarked line gets a marker in the gutter, left of its number.
+    #[test]
+    fn test_bookmarked_line_is_marked_in_the_gutter() {
+        let ctx = egui::Context::default();
+        let mut text = "alpha\nbeta\ngamma".to_string();
+        let mut bookmarks = Bookmarks::default();
+        bookmarks.toggle(2, &text);
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let request = EditorRequest::default();
+                super::render_editor_with(ui, &mut text, None, false, true, "", None, request, None, &mut bookmarks);
+            });
+        });
+        let color = crate::gutter::GutterPalette::for_visuals(&ctx.global_style().visuals).bookmark;
+        let marks: Vec<egui::Rect> = shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if rect.fill == color => Some(rect.rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marks.len(), 1, "one bookmarked line");
+        let (number, _) = painted_number(&shapes, 2).expect("line 2 numbered");
+        assert!((marks[0].center().y - number.center().y).abs() < 1.0, "level with line 2");
+        assert!(marks[0].right() < number.left());
+    }
+
+    /// Lines typed above a bookmark push it down with its line.
+    #[test]
+    fn test_bookmarks_follow_lines_typed_above_them() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique(("editor", 0));
+        let mut text = "alpha\nbeta".to_string();
+        let mut bookmarks = Bookmarks::default();
+        bookmarks.toggle(2, &text);
+        let mut frame = |events, request: EditorRequest| {
+            let mut request = Some(request);
+            run_frame_with_events(&ctx, events, |ui| {
+                let request = request.take().unwrap_or_default();
+                super::render_editor_with(ui, &mut text, None, false, true, "", Some(id), request, None, &mut bookmarks);
+            });
+        };
+        frame(Vec::new(), EditorRequest { focus: true, select: Some((0, 0)), ..Default::default() });
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![enter], EditorRequest::default());
+        assert_eq!(text, "\nalpha\nbeta");
+        assert_eq!(bookmarks.lines().collect::<Vec<_>>(), vec![3]);
+    }
+
+    /// With bookmarks, the status bar shows their count left of the caret
+    /// position; a click on that badge opens their list, a second closes it.
+    #[test]
+    fn test_status_bar_badge_counts_bookmarks_and_opens_the_list() {
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "a\nb\nc".into();
+        let ctx = egui::Context::default();
+        let status = |app: &mut TextEditorApp, events| {
+            run_frame_with_events(&ctx, events, |ui| app.show_status_bar(ui))
+        };
+        let badge_shown = |shapes: &[egui::epaint::ClippedShape]| {
+            shapes.iter().any(|clipped| {
+                matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text().starts_with("Di-bookmark"))
+            })
+        };
+        assert!(!badge_shown(&status(&mut app, Vec::new())), "no badge without bookmarks");
+
+        app.toggle_bookmark(1);
+        app.toggle_bookmark(3);
+        let mut state = egui::text_edit::TextEditState::default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(2))));
+        state.store(&ctx, app.editor_id());
+        let shapes = status(&mut app, Vec::new());
+        let (badge, _) = painted_text(&shapes, "Di-bookmark: 2").expect("badge");
+        let (position, _) = painted_text(&shapes, "Baris 2, Kolom 1").expect("caret position");
+        assert!(badge.right() < position.left(), "the caret position stays rightmost");
+
+        assert!(!app.show_bookmarks);
+        status(&mut app, click_events(badge.center()));
+        assert!(app.show_bookmarks, "the badge opens the list");
+        status(&mut app, click_events(badge.center()));
+        assert!(!app.show_bookmarks, "and closes it");
+
+        assert!(app.i18n.select("en"));
+        assert!(painted_text(&status(&mut app, Vec::new()), "Bookmarked: 2").is_some());
+    }
+
+    /// The list shows each bookmarked line with its text; picking one puts
+    /// the caret there and leaves the list open.
+    #[test]
+    fn test_bookmark_list_jumps_to_the_picked_line() {
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "alpha\n  beta\ngamma".into();
+        app.toggle_bookmark(3);
+        app.toggle_bookmark(2);
+        assert_eq!(app.bookmarked_rows(), vec![(2, "  beta"), (3, "gamma")]);
+
+        app.show_bookmarks = true;
+        let ctx = egui::Context::default();
+        let frame = |app: &mut TextEditorApp, events| {
+            run_frame_with_events(&ctx, events, |ui| app.show_bookmarks_window(ui.ctx()))
+        };
+        // A window is sized, unseen, on its first frame.
+        frame(&mut app, Vec::new());
+        let (row, _) = painted_text(&frame(&mut app, Vec::new()), "Baris 3: gamma").expect("row of line 3");
+        assert!(painted_text(&frame(&mut app, Vec::new()), "Baris 2: beta").is_some(), "text trimmed");
+
+        frame(&mut app, click_events(row.center()));
+        assert_eq!(app.editor_request.goto, Some(13), "caret at the start of line 3");
+        assert!(app.show_bookmarks);
     }
 
     /// Help > Home opens the project page in the browser.

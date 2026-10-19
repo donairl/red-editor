@@ -12,6 +12,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Syntax highlighting** untuk Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (juga `.scss` dan `.less`), JSON, Markdown, Go, Python, SQL, serta template Blade (`.blade.php`), Twig (`.twig`), dan Smarty (`.tpl`), dikenali dari ekstensi file. Bahasa bisa diganti manual lewat menu **Tampilan → Bahasa**. File di atas 1 MB ditampilkan tanpa highlighting.
 - **SQL di dalam string**: string di Rust, C, C++, PHP, JavaScript, TypeScript, Go, atau Python yang berisi perintah SQL (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) diwarnai kata kunci SQL-nya, termasuk string multi-baris. Kata kunci huruf besar sudah cukup; huruf kecil butuh klausa kedua (`select … from`), jadi teks UI seperti "Select a file" tetap berwarna string biasa.
 - **Nomor baris** yang bisa ditampilkan atau disembunyikan (**Tampilan → Nomor Baris**). Nomor baris tempat kursor berada tampil lebih terang.
+- **Bookmark baris**: klik kanan sebuah baris di editor lalu pilih **Tambah Bookmark** (atau **Hapus Bookmark**). Baris yang di-bookmark diberi penanda di gutter dan ikut bergeser saat teks diedit. Badge **Di-bookmark: N** di status bar membuka daftar baris yang di-bookmark; klik salah satunya untuk melompat ke sana. Bookmark berlaku selama aplikasi terbuka.
 - **Bungkus baris** (word wrap) yang bisa dinyalakan atau dimatikan (**Tampilan → Bungkus Baris**). Saat mati, baris panjang bisa digeser ke samping.
 - **Explorer dan Activity Bar** seperti VS Code: buka folder, jelajahi isinya sebagai tree, klik file untuk membukanya di tab. Ada tombol **Refresh** dan **Collapse All** di header folder.
 - **Cari dan ganti** (**Edit → Cari**, **Edit → Ganti**): bar di atas editor dengan hasil yang disorot, opsi huruf besar/kecil, dan Ganti Semua. Ada juga **Ke Baris…** untuk melompat ke nomor baris.
@@ -186,14 +187,15 @@ Struktur kode:
 | `src/main.rs` | Titik masuk, membuat jendela |
 | `src/app.rs` | State aplikasi, menu, panel, editor |
 | `src/tab_bar.rs` | Tab strip bergaya VS Code |
-| `src/gutter.rs` | Gutter nomor baris |
+| `src/gutter.rs` | Gutter nomor baris dan penanda bookmark |
+| `src/bookmarks.rs` | Bookmark baris yang ikut bergeser saat diedit |
 | `src/find.rs` | Cari/ganti, bar cari dan bar Ke Baris |
 | `src/search.rs` | Cari di File: pencarian folder dan panel hasil |
 | `src/highlighter.rs` | Syntax highlighting (syntect) |
 | `src/embedded_sql.rs` | Pewarnaan SQL di dalam string |
 | `src/file_browser.rs` | Explorer: tree folder dan sidebar |
 | `src/activity_bar.rs` | Activity Bar |
-| `src/modals.rs` | Dialog About dan konfirmasi simpan |
+| `src/modals.rs` | Dialog About, konfirmasi simpan, daftar bookmark |
 | `src/i18n.rs` | Terjemahan antarmuka dari `assets/lang/*.json` |
 | `assets/lang/` | File bahasa antarmuka |
 

@@ -64,6 +64,13 @@
   "status.document": "文档：{name}{modified}",
   "status.modified": " [已修改]",
   "status.position": "行 {line}，列 {col}",
+  "status.bookmarks": "书签：{count}",
+  "bookmark.add": "添加书签",
+  "bookmark.remove": "移除书签",
+  "bookmark.title": "书签",
+  "bookmark.line": "第 {line} 行",
+  "bookmark.empty": "尚无添加书签的行。",
+  "bookmark.show_list": "显示书签行",
 
   "doc.untitled": "[新文档]",
   "editor.placeholder": "在此输入内容...",
