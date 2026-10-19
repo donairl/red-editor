@@ -86,6 +86,12 @@
   "unsaved.save": "Guardar",
   "unsaved.discard": "Descartar",
   "unsaved.cancel": "Cancelar",
+  "msg.reloaded": "{name} se recargó porque cambió en el disco.",
+  "msg.changed_on_disk": "{name} cambió en el disco. Elige qué versión conservar y vuelve a guardar.",
+  "disk.title": "Archivo modificado en el disco",
+  "disk.message": "Otro programa modificó \"{name}\". ¿Recargarlo y perder los cambios sin guardar, o conservar tu versión?",
+  "disk.reload": "Recargar",
+  "disk.keep": "Conservar la mía",
 
   "language.plain_text": "Texto sin formato",
 

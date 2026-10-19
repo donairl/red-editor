@@ -86,6 +86,12 @@
   "unsaved.save": "保存",
   "unsaved.discard": "放弃",
   "unsaved.cancel": "取消",
+  "msg.reloaded": "{name} 已在磁盘上更改，已重新加载。",
+  "msg.changed_on_disk": "{name} 已在磁盘上更改。请选择保留哪个版本，然后再保存。",
+  "disk.title": "文件已在磁盘上更改",
+  "disk.message": "\"{name}\" 已被其他程序更改。重新加载并丢弃未保存的更改，还是保留你的版本？",
+  "disk.reload": "重新加载",
+  "disk.keep": "保留我的版本",
 
   "language.plain_text": "纯文本",
 

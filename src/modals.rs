@@ -70,6 +70,42 @@ pub fn show_unsaved_changes_modal(
     response
 }
 
+/// What to keep when a file with unsaved edits changed on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiskChoice {
+    /// Read the file again, dropping the unsaved edits.
+    Reload,
+    /// Keep the edits; the next save overwrites the file.
+    Keep,
+}
+
+/// Asks what to keep of `file_name`, changed on disk while it had unsaved
+/// edits.
+pub fn show_disk_conflict_modal(
+    ctx: &egui::Context,
+    file_name: &str,
+    i18n: &I18n,
+) -> Option<DiskChoice> {
+    let mut choice = None;
+    egui::Window::new(i18n.t("disk.title"))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label(i18n.tf("disk.message", &[("name", file_name)]));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui.button(i18n.t("disk.reload")).clicked() {
+                    choice = Some(DiskChoice::Reload);
+                }
+                if ui.button(i18n.t("disk.keep")).clicked() {
+                    choice = Some(DiskChoice::Keep);
+                }
+            });
+        });
+    choice
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +150,16 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(open);
+    }
+
+    #[test]
+    fn test_show_disk_conflict_modal_headless() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let choice = show_disk_conflict_modal(ui.ctx(), "test.txt", &I18n::builtin());
+            assert_eq!(choice, None, "nothing clicked");
+        });
+        output.textures_delta.clear();
     }
 
     #[test]

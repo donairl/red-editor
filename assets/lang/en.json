@@ -86,6 +86,12 @@
   "unsaved.save": "Save",
   "unsaved.discard": "Don't Save",
   "unsaved.cancel": "Cancel",
+  "msg.reloaded": "Reloaded {name}: it changed on disk.",
+  "msg.changed_on_disk": "{name} changed on disk. Choose which version to keep, then save again.",
+  "disk.title": "File Changed on Disk",
+  "disk.message": "\"{name}\" was changed by another program. Reload it and lose your unsaved changes, or keep your version?",
+  "disk.reload": "Reload",
+  "disk.keep": "Keep Mine",
 
   "language.plain_text": "Plain Text",
 

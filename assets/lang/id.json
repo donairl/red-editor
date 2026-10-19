@@ -86,6 +86,12 @@
   "unsaved.save": "Simpan",
   "unsaved.discard": "Abaikan",
   "unsaved.cancel": "Batal",
+  "msg.reloaded": "{name} dimuat ulang karena diubah di luar editor.",
+  "msg.changed_on_disk": "{name} diubah di luar editor. Pilih versi yang dipakai, lalu simpan lagi.",
+  "disk.title": "File Diubah di Luar Editor",
+  "disk.message": "\"{name}\" diubah oleh program lain. Muat ulang dan buang perubahan yang belum disimpan, atau pakai versi Anda?",
+  "disk.reload": "Muat Ulang",
+  "disk.keep": "Pakai Versi Saya",
 
   "language.plain_text": "Teks Biasa",
 

@@ -86,6 +86,12 @@
   "unsaved.save": "Speichern",
   "unsaved.discard": "Verwerfen",
   "unsaved.cancel": "Abbrechen",
+  "msg.reloaded": "{name} neu geladen, da die Datei auf der Festplatte geändert wurde.",
+  "msg.changed_on_disk": "{name} wurde auf der Festplatte geändert. Wähle die Version, die bleiben soll, und speichere erneut.",
+  "disk.title": "Datei auf der Festplatte geändert",
+  "disk.message": "\"{name}\" wurde von einem anderen Programm geändert. Neu laden und die ungespeicherten Änderungen verwerfen, oder deine Version behalten?",
+  "disk.reload": "Neu laden",
+  "disk.keep": "Meine behalten",
 
   "language.plain_text": "Nur Text",
 
