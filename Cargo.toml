@@ -7,6 +7,6 @@ edition = "2024"
 eframe = { version = "0.37", features = ["persistence"] } # Gunakan versi terbaru yang stabil
 rfd = "0.17"
 serde_json = "1"
-syntect = { version = "5.3", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "regex-fancy"] }
+syntect = { version = "5.3", default-features = false, features = ["parsing", "yaml-load", "default-syntaxes", "default-themes", "regex-fancy"] }
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"] }
 

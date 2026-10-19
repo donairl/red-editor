@@ -9,7 +9,7 @@ use std::sync::{Arc, mpsc};
 
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{HighlightIterator, HighlightState, Highlighter, Theme, ThemeSet};
-use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+use syntect::parsing::{ParseState, ScopeStack, SyntaxDefinition, SyntaxReference, SyntaxSet};
 use eframe::egui;
 
 /// Theme used for all highlighting.
@@ -33,6 +33,10 @@ pub enum Language {
     Markdown,
     Go,
     Python,
+    /// Laravel Blade templates (`*.blade.php`).
+    Blade,
+    Twig,
+    Smarty,
 }
 
 impl Language {
@@ -51,6 +55,9 @@ impl Language {
             Language::Markdown,
             Language::Go,
             Language::Python,
+            Language::Blade,
+            Language::Twig,
+            Language::Smarty,
         ]
     }
 
@@ -70,14 +77,24 @@ impl Language {
             "md" | "markdown" | "mdown" | "mkd" => Language::Markdown,
             "go" => Language::Go,
             "py" | "pyw" | "pyi" => Language::Python,
+            "twig" => Language::Twig,
+            "tpl" | "smarty" => Language::Smarty,
             _ => Language::PlainText,
         }
     }
 
     /// Maps a file path to a language via its extension.
     ///
-    /// Paths without an extension map to [`Language::PlainText`].
+    /// `*.blade.php` is Blade rather than PHP, which the extension alone cannot
+    /// tell. Paths without an extension map to [`Language::PlainText`].
     pub fn from_path(path: &Path) -> Language {
+        let is_blade = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.to_ascii_lowercase().ends_with(".blade.php"));
+        if is_blade {
+            return Language::Blade;
+        }
         path.extension()
             .and_then(|ext| ext.to_str())
             .map(Language::from_extension)
@@ -99,6 +116,9 @@ impl Language {
             Language::Markdown => "Markdown",
             Language::Go => "Go",
             Language::Python => "Python",
+            Language::Blade => "Blade",
+            Language::Twig => "Twig",
+            Language::Smarty => "Smarty",
         }
     }
 
@@ -116,8 +136,32 @@ impl Language {
             Language::Markdown => "Markdown",
             Language::Go => "Go",
             Language::Python => "Python",
+            Language::Blade => "Blade",
+            Language::Twig => "Twig",
+            Language::Smarty => "Smarty",
         }
     }
+}
+
+/// Template grammars syntect does not bundle: HTML with embedded template tags.
+const TEMPLATE_GRAMMARS: [&str; 3] = [
+    include_str!("syntaxes/blade.sublime-syntax"),
+    include_str!("syntaxes/twig.sublime-syntax"),
+    include_str!("syntaxes/smarty.sublime-syntax"),
+];
+
+/// The bundled grammars plus [`TEMPLATE_GRAMMARS`].
+///
+/// The newline-terminated variant, because the layouter feeds lines split on
+/// '\n'.
+fn build_syntax_set() -> SyntaxSet {
+    let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
+    for source in TEMPLATE_GRAMMARS {
+        let grammar = SyntaxDefinition::load_from_str(source, true, None)
+            .expect("embedded template grammar is valid");
+        builder.add(grammar);
+    }
+    builder.build()
 }
 
 /// Holds syntect's grammars and themes for the lifetime of the application.
@@ -228,9 +272,7 @@ impl SyntaxHighlighter {
     /// Loads syntect's bundled grammars and themes. Infallible.
     pub fn new() -> Self {
         Self {
-            // The layouter feeds this set lines split on '\n', so it needs the
-            // newline-terminated grammar variant.
-            syntax_set: Arc::new(SyntaxSet::load_defaults_newlines()),
+            syntax_set: Arc::new(build_syntax_set()),
             theme_set: Arc::new(ThemeSet::load_defaults()),
             cache: None,
             pending: None,
@@ -1012,6 +1054,27 @@ mod tests {
         for ext in ["md", "markdown", "mdown", "mkd"] {
             assert_eq!(Language::from_extension(ext), Language::Markdown, "{ext}");
         }
+        assert_eq!(Language::from_extension("twig"), Language::Twig);
+        assert_eq!(Language::from_extension("tpl"), Language::Smarty);
+        assert_eq!(Language::from_extension("smarty"), Language::Smarty);
+    }
+
+    #[test]
+    fn test_from_path_detects_blade_before_php() {
+        assert_eq!(
+            Language::from_path(Path::new("/app/resources/views/home.blade.php")),
+            Language::Blade
+        );
+        assert_eq!(
+            Language::from_path(Path::new("/app/Home.BLADE.PHP")),
+            Language::Blade
+        );
+        assert_eq!(Language::from_path(Path::new("/app/blade.php")), Language::Php);
+        assert_eq!(Language::from_path(Path::new("/app/index.php")), Language::Php);
+        assert_eq!(
+            Language::from_path(Path::new("/app/templates/base.html.twig")),
+            Language::Twig
+        );
     }
 
     #[test]
@@ -1080,11 +1143,14 @@ mod tests {
         assert_eq!(Language::Markdown.display_name(), "Markdown");
         assert_eq!(Language::Go.display_name(), "Go");
         assert_eq!(Language::Python.display_name(), "Python");
+        assert_eq!(Language::Blade.display_name(), "Blade");
+        assert_eq!(Language::Twig.display_name(), "Twig");
+        assert_eq!(Language::Smarty.display_name(), "Smarty");
     }
 
     #[test]
     fn test_all_lists_every_variant() {
-        assert_eq!(Language::all().len(), 12);
+        assert_eq!(Language::all().len(), 15);
     }
 
     #[test]
@@ -1538,6 +1604,107 @@ mod tests {
             &["\"\"\"doc start", "def not_code(): pass", "end\"\"\""],
         );
         assert_eq!(counts[1], 1, "docstring state was lost between lines");
+    }
+
+    /// Colour of the first section of `doc` that covers `needle`.
+    fn colour_of(lang: Language, doc: &str, needle: &str) -> egui::Color32 {
+        let mut highlighter = SyntaxHighlighter::new();
+        let job = highlighter
+            .layouter(lang, egui::FontId::monospace(14.0))
+            .document_job(doc);
+        let at = doc.find(needle).expect("needle is in the document");
+        job.sections
+            .iter()
+            .find(|s| s.byte_range.start.0 <= at && at < s.byte_range.end.0)
+            .expect("a section covers the needle")
+            .format
+            .color
+    }
+
+    #[test]
+    fn test_template_languages_are_coloured() {
+        let samples = [
+            (Language::Blade, "@foreach ($users as $user)"),
+            (Language::Blade, "<p>{{ $user->name }}</p>"),
+            (Language::Twig, "{% for user in users %}"),
+            (Language::Twig, "<p>{{ user.name|upper }}</p>"),
+            (Language::Smarty, "{foreach $users as $user}"),
+            (Language::Smarty, "<p>{$user.name|escape}</p>"),
+        ];
+        for (lang, line) in samples {
+            let counts = section_counts(lang, &[line]);
+            assert!(counts[0] > 1, "{lang:?} produced a single plain section for {line:?}");
+        }
+    }
+
+    #[test]
+    fn test_template_comments_are_coloured() {
+        let text = colour_of(Language::Html, "<p>note</p>", "note");
+        for (lang, line) in [
+            (Language::Blade, "{{-- note --}}"),
+            (Language::Twig, "{# note #}"),
+            (Language::Smarty, "{* note *}"),
+        ] {
+            assert_ne!(colour_of(lang, line, "note"), text, "{lang:?}: comment not coloured");
+        }
+    }
+
+    #[test]
+    fn test_template_languages_still_colour_html() {
+        for (lang, line) in [
+            (Language::Blade, "<a href=\"/x\">{{ $a }}</a>"),
+            (Language::Twig, "<a href=\"/x\">{{ a }}</a>"),
+            (Language::Smarty, "<a href=\"/x\">{$a}</a>"),
+        ] {
+            let attribute = colour_of(lang, line, "/x");
+            let text = colour_of(lang, "<p>text</p>", "text");
+            assert_ne!(attribute, text, "{lang:?}: HTML attribute was not coloured");
+        }
+    }
+
+    #[test]
+    fn test_template_tags_colour_inside_html_attributes() {
+        let blade = "<a class=\"{{ $cls }}\">";
+        let at = colour_of(Language::Blade, blade, "$cls");
+        let quoted = colour_of(Language::Blade, blade, "class");
+        assert_ne!(at, quoted, "Blade echo inside an attribute was not highlighted");
+
+        let twig = "<a class=\"{{ cls|upper }}\">";
+        assert_ne!(
+            colour_of(Language::Twig, twig, "upper"),
+            colour_of(Language::Twig, twig, "class"),
+            "Twig filter inside an attribute was not highlighted"
+        );
+    }
+
+    #[test]
+    fn test_blade_ignores_email_and_css_at_rules() {
+        let counts = section_counts(Language::Blade, &["<p>user@example.com</p>"]);
+        let plain = section_counts(Language::Html, &["<p>user@example.com</p>"]);
+        assert_eq!(counts, plain, "an email address was treated as a directive");
+
+        let counts = section_counts(Language::Blade, &["<style>", "@media print {}", "</style>"]);
+        let plain = section_counts(Language::Html, &["<style>", "@media print {}", "</style>"]);
+        assert_eq!(counts, plain, "a CSS at-rule was treated as a directive");
+    }
+
+    #[test]
+    fn test_template_comments_keep_state_across_lines() {
+        for (lang, doc) in [
+            (Language::Blade, ["{{-- start", "@if (x) {{ $a }}", "end --}}"]),
+            (Language::Twig, ["{# start", "{% if x %}{{ a }}", "end #}"]),
+            (Language::Smarty, ["{* start", "{if $x}{$a}", "end *}"]),
+        ] {
+            let counts = section_counts(lang, &doc);
+            assert_eq!(counts[1], 1, "{lang:?}: comment state was lost between lines");
+        }
+    }
+
+    #[test]
+    fn test_smarty_brace_followed_by_space_is_plain_text() {
+        let counts = section_counts(Language::Smarty, &["<script>", "if (a) { b(); }", "</script>"]);
+        let js = section_counts(Language::Html, &["<script>", "if (a) { b(); }", "</script>"]);
+        assert_eq!(counts, js);
     }
 
     #[test]

@@ -1,0 +1,133 @@
+%YAML 1.2
+---
+# Laravel Blade: HTML with `{{ }}`, `{!! !!}`, `{{-- --}}` and `@directive`s.
+name: Blade
+file_extensions: [blade.php]
+scope: text.html.blade
+contexts:
+  main:
+    - meta_include_prototype: false
+    - match: ''
+      push: scope:text.html.basic
+      with_prototype:
+        - include: blade
+
+  blade:
+    - match: '@(?:\{\{|\{!!|@)'
+      scope: constant.character.escape.blade
+    - match: '\{\{--'
+      scope: punctuation.definition.comment.begin.blade
+      push: blade-comment
+    - match: '\{!!'
+      scope: punctuation.section.embedded.begin.blade
+      push: blade-echo-raw
+    - match: '\{\{'
+      scope: punctuation.section.embedded.begin.blade
+      push: blade-echo
+    - match: '(?<![\w@])@php\b(?!\s*\()'
+      scope: keyword.control.directive.blade
+      push: blade-php-block
+    - match: '(?<![\w@])@(?:if|elseif|else|endif|unless|endunless|isset|endisset|empty|endempty|switch|case|default|break|endswitch|for|endfor|foreach|endforeach|forelse|endforelse|while|endwhile|continue|auth|endauth|guest|endguest|can|cannot|canany|endcan|endcannot|endcanany|env|endenv|production|endproduction|hasSection|sectionMissing|section|endsection|show|yield|parent|extends|include|includeIf|includeWhen|includeUnless|includeFirst|each|stack|push|endpush|pushIf|pushOnce|endPushOnce|prepend|endprepend|once|endonce|component|endcomponent|slot|endslot|props|aware|csrf|method|error|enderror|json|js|class|style|checked|selected|disabled|readonly|required|lang|endlang|php|endphp|verbatim|endverbatim|use|vite|livewire|inject|fragment|endfragment|session|endsession|auth|dd|dump)\b'
+      scope: keyword.control.directive.blade
+      push: blade-directive-args
+
+  blade-comment:
+    - meta_include_prototype: false
+    - meta_scope: comment.block.blade
+    - match: '--\}\}'
+      scope: punctuation.definition.comment.end.blade
+      pop: true
+
+  blade-echo:
+    - meta_include_prototype: false
+    - match: '\}\}'
+      scope: punctuation.section.embedded.end.blade
+      pop: true
+    - include: php-expr
+
+  blade-echo-raw:
+    - meta_include_prototype: false
+    - match: '!!\}'
+      scope: punctuation.section.embedded.end.blade
+      pop: true
+    - include: php-expr
+
+  blade-php-block:
+    - meta_include_prototype: false
+    - match: '@endphp\b'
+      scope: keyword.control.directive.blade
+      pop: true
+    - match: '//.*$'
+      scope: comment.line.double-slash.php
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.php
+      push: php-block-comment
+    - include: php-expr
+
+  php-block-comment:
+    - meta_include_prototype: false
+    - meta_scope: comment.block.php
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.php
+      pop: true
+
+  blade-directive-args:
+    - meta_include_prototype: false
+    - match: '[ \t]*\('
+      scope: punctuation.section.group.begin.blade
+      set: blade-parens
+    - match: ''
+      pop: true
+
+  blade-parens:
+    - meta_include_prototype: false
+    - match: '\('
+      scope: punctuation.section.group.begin.blade
+      push: blade-parens
+    - match: '\)'
+      scope: punctuation.section.group.end.blade
+      pop: true
+    - include: php-expr
+
+  php-expr:
+    - match: "'"
+      scope: punctuation.definition.string.begin.php
+      push: php-string-single
+    - match: '"'
+      scope: punctuation.definition.string.begin.php
+      push: php-string-double
+    - match: '\$[A-Za-z_]\w*'
+      scope: variable.other.php
+    - match: '\b(?:true|false|null|TRUE|FALSE|NULL)\b'
+      scope: constant.language.php
+    - match: '\b\d+(?:\.\d+)?\b'
+      scope: constant.numeric.php
+    - match: '\b(?:and|or|xor|new|instanceof|fn|function|use|as|if|else|elseif|foreach|for|while|return|echo|isset|empty|unset|array|list|match|static|clone|print)\b'
+      scope: keyword.control.php
+    - match: '(?:->|\?->|::)\s*([A-Za-z_]\w*)\s*(?=\()'
+      captures:
+        1: support.function.php
+    - match: '\b[A-Za-z_]\w*(?=\s*\()'
+      scope: support.function.php
+    - match: '=>|->|\?->|::|\?\?|\.\.\.|[-+*/%.=<>!&|?:^~]+'
+      scope: keyword.operator.php
+
+  php-string-single:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.single.php
+    - match: '\\.'
+      scope: constant.character.escape.php
+    - match: "'"
+      scope: punctuation.definition.string.end.php
+      pop: true
+
+  php-string-double:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.double.php
+    - match: '\\.'
+      scope: constant.character.escape.php
+    - match: '\$[A-Za-z_]\w*'
+      scope: variable.other.php
+    - match: '"'
+      scope: punctuation.definition.string.end.php
+      pop: true

@@ -1,0 +1,104 @@
+%YAML 1.2
+---
+# Twig: HTML with `{{ }}`, `{% %}` and `{# #}`.
+name: Twig
+file_extensions: [twig]
+scope: text.html.twig
+contexts:
+  main:
+    - meta_include_prototype: false
+    - match: ''
+      push: scope:text.html.basic
+      with_prototype:
+        - include: twig
+
+  twig:
+    - match: '\{#'
+      scope: punctuation.definition.comment.begin.twig
+      push: twig-comment
+    - match: '(\{%[-~]?)(\s*)(raw|verbatim)(\s*[-~]?%\})'
+      captures:
+        1: punctuation.section.embedded.begin.twig
+        3: keyword.control.twig
+        4: punctuation.section.embedded.end.twig
+      push: twig-raw
+    - match: '\{\{[-~]?'
+      scope: punctuation.section.embedded.begin.twig
+      push: twig-output
+    - match: '\{%[-~]?'
+      scope: punctuation.section.embedded.begin.twig
+      push: twig-tag
+
+  twig-comment:
+    - meta_include_prototype: false
+    - meta_scope: comment.block.twig
+    - match: '#\}'
+      scope: punctuation.definition.comment.end.twig
+      pop: true
+
+  twig-raw:
+    - meta_include_prototype: false
+    - match: '(\{%[-~]?)(\s*)(end(?:raw|verbatim))(\s*[-~]?%\})'
+      captures:
+        1: punctuation.section.embedded.begin.twig
+        3: keyword.control.twig
+        4: punctuation.section.embedded.end.twig
+      pop: true
+
+  twig-output:
+    - meta_include_prototype: false
+    - match: '[-~]?\}\}'
+      scope: punctuation.section.embedded.end.twig
+      pop: true
+    - include: twig-expr
+
+  twig-tag:
+    - meta_include_prototype: false
+    - match: '[-~]?%\}'
+      scope: punctuation.section.embedded.end.twig
+      pop: true
+    - match: '\b(?:if|elseif|else|endif|for|endfor|set|endset|block|endblock|extends|include|embed|endembed|import|from|macro|endmacro|use|apply|endapply|autoescape|endautoescape|sandbox|endsandbox|with|endwith|do|flush|deprecated|cache|endcache|trans|endtrans|ignore missing|only)\b'
+      scope: keyword.control.twig
+    - include: twig-expr
+
+  twig-expr:
+    - match: "'"
+      scope: punctuation.definition.string.begin.twig
+      push: twig-string-single
+    - match: '"'
+      scope: punctuation.definition.string.begin.twig
+      push: twig-string-double
+    - match: '\b\d+(?:\.\d+)?\b'
+      scope: constant.numeric.twig
+    - match: '\b(?:true|false|null|none|TRUE|FALSE|NULL|NONE)\b'
+      scope: constant.language.twig
+    - match: '\b(?:and|or|not|in|is|matches|starts with|ends with|b-and|b-or|b-xor|as|same as|divisible by|even|odd|defined|empty|iterable|if|else|elseif|for|endfor)\b'
+      scope: keyword.operator.word.twig
+    - match: '(\|)\s*([A-Za-z_]\w*)'
+      captures:
+        1: keyword.operator.twig
+        2: support.function.filter.twig
+    - match: '\b[A-Za-z_]\w*(?=\s*\()'
+      scope: support.function.twig
+    - match: '\b[A-Za-z_]\w*'
+      scope: variable.other.twig
+    - match: '\.\.|\?\?|[-+*/%~=<>!?:]+'
+      scope: keyword.operator.twig
+
+  twig-string-single:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.single.twig
+    - match: '\\.'
+      scope: constant.character.escape.twig
+    - match: "'"
+      scope: punctuation.definition.string.end.twig
+      pop: true
+
+  twig-string-double:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.double.twig
+    - match: '\\.'
+      scope: constant.character.escape.twig
+    - match: '"'
+      scope: punctuation.definition.string.end.twig
+      pop: true

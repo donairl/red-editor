@@ -1,0 +1,106 @@
+%YAML 1.2
+---
+# Smarty: HTML with `{$var}`, `{if}`, `{foreach}`, `{function}` and `{* *}`.
+# Like Smarty itself, a `{` followed by whitespace is plain text.
+name: Smarty
+file_extensions: [tpl, smarty]
+scope: text.html.smarty
+contexts:
+  main:
+    - meta_include_prototype: false
+    - match: ''
+      push: scope:text.html.basic
+      with_prototype:
+        - include: smarty
+
+  smarty:
+    - match: '\{\*'
+      scope: punctuation.definition.comment.begin.smarty
+      push: smarty-comment
+    - match: '(\{)(literal)(\})'
+      captures:
+        1: punctuation.section.embedded.begin.smarty
+        2: keyword.control.smarty
+        3: punctuation.section.embedded.end.smarty
+      push: smarty-literal
+    - match: '(\{)(/?)(if|elseif|else|foreach|foreachelse|for|forelse|while|section|sectionelse|switch|case|break|continue|capture|function|block|strip|nocache|setfilter|php|extends|include|include_php|insert|assign|call|config_load|debug|ldelim|rdelim)(?![\w-])'
+      captures:
+        1: punctuation.section.embedded.begin.smarty
+        2: punctuation.section.embedded.begin.smarty
+        3: keyword.control.smarty
+      push: smarty-tag
+    - match: '(\{)(/?)([A-Za-z_]\w*)(?=[\s}])'
+      captures:
+        1: punctuation.section.embedded.begin.smarty
+        2: punctuation.section.embedded.begin.smarty
+        3: support.function.smarty
+      push: smarty-tag
+    - match: '\{(?=[\$"''#@])'
+      scope: punctuation.section.embedded.begin.smarty
+      push: smarty-tag
+
+  smarty-comment:
+    - meta_include_prototype: false
+    - meta_scope: comment.block.smarty
+    - match: '\*\}'
+      scope: punctuation.definition.comment.end.smarty
+      pop: true
+
+  smarty-literal:
+    - meta_include_prototype: false
+    - match: '(\{)(/literal)(\})'
+      captures:
+        1: punctuation.section.embedded.begin.smarty
+        2: keyword.control.smarty
+        3: punctuation.section.embedded.end.smarty
+      pop: true
+
+  smarty-tag:
+    - meta_include_prototype: false
+    - match: '\}'
+      scope: punctuation.section.embedded.end.smarty
+      pop: true
+    - match: "'"
+      scope: punctuation.definition.string.begin.smarty
+      push: smarty-string-single
+    - match: '"'
+      scope: punctuation.definition.string.begin.smarty
+      push: smarty-string-double
+    - match: '\$[A-Za-z_]\w*'
+      scope: variable.other.smarty
+    - match: '#\w+#'
+      scope: constant.other.config.smarty
+    - match: '(\|)\s*(@?[A-Za-z_]\w*)'
+      captures:
+        1: keyword.operator.smarty
+        2: support.function.modifier.smarty
+    - match: '\b[A-Za-z_]\w*(?=\s*=(?!=))'
+      scope: entity.other.attribute-name.smarty
+    - match: '\b\d+(?:\.\d+)?\b'
+      scope: constant.numeric.smarty
+    - match: '\b(?:true|false|null|TRUE|FALSE|NULL)\b'
+      scope: constant.language.smarty
+    - match: '\b(?:eq|ne|neq|gt|lt|gte|lte|ge|le|not|and|or|mod|is|div|by|even|odd|as)\b'
+      scope: keyword.operator.word.smarty
+    - match: '->|=>|\.\.|[-+*/%=<>!&|?:]+'
+      scope: keyword.operator.smarty
+
+  smarty-string-single:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.single.smarty
+    - match: '\\.'
+      scope: constant.character.escape.smarty
+    - match: "'"
+      scope: punctuation.definition.string.end.smarty
+      pop: true
+
+  smarty-string-double:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.double.smarty
+    - match: '\\.'
+      scope: constant.character.escape.smarty
+    - match: '\$[A-Za-z_]\w*'
+      scope: variable.other.smarty
+    - match: '"'
+      scope: punctuation.definition.string.end.smarty
+      pop: true
