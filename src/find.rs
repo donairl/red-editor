@@ -42,6 +42,14 @@ pub fn find_all(text: &str, query: &str, case_sensitive: bool) -> Vec<Range> {
     found
 }
 
+/// How many of the whitespace-separated words of `query` occur in `text`.
+pub fn words_found(text: &str, query: &str, case_sensitive: bool) -> usize {
+    query
+        .split_whitespace()
+        .filter(|word| !find_all(text, word, case_sensitive).is_empty())
+        .count()
+}
+
 /// First match starting at or after `from`, wrapping to the first one.
 pub fn next_match(matches: &[Range], from: usize) -> Option<Range> {
     matches
@@ -281,6 +289,15 @@ mod tests {
     #[test]
     fn test_positions_are_chars_not_bytes() {
         assert_eq!(find_all("héllo wörld", "wör", true), [(6, 9)]);
+    }
+
+    #[test]
+    fn test_words_found_counts_query_words_in_the_text() {
+        assert_eq!(words_found("SMSSender.php", "SMS keluar", false), 1);
+        assert_eq!(words_found("SMSSender.php", "sms SENDER", false), 2);
+        assert_eq!(words_found("SMSSender.php", "sms sender", true), 0);
+        assert_eq!(words_found("Kirim.php", "SMS keluar", false), 0);
+        assert_eq!(words_found("SMSSender.php", "  \t ", false), 0, "no words");
     }
 
     #[test]

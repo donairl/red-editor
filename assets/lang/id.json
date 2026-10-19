@@ -91,6 +91,8 @@
   "explorer.title": "EXPLORER",
   "explorer.refresh": "Muat Ulang",
   "explorer.collapse_all": "Ciutkan Semua",
+  "explorer.filter": "Cari nama file",
+  "explorer.no_matches": "Tidak ada file yang cocok.",
   "activity.explorer": "Explorer",
   "activity.console": "Konsol",
   "console.title": "KONSOL",

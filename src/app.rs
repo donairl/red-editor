@@ -1755,6 +1755,7 @@ impl eframe::App for TextEditorApp {
         }
 
         let mut file_to_open = None;
+        let mut find_in_files = false;
         let active_file = self.active_tab().current_path.clone();
         #[allow(clippy::collapsible_if)]
         if self.show_sidebar && !self.zen_mode {
@@ -1767,15 +1768,19 @@ impl eframe::App for TextEditorApp {
                     .show_separator_line(false)
                     .frame(side_frame)
                     .show(ui, |ui| {
-                        file_to_open =
-                            file_browser::show(ui, explorer, active_file.as_deref(), &self.i18n)
-                                .open_file;
+                        let tree =
+                            file_browser::show(ui, explorer, active_file.as_deref(), &self.i18n);
+                        file_to_open = tree.open_file;
+                        find_in_files = tree.find_in_files;
                     });
             }
         }
 
         if let Some(path) = file_to_open {
             self.trigger_open_specific_file(path);
+        }
+        if find_in_files {
+            self.open_search(&ctx);
         }
 
         // Console panel, below the editor and the Markdown preview: declared

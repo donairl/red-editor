@@ -91,6 +91,8 @@
   "explorer.title": "资源管理器",
   "explorer.refresh": "刷新",
   "explorer.collapse_all": "全部折叠",
+  "explorer.filter": "搜索文件名",
+  "explorer.no_matches": "没有匹配的文件。",
   "activity.explorer": "资源管理器",
   "activity.console": "控制台",
   "console.title": "控制台",

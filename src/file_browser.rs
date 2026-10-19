@@ -1,7 +1,9 @@
 //! VS Code-style Explorer: the folder tree in the sidebar.
 //!
 //! [`Explorer`] remembers which folders are open and caches what is in them;
-//! [`show`] paints the sidebar and applies the clicks it receives.
+//! [`show`] paints the sidebar and applies the clicks it receives. Typing in
+//! the filter below the folder header swaps the tree for the files whose
+//! names match.
 
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2,
@@ -9,10 +11,11 @@ use eframe::egui::{
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use crate::highlighter::Language;
 use crate::i18n::I18n;
-use crate::tab_bar;
+use crate::{find, search, tab_bar};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FsEntry {
@@ -122,6 +125,31 @@ pub struct Explorer {
     expanded: HashSet<PathBuf>,
     /// What each folder held when it was last read from disk.
     children: HashMap<PathBuf, Vec<FsEntry>>,
+    /// The file-name filter typed below the folder header.
+    query: String,
+    /// Every file under the root, read the first time the filter is used.
+    files: Option<Vec<FsEntry>>,
+    /// The last filter applied, and what it matched.
+    found: Option<(String, Vec<FsEntry>)>,
+}
+
+/// Most files the filter looks through, so a huge folder cannot stall the
+/// window.
+const MAX_INDEXED_FILES: usize = 50_000;
+
+/// Every file under `root` that Find in Files would search, up to
+/// [`MAX_INDEXED_FILES`].
+fn index_files(root: &Path) -> Vec<FsEntry> {
+    let mut files = Vec::new();
+    search::walk_files(root, &AtomicBool::new(false), |entry| {
+        files.push(FsEntry {
+            path: entry.path(),
+            is_dir: false,
+            name: entry.file_name().to_string_lossy().into_owned(),
+        });
+        files.len() < MAX_INDEXED_FILES
+    });
+    files
 }
 
 impl Explorer {
@@ -131,6 +159,9 @@ impl Explorer {
             section_open: true,
             expanded: HashSet::new(),
             children: HashMap::new(),
+            query: String::new(),
+            files: None,
+            found: None,
         }
     }
 
@@ -158,10 +189,48 @@ impl Explorer {
         self.expanded.clear();
     }
 
-    /// Forgets what every folder held, so the next [`Self::rows`] reads them
-    /// from disk again. Expanded folders stay expanded.
+    /// Forgets what every folder held, so the next [`Self::rows`] and
+    /// [`Self::matches`] read them from disk again. Expanded folders stay
+    /// expanded.
     pub fn refresh(&mut self) {
         self.children.clear();
+        self.files = None;
+        self.found = None;
+    }
+
+    /// Whether the filter holds a word, so the sidebar lists
+    /// [`Self::matches`] instead of the tree.
+    pub fn is_filtering(&self) -> bool {
+        !self.query.trim().is_empty()
+    }
+
+    /// Files anywhere under the root whose names hold at least one word of
+    /// the filter, ignoring case: those holding the most words first, then
+    /// by name. Hidden files and the folders Find in Files skips are left
+    /// out.
+    pub fn matches(&mut self) -> &[FsEntry] {
+        let query = self.query.trim();
+        if query.is_empty() {
+            return &[];
+        }
+        if self.found.as_ref().is_none_or(|(last, _)| last != query) {
+            let files = self.files.get_or_insert_with(|| index_files(&self.root));
+            let mut found: Vec<(usize, &FsEntry)> = files
+                .iter()
+                .map(|file| (find::words_found(&file.name, query, false), file))
+                .filter(|(words, _)| *words > 0)
+                .collect();
+            found.sort_by_cached_key(|(words, file)| {
+                (
+                    std::cmp::Reverse(*words),
+                    file.name.to_lowercase(),
+                    file.path.clone(),
+                )
+            });
+            let found = found.into_iter().map(|(_, file)| file.clone()).collect();
+            self.found = Some((query.to_owned(), found));
+        }
+        self.found.as_ref().map_or(&[], |(_, found)| found)
     }
 
     /// The visible tree in display order, reading any folder not yet cached.
@@ -205,27 +274,36 @@ const ROW_PADDING_X: f32 = 8.0;
 const INDENT: f32 = 8.0;
 const CHEVRON_WIDTH: f32 = 16.0;
 const BADGE_GAP: f32 = 6.0;
-/// Side of the Refresh and Collapse All buttons.
+/// Side of the Search, Refresh and Collapse All buttons.
 const ACTION_SIZE: f32 = 22.0;
 
 /// One frame of the sidebar: the file to open, and where each part was drawn.
 #[derive(Clone, Debug)]
 pub struct ExplorerResponse {
     pub open_file: Option<PathBuf>,
+    /// The Search button was clicked: the caller opens Find in Files.
+    pub find_in_files: bool,
     // Only the tests read where things were drawn.
     #[cfg_attr(not(test), allow(dead_code))]
     pub section_rect: Rect,
     #[cfg_attr(not(test), allow(dead_code))]
+    pub search_rect: Rect,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub refresh_rect: Rect,
     #[cfg_attr(not(test), allow(dead_code))]
     pub collapse_all_rect: Rect,
+    /// [`Rect::NOTHING`] while the section is closed.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub filter_rect: Rect,
+    /// The tree rows, or the matches shown while filtering.
     #[cfg_attr(not(test), allow(dead_code))]
     pub rows: Vec<(PathBuf, Rect)>,
 }
 
 /// Draws the sidebar over the available width and applies folder, header,
 /// Refresh and Collapse All clicks to `explorer`. A clicked file is returned
-/// in [`ExplorerResponse::open_file`] for the caller to open.
+/// in [`ExplorerResponse::open_file`] for the caller to open, and a Search
+/// click in [`ExplorerResponse::find_in_files`].
 pub fn show(
     ui: &mut egui::Ui,
     explorer: &mut Explorer,
@@ -259,7 +337,11 @@ pub fn show(
         Vec2::splat(ACTION_SIZE),
     );
     let refresh_rect = collapse_all_rect.translate(vec2(-ACTION_SIZE, 0.0));
+    let search_rect = refresh_rect.translate(vec2(-ACTION_SIZE, 0.0));
     // Registered after the header, so they win clicks inside their rects.
+    let search = ui
+        .interact(search_rect, section.id.with("search"), Sense::click())
+        .on_hover_text(i18n.t("edit.find_in_files"));
     let refresh = ui
         .interact(refresh_rect, section.id.with("refresh"), Sense::click())
         .on_hover_text(i18n.t("explorer.refresh"));
@@ -275,8 +357,9 @@ pub fn show(
         &palette,
         explorer,
         section_rect,
-        section.hovered() || refresh.hovered() || collapse_all.hovered(),
+        section.hovered() || search.hovered() || refresh.hovered() || collapse_all.hovered(),
         [
+            (search_rect, search.hovered()),
             (refresh_rect, refresh.hovered()),
             (collapse_all_rect, collapse_all.hovered()),
         ],
@@ -285,18 +368,42 @@ pub fn show(
         explorer.refresh();
     } else if collapse_all.clicked() {
         explorer.collapse_all();
-    } else if section.clicked() {
+    } else if section.clicked() && !search.clicked() {
         explorer.toggle_section();
     }
 
-    let rows = explorer.rows();
+    let mut filter_rect = Rect::NOTHING;
+    if explorer.is_section_open() {
+        filter_rect = egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut explorer.query)
+                        .id_salt("explorer_filter")
+                        .hint_text(i18n.t("explorer.filter"))
+                        .desired_width(f32::INFINITY),
+                )
+                .rect
+            })
+            .inner;
+    }
+
     let mut response = ExplorerResponse {
         open_file: None,
+        find_in_files: search.clicked(),
         section_rect,
+        search_rect,
         refresh_rect,
         collapse_all_rect,
-        rows: Vec::with_capacity(rows.len()),
+        filter_rect,
+        rows: Vec::new(),
     };
+    if explorer.is_section_open() && explorer.is_filtering() {
+        show_matches(ui, &palette, explorer, active_file, i18n, &mut response);
+        return response;
+    }
+
+    let rows = explorer.rows();
     let mut toggled = None;
     egui::ScrollArea::vertical()
         .id_salt("explorer_tree")
@@ -308,7 +415,15 @@ pub fn show(
                     ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
                 if ui.is_rect_visible(rect) {
                     let selected = active_file == Some(row.entry.path.as_path());
-                    paint_row(ui, &palette, row, rect, row_response.hovered(), selected);
+                    paint_row(
+                        ui,
+                        &palette,
+                        row,
+                        None,
+                        rect,
+                        row_response.hovered(),
+                        selected,
+                    );
                 }
                 if row_response.clicked() {
                     if row.entry.is_dir {
@@ -326,14 +441,77 @@ pub fn show(
     response
 }
 
-/// `▾ NAME`, plus the Refresh and Collapse All buttons while `hovered`.
+/// The files matching the filter as a flat list, each followed by its
+/// folder, or a note that none match. A clicked file goes in
+/// `response.open_file`.
+fn show_matches(
+    ui: &mut egui::Ui,
+    palette: &SidebarPalette,
+    explorer: &mut Explorer,
+    active_file: Option<&Path>,
+    i18n: &I18n,
+    response: &mut ExplorerResponse,
+) {
+    let root = explorer.root().to_path_buf();
+    let found = explorer.matches();
+    if found.is_empty() {
+        let (rect, _) =
+            ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
+        ui.painter().text(
+            pos2(rect.left() + TITLE_PADDING_X, rect.center().y),
+            Align2::LEFT_CENTER,
+            i18n.t("explorer.no_matches"),
+            FontId::proportional(13.0),
+            palette.icon_inactive,
+        );
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("explorer_matches")
+        .auto_shrink([false, false])
+        .show_rows(ui, ROW_HEIGHT, found.len(), |ui, range| {
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            for entry in &found[range] {
+                let (rect, row_response) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+                let row = TreeRow {
+                    entry: entry.clone(),
+                    depth: 0,
+                    expanded: false,
+                };
+                let folder = entry
+                    .path
+                    .parent()
+                    .and_then(|dir| dir.strip_prefix(&root).ok())
+                    .map(|dir| dir.display().to_string())
+                    .filter(|dir| !dir.is_empty());
+                let selected = active_file == Some(entry.path.as_path());
+                paint_row(
+                    ui,
+                    palette,
+                    &row,
+                    folder.as_deref(),
+                    rect,
+                    row_response.hovered(),
+                    selected,
+                );
+                if row_response.clicked() {
+                    response.open_file = Some(entry.path.clone());
+                }
+                response.rows.push((entry.path.clone(), rect));
+            }
+        });
+}
+
+/// `▾ NAME`, plus the Search, Refresh and Collapse All buttons while
+/// `hovered`.
 fn paint_section_header(
     ui: &egui::Ui,
     palette: &SidebarPalette,
     explorer: &Explorer,
     rect: Rect,
     hovered: bool,
-    actions: [(Rect, bool); 2],
+    actions: [(Rect, bool); 3],
 ) {
     let painter = ui.painter();
     let chevron = Rect::from_min_size(
@@ -371,28 +549,25 @@ fn paint_section_header(
     painter.galley(pos + vec2(0.5, 0.0), galley, palette.foreground);
 
     if hovered {
-        let [
-            (refresh, refresh_hovered),
-            (collapse_all, collapse_all_hovered),
-        ] = actions;
-        for (action, action_hovered) in [
-            (refresh, refresh_hovered),
-            (collapse_all, collapse_all_hovered),
-        ] {
+        for (action, action_hovered) in actions {
             if action_hovered {
                 painter.rect_filled(action.shrink(2.0), CornerRadius::same(4), palette.row_hover);
             }
         }
+        let [(search, _), (refresh, _), (collapse_all, _)] = actions;
+        paint_search_icon(painter, search.center(), palette.foreground);
         paint_refresh_icon(painter, refresh.center(), palette.foreground);
         paint_collapse_all_icon(painter, collapse_all.center(), palette.foreground);
     }
 }
 
-/// Background, indent guides, chevron or badge, and the name of one row.
+/// Background, indent guides, chevron or badge, and the name of one row,
+/// followed by `detail` in a dimmer colour.
 fn paint_row(
     ui: &egui::Ui,
     palette: &SidebarPalette,
     row: &TreeRow,
+    detail: Option<&str>,
     rect: Rect,
     hovered: bool,
     selected: bool,
@@ -444,11 +619,32 @@ fn paint_row(
         palette.foreground,
         rect.right() - ROW_PADDING_X - x,
     );
+    let name_width = name.size().x;
     painter.galley(
         pos2(x, rect.center().y - name.size().y / 2.0),
         name,
         palette.foreground,
     );
+
+    if let Some(detail) = detail {
+        let x = x + name_width + BADGE_GAP;
+        let width = rect.right() - ROW_PADDING_X - x;
+        // Narrower than this, only the `…` would show.
+        if width > 16.0 {
+            let detail = elided(
+                ui,
+                detail.to_owned(),
+                FontId::proportional(12.0),
+                palette.icon_inactive,
+                width,
+            );
+            painter.galley(
+                pos2(x, rect.center().y - detail.size().y / 2.0),
+                detail,
+                palette.icon_inactive,
+            );
+        }
+    }
 }
 
 /// `text` on one line, cut with `…` where it would pass `max_width`.
@@ -475,6 +671,16 @@ fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, expanded: bool, co
     };
     painter.line_segment([center + points[0], center + points[1]], stroke);
     painter.line_segment([center + points[1], center + points[2]], stroke);
+}
+
+/// A magnifying glass: a ring with its handle to the bottom right.
+fn paint_search_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.2, color);
+    let radius = 4.0;
+    let ring = center + vec2(-1.5, -1.5);
+    painter.circle_stroke(ring, radius, stroke);
+    let handle = vec2(1.0, 1.0).normalized();
+    painter.line_segment([ring + handle * radius, center + vec2(5.0, 5.0)], stroke);
 }
 
 /// A circular arrow, open at the top right.
@@ -901,6 +1107,185 @@ mod tests {
             !explorer.is_section_open(),
             "clicking the header closes the section"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_search_button_sits_left_of_refresh() {
+        let root = fixture("search_button");
+        let ctx = egui::Context::default();
+        let mut explorer = Explorer::new(root.clone());
+        let (response, _) = run(&ctx, Vec::new(), &mut explorer, None);
+        assert!(!response.find_in_files, "nothing was clicked");
+        assert_eq!(
+            response.search_rect.right(),
+            response.refresh_rect.left(),
+            "Search sits just left of Refresh"
+        );
+        assert_eq!(
+            response.refresh_rect.right(),
+            response.collapse_all_rect.left(),
+            "Refresh stays just left of Collapse All"
+        );
+        assert_eq!(
+            response.collapse_all_rect.right(),
+            response.section_rect.right()
+        );
+
+        let (clicked, _) = run(
+            &ctx,
+            click(response.search_rect.center()),
+            &mut explorer,
+            None,
+        );
+        assert!(
+            clicked.find_in_files,
+            "clicking Search asks for Find in Files"
+        );
+        assert!(
+            explorer.is_section_open(),
+            "the button does not toggle the section"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A fresh folder named `rred_explorer_<name>` holding PHP files:
+    ///
+    /// ```text
+    /// app/SMSForm.php
+    /// app/SMSLog.php
+    /// app/UserForm.php
+    /// lib/SMSSender.php
+    /// target/SMSBuild.php
+    /// Kirim.php
+    /// .SMSHidden.php
+    /// ```
+    fn sms_fixture(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("rred_explorer_{name}"));
+        let _ = fs::remove_dir_all(&root);
+        for dir in ["app", "lib", "target"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in [
+            "app/SMSForm.php",
+            "app/SMSLog.php",
+            "app/UserForm.php",
+            "lib/SMSSender.php",
+            "target/SMSBuild.php",
+            "Kirim.php",
+            ".SMSHidden.php",
+        ] {
+            File::create(root.join(file)).unwrap();
+        }
+        root
+    }
+
+    fn match_names(explorer: &mut Explorer, query: &str) -> Vec<String> {
+        explorer.query = query.to_owned();
+        explorer.matches().iter().map(|e| e.name.clone()).collect()
+    }
+
+    #[test]
+    fn test_matches_hold_any_query_word_ignoring_case() {
+        let root = sms_fixture("matches");
+        let mut explorer = Explorer::new(root.clone());
+        assert_eq!(
+            match_names(&mut explorer, "SMS keluar"),
+            ["SMSForm.php", "SMSLog.php", "SMSSender.php"],
+            "hidden files and target are skipped"
+        );
+        assert_eq!(
+            match_names(&mut explorer, "sms log"),
+            ["SMSLog.php", "SMSForm.php", "SMSSender.php"],
+            "names holding more words come first"
+        );
+        assert_eq!(match_names(&mut explorer, "smslog"), ["SMSLog.php"]);
+        assert_eq!(
+            match_names(&mut explorer, "form"),
+            ["SMSForm.php", "UserForm.php"]
+        );
+        assert!(match_names(&mut explorer, "zzz").is_empty());
+        assert!(match_names(&mut explorer, "   ").is_empty());
+        assert!(!explorer.is_filtering(), "a blank query shows the tree");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_matches_are_cached_until_refresh() {
+        let root = sms_fixture("matches_refresh");
+        let mut explorer = Explorer::new(root.clone());
+        assert_eq!(match_names(&mut explorer, "sender").len(), 1);
+        File::create(root.join("app/MailSender.php")).unwrap();
+        assert_eq!(match_names(&mut explorer, "sender").len(), 1);
+        explorer.refresh();
+        assert_eq!(
+            match_names(&mut explorer, "sender"),
+            ["MailSender.php", "SMSSender.php"]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The text of every painted text shape.
+    fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_typing_in_the_filter_lists_matching_files() {
+        let root = sms_fixture("filter_typing");
+        let ctx = egui::Context::default();
+        let mut explorer = Explorer::new(root.clone());
+        let (response, _) = run(&ctx, Vec::new(), &mut explorer, None);
+        assert!(
+            response.filter_rect.top() >= response.section_rect.bottom(),
+            "the filter sits below the folder header"
+        );
+        run(
+            &ctx,
+            click(response.filter_rect.center()),
+            &mut explorer,
+            None,
+        );
+        let typed = vec![egui::Event::Text("SMS keluar".into())];
+        let (response, shapes) = run(&ctx, typed, &mut explorer, None);
+        assert_eq!(explorer.query, "SMS keluar");
+        let listed: Vec<&Path> = response.rows.iter().map(|(p, _)| p.as_path()).collect();
+        assert_eq!(
+            listed,
+            [
+                root.join("app/SMSForm.php"),
+                root.join("app/SMSLog.php"),
+                root.join("lib/SMSSender.php"),
+            ]
+        );
+        let texts = painted_texts(&shapes);
+        assert!(
+            texts.contains(&"lib".to_owned()),
+            "each match shows its folder"
+        );
+
+        let sender = response.rows[2].1;
+        let (response, _) = run(&ctx, click(sender.center()), &mut explorer, None);
+        assert_eq!(response.open_file, Some(root.join("lib/SMSSender.php")));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_no_matches_shows_a_message() {
+        let root = sms_fixture("no_matches");
+        let ctx = egui::Context::default();
+        let mut explorer = Explorer::new(root.clone());
+        explorer.query = "zzz".into();
+        let (response, shapes) = run(&ctx, Vec::new(), &mut explorer, None);
+        assert!(response.rows.is_empty());
+        let message = I18n::builtin().t("explorer.no_matches").to_owned();
+        assert!(painted_texts(&shapes).contains(&message));
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -91,6 +91,8 @@
   "explorer.title": "EXPLORADOR",
   "explorer.refresh": "Actualizar",
   "explorer.collapse_all": "Contraer todo",
+  "explorer.filter": "Buscar nombres de archivo",
+  "explorer.no_matches": "Ningún archivo coincide.",
   "activity.explorer": "Explorador",
   "activity.console": "Consola",
   "console.title": "CONSOLA",

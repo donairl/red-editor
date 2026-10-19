@@ -91,6 +91,8 @@
   "explorer.title": "EXPLORER",
   "explorer.refresh": "Aktualisieren",
   "explorer.collapse_all": "Alle zuklappen",
+  "explorer.filter": "Dateinamen suchen",
+  "explorer.no_matches": "Keine passenden Dateien.",
   "activity.explorer": "Explorer",
   "activity.console": "Konsole",
   "console.title": "KONSOLE",

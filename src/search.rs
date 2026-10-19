@@ -44,6 +44,37 @@ pub fn search(
     if query.is_empty() {
         return;
     }
+    walk_files(root, cancel, |entry| {
+        if entry.metadata().map_or(true, |m| m.len() > MAX_FILE_BYTES) {
+            return true;
+        }
+        let path = entry.path();
+        let Ok(text) = fs::read_to_string(&path) else { return true };
+        for (index, line) in text.lines().enumerate() {
+            if find::find_all(line, query, case_sensitive).is_empty() {
+                continue;
+            }
+            let hit = Hit {
+                path: path.clone(),
+                line: index + 1,
+                text: line.trim().chars().take(MAX_TEXT_CHARS).collect(),
+            };
+            if !on_hit(hit) {
+                return false;
+            }
+        }
+        true
+    });
+}
+
+/// Calls `on_file` for every file under `root`, in name order, until it
+/// returns `false` or `cancel` is set. Hidden entries, symlinks and the
+/// [`SKIPPED_DIRS`] are skipped.
+pub fn walk_files(
+    root: &Path,
+    cancel: &AtomicBool,
+    mut on_file: impl FnMut(&fs::DirEntry) -> bool,
+) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(read) = fs::read_dir(&dir) else { continue };
@@ -67,23 +98,8 @@ pub fn search(
                 }
                 continue;
             }
-            let path = entry.path();
-            if entry.metadata().map_or(true, |m| m.len() > MAX_FILE_BYTES) {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&path) else { continue };
-            for (index, line) in text.lines().enumerate() {
-                if find::find_all(line, query, case_sensitive).is_empty() {
-                    continue;
-                }
-                let hit = Hit {
-                    path: path.clone(),
-                    line: index + 1,
-                    text: line.trim().chars().take(MAX_TEXT_CHARS).collect(),
-                };
-                if !on_hit(hit) {
-                    return;
-                }
+            if !on_file(&entry) {
+                return;
             }
         }
         stack.extend(subdirs.into_iter().rev());
@@ -329,6 +345,29 @@ mod tests {
             ],
             "one hit per line; hidden, target and binary files skipped"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_walk_files_lists_files_in_name_order() {
+        let dir = fixture("walk");
+        let mut names = Vec::new();
+        walk_files(&dir, &AtomicBool::new(false), |entry| {
+            let path = entry.path();
+            names.push(path.strip_prefix(&dir).unwrap().display().to_string());
+            true
+        });
+        assert_eq!(
+            names,
+            ["a.txt", "bin.dat", "sub/b.txt"],
+            "hidden and target folders skipped"
+        );
+        let mut seen = 0;
+        walk_files(&dir, &AtomicBool::new(false), |_| {
+            seen += 1;
+            false
+        });
+        assert_eq!(seen, 1, "on_file returning false stops the walk");
         let _ = fs::remove_dir_all(&dir);
     }
 

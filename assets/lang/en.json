@@ -91,6 +91,8 @@
   "explorer.title": "EXPLORER",
   "explorer.refresh": "Refresh",
   "explorer.collapse_all": "Collapse All",
+  "explorer.filter": "Search file names",
+  "explorer.no_matches": "No matching files.",
   "activity.explorer": "Explorer",
   "activity.console": "Console",
   "console.title": "CONSOLE",
