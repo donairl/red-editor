@@ -137,6 +137,9 @@ pub struct TextEditorApp {
     pub search: SearchState,
     /// One-shot asks for the editor widget, applied on its next frame.
     pub editor_request: EditorRequest,
+    /// The editor a click on the menu bar took the focus from. It gets the
+    /// focus and its selection back once every menu has closed.
+    pub menu_focus: Option<egui::Id>,
 }
 
 /// What the app wants done to the editor widget, which only `render_editor`
@@ -149,8 +152,12 @@ pub struct EditorRequest {
     pub key: Option<egui::Key>,
     /// Put the caret at this `char` index and scroll to it.
     pub goto: Option<usize>,
-    /// Select this `char` range (restores a selection after a menu click).
+    /// Select this `char` range before the editor handles this frame's
+    /// input (restores the selection a menu took).
     pub select: Option<find::Range>,
+    /// Paint this `char` range as selected while egui shows no selection of
+    /// its own (the editor has lost focus to a menu). Set every frame.
+    pub inactive_selection: Option<find::Range>,
     /// Scroll this `char` range into view.
     pub reveal: Option<find::Range>,
     /// Paint this `char` range as the current find match. Set every frame.
@@ -179,6 +186,7 @@ impl Default for TextEditorApp {
             goto: GotoState::default(),
             search: SearchState::default(),
             editor_request: EditorRequest::default(),
+            menu_focus: None,
         }
     }
 }
@@ -551,11 +559,18 @@ impl TextEditorApp {
         egui::Id::unique(("editor", self.active_tab_index))
     }
 
+    /// The non-empty selection the editor had on its last focused frame.
+    fn saved_selection(&self, ctx: &egui::Context) -> Option<find::Range> {
+        ctx.data(|d| d.get_temp::<find::Range>(self.saved_selection_id()))
+    }
+
     /// The editor's selection as sorted `char` indices, or just the caret.
     fn editor_selection(&self, ctx: &egui::Context) -> Option<find::Range> {
-        // egui collapses the selection while the editor lacks focus (a menu
-        // is open), so prefer the one remembered from the last focused frame.
-        if let Some(range) = ctx.data(|d| d.get_temp::<find::Range>(self.saved_selection_id())) {
+        // egui collapses the selection once the editor loses focus, so while
+        // a menu holds that focus use the one remembered from before.
+        if self.menu_focus == Some(self.editor_id())
+            && let Some(range) = self.saved_selection(ctx)
+        {
             return Some(range);
         }
         let state = egui::TextEdit::load_state(ctx, self.editor_id())?;
@@ -564,20 +579,19 @@ impl TextEditorApp {
         Some((a.min(b), a.max(b)))
     }
 
-    /// The selected text, if any. Read from the remembered selection: opening
-    /// a menu takes focus off the editor, so the editor cannot answer a copy.
+    /// The selected text, if any. Read by the app, not the editor: the menu
+    /// holds the focus, so the editor cannot answer a copy itself.
     fn selected_text(&self, ctx: &egui::Context) -> Option<(find::Range, String)> {
         let (a, b) = self.editor_selection(ctx).filter(|(a, b)| a < b)?;
         let text = self.active_tab().text_content.chars().skip(a).take(b - a).collect();
         Some(((a, b), text))
     }
 
-    /// Edit > Copy: puts the selection on the clipboard and returns focus to
-    /// the editor with the selection restored.
+    /// Edit > Copy: puts the selection on the clipboard. The selection stays;
+    /// see [`Self::return_focus_after_menu`].
     fn copy_selection(&mut self, ctx: &egui::Context) {
-        if let Some((range, text)) = self.selected_text(ctx) {
+        if let Some((_, text)) = self.selected_text(ctx) {
             ctx.copy_text(text);
-            self.editor_request.select = Some(range);
         }
         self.editor_request.focus = true;
     }
@@ -594,6 +608,36 @@ impl TextEditorApp {
             ctx.data_mut(|d| d.remove::<find::Range>(self.saved_selection_id()));
         }
         self.editor_request.focus = true;
+    }
+
+    /// Notes that a click on the menu bar (`menu_bar`) took the focus from
+    /// the editor, which had it when the frame began.
+    fn note_menu_click(&mut self, ctx: &egui::Context, editor_had_focus: bool, menu_bar: egui::Rect) {
+        let clicked_menu_bar = ctx.input(|i| {
+            i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|p| menu_bar.contains(p))
+        });
+        if editor_had_focus && clicked_menu_bar {
+            self.menu_focus = Some(self.editor_id());
+        }
+    }
+
+    /// Once every menu has closed, gives the editor back the focus and the
+    /// selection a menu click took, unless something else took the focus
+    /// (the find bar, a dialog) or another tab is now active.
+    fn return_focus_after_menu(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.menu_focus else {
+            return;
+        };
+        if egui::Popup::is_any_open(ctx) {
+            return;
+        }
+        self.menu_focus = None;
+        let dialog_open = self.show_about_modal || self.pending_action.is_some();
+        let focus_free = ctx.memory(|m| m.focused().is_none());
+        if id == self.editor_id() && !dialog_open && focus_free {
+            self.editor_request.focus = true;
+            self.editor_request.select = self.saved_selection(ctx);
+        }
     }
 
     /// Opens the find bar, seeded with a one-line selection, if any.
@@ -1177,6 +1221,32 @@ fn render_editor(
     render_editor_with(ui, text, layouter, word_wrap, line_numbers, hint, None, EditorRequest::default(), None);
 }
 
+/// Rectangles covering the `char` range `(start, end)` of `galley`, one per
+/// row, relative to the galley. Drawn the way egui draws a focused editor's
+/// selection, including the half-height nub for a selected newline.
+fn selection_rects(galley: &egui::Galley, (start, end): find::Range) -> Vec<egui::Rect> {
+    if start >= end {
+        return Vec::new();
+    }
+    let min = galley.layout_from_cursor(egui::text::CCursor::new(start));
+    let max = galley.layout_from_cursor(egui::text::CCursor::new(end));
+    (min.row..=max.row)
+        .map(|index| {
+            let row = &galley.rows[index];
+            let left = if index == min.row { row.x_offset(min.column) } else { 0.0 };
+            let right = if index == max.row {
+                row.x_offset(max.column)
+            } else if row.ends_with_newline {
+                row.size.x + row.height() * 0.5
+            } else {
+                row.size.x
+            };
+            egui::Rect::from_min_max(egui::pos2(left, 0.0), egui::pos2(right, row.size.y))
+                .translate(row.pos.to_vec2())
+        })
+        .collect()
+}
+
 /// [`render_editor`] with a fixed widget `id` (so the app can find the
 /// editor's state) and a one-shot `request` to act on.
 #[allow(clippy::too_many_arguments)]
@@ -1215,6 +1285,12 @@ fn render_editor_with(
         // than the window pushed the start of every line off the left edge,
         // beyond the reach of the scroll bar. A plain `show` grows the
         // editor right and down from the top-left corner instead.
+        // Clamped here: the text is lent to the editor below, and may have
+        // shrunk (Prettify) since the selection was taken.
+        let select = request.select.map(|(a, b)| {
+            let n = text.chars().count();
+            (a.min(n), b.min(n))
+        });
         let text_edit = egui::TextEdit::multiline(text)
             .font(egui::TextStyle::Monospace)
             .lock_focus(true)
@@ -1233,6 +1309,15 @@ fn render_editor_with(
             if request.focus {
                 ui.memory_mut(|m| m.request_focus(id));
             }
+            // Before `show`, so a paste or undo of this frame acts on it.
+            if let Some((a, b)) = select {
+                let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(a),
+                    egui::text::CCursor::new(b),
+                )));
+                state.store(ui.ctx(), id);
+            }
             if let Some(key) = request.key {
                 ui.ctx().input_mut(|i| {
                     i.events.push(egui::Event::Key {
@@ -1245,6 +1330,11 @@ fn render_editor_with(
                 });
             }
         }
+
+        // Reserved before `show` so the selection is painted under the text.
+        let inactive_shape = request
+            .inactive_selection
+            .map(|_| ui.painter().add(egui::Shape::Noop));
 
         let output = match layouter.as_mut() {
             Some(highlighter) => {
@@ -1296,11 +1386,13 @@ fn render_editor_with(
             gutter::paint(ui, &output, &font_id, width);
         }
 
+        // Remembered while focused: a click on a menu takes the focus, and
+        // from the next frame egui keeps only the caret.
         if let (Some(id), true) = (id, output.response.has_focus()) {
-            let saved = output
+            let saved: Option<find::Range> = output
                 .cursor_range
                 .map(|r| {
-                    let (a, b) = (r.primary.index, r.secondary.index);
+                    let (a, b) = (r.primary.index.0, r.secondary.index.0);
                     (a.min(b), a.max(b))
                 })
                 .filter(|(a, b)| a < b);
@@ -1310,21 +1402,22 @@ fn render_editor_with(
                     Some(range) => {
                         d.insert_temp(key, range);
                     }
-                    None => {
-                        d.remove::<find::Range>(key);
-                    }
+                    None => d.remove::<find::Range>(key),
                 }
             });
         }
 
-        if let (Some(range), Some(id)) = (request.select, id) {
-            let mut state = output.state.clone();
-            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
-                egui::text::CCursor::new(range.0),
-                egui::text::CCursor::new(range.1),
-            )));
-            state.store(ui.ctx(), id);
-            ui.ctx().request_repaint();
+        // egui paints a selection only while it is in the editor's state.
+        let egui_selection = output.cursor_range.is_some_and(|r| !r.is_empty());
+        if let (Some(shape), Some(range), false) =
+            (inactive_shape, request.inactive_selection, egui_selection)
+        {
+            let fill = ui.visuals().selection.bg_fill;
+            let offset = output.galley_pos.to_vec2();
+            let rects = selection_rects(&output.galley, range)
+                .into_iter()
+                .map(|rect| egui::Shape::rect_filled(rect.translate(offset), 0.0, fill));
+            ui.painter().set(shape, egui::Shape::Vec(rects.collect()));
         }
 
         if let (Some(index), Some(id)) = (request.goto, id) {
@@ -1400,9 +1493,12 @@ impl eframe::App for TextEditorApp {
             self.refresh_find_matches();
         }
 
+        // Read before the menu bar: a click on it takes the editor's focus.
+        let editor_had_focus = ctx.memory(|m| m.has_focus(self.editor_id()));
+
         // 1. Top Panel (Menu Bar & Toolbar)
         if !self.zen_mode {
-        egui::Panel::top("top_panel").show(ui, |ui| {
+        let menu_bar = egui::Panel::top("top_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let [file, view, help] =
                     ["menu.file", "menu.view", "menu.help"].map(|key| self.i18n.t(key).to_owned());
@@ -1438,6 +1534,7 @@ impl eframe::App for TextEditorApp {
                 });
             });
         });
+        self.note_menu_click(&ctx, editor_had_focus, menu_bar.response.rect);
 
         // 2. Bottom Status Bar Panel
         }
@@ -1555,6 +1652,9 @@ impl eframe::App for TextEditorApp {
             }
             let mut request = std::mem::take(&mut self.editor_request);
             request.highlight = self.find.visible.then_some(self.find.current).flatten();
+            request.inactive_selection = (self.menu_focus == Some(self.editor_id()))
+                .then(|| self.saved_selection(&ctx))
+                .flatten();
             let editor_id = self.editor_id();
 
             // `TextEdit::font` resolves this `TextStyle` the same way, so the
@@ -1631,6 +1731,8 @@ impl eframe::App for TextEditorApp {
                 self.handle_modal_response(&ctx, response);
             }
         }
+
+        self.return_focus_after_menu(&ctx);
     }
 }
 
@@ -2149,6 +2251,125 @@ mod tests {
         frame(3.0, Vec::new(), EditorRequest { focus: true, key: Some(egui::Key::Z), ..Default::default() });
         frame(3.1, Vec::new(), EditorRequest::default());
         assert_eq!(*text.borrow(), "", "undo reverts the typed text");
+    }
+
+    /// A click on a menu takes the focus, and egui then keeps only the caret
+    /// in the editor's state. The editor remembers the selection, and a
+    /// `select` request puts it back once the menu closes.
+    #[test]
+    fn test_selection_survives_focus_lost_to_a_menu() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique(("editor", 0));
+        let mut text = "hello world".to_owned();
+        let mut frame = |request: EditorRequest| {
+            let mut request = Some(request);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                super::render_editor_with(ui, &mut text, None, false, false, "", Some(id), request.take().unwrap(), None);
+            });
+            out.textures_delta.clear();
+        };
+        let selection = |ctx: &egui::Context| {
+            let range = egui::TextEdit::load_state(ctx, id)?.cursor.char_range()?;
+            let (a, b) = (range.primary.index.0, range.secondary.index.0);
+            Some((a.min(b), a.max(b)))
+        };
+
+        frame(EditorRequest { focus: true, select: Some((0, 5)), ..Default::default() });
+        frame(EditorRequest::default());
+        assert_eq!(selection(&ctx), Some((0, 5)));
+
+        ctx.memory_mut(|m| m.surrender_focus(id));
+        frame(EditorRequest { inactive_selection: Some((0, 5)), ..Default::default() });
+        let (a, b) = selection(&ctx).unwrap();
+        assert_eq!(a, b, "egui keeps only the caret once the focus is gone");
+        let saved = ctx.data(|d| d.get_temp::<find::Range>(id.with("saved_selection")));
+        assert_eq!(saved, Some((0, 5)), "the editor remembers the selection");
+
+        frame(EditorRequest { focus: true, select: saved, ..Default::default() });
+        assert_eq!(selection(&ctx), Some((0, 5)), "the selection is back");
+    }
+
+    /// An app whose editor lost `range` of "hello world" to a menu click.
+    fn app_with_menu_selection(ctx: &egui::Context, range: find::Range) -> TextEditorApp {
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "hello world".into();
+        app.menu_focus = Some(app.editor_id());
+        ctx.data_mut(|d| d.insert_temp(app.saved_selection_id(), range));
+        app
+    }
+
+    #[test]
+    fn test_menu_copy_and_cut_use_the_remembered_selection() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_menu_selection(&ctx, (6, 11));
+        assert_eq!(app.selected_text(&ctx).map(|(_, t)| t).as_deref(), Some("world"));
+
+        app.cut_selection(&ctx);
+        assert_eq!(app.active_tab().text_content, "hello ");
+        assert_eq!(app.editor_request.goto, Some(6));
+        assert_eq!(app.selected_text(&ctx), None, "cut drops the selection");
+    }
+
+    #[test]
+    fn test_remembered_selection_is_ignored_without_a_menu() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_menu_selection(&ctx, (6, 11));
+        app.menu_focus = None;
+        assert_eq!(app.selected_text(&ctx), None);
+    }
+
+    #[test]
+    fn test_closing_a_menu_returns_focus_and_selection() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_menu_selection(&ctx, (0, 5));
+        app.return_focus_after_menu(&ctx);
+        assert_eq!(app.menu_focus, None);
+        assert!(app.editor_request.focus);
+        assert_eq!(app.editor_request.select, Some((0, 5)));
+    }
+
+    #[test]
+    fn test_menu_focus_is_not_returned_under_a_dialog_or_to_another_tab() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_menu_selection(&ctx, (0, 5));
+        app.show_about_modal = true;
+        app.return_focus_after_menu(&ctx);
+        assert!(!app.editor_request.focus);
+        assert_eq!(app.editor_request.select, None);
+
+        let mut app = app_with_menu_selection(&ctx, (0, 5));
+        app.open_new_tab();
+        app.return_focus_after_menu(&ctx);
+        assert_eq!(app.menu_focus, None);
+        assert_eq!(app.editor_request.select, None);
+    }
+
+    #[test]
+    fn test_selection_rects_cover_each_selected_row() {
+        let ctx = egui::Context::default();
+        let mut galley = None;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+            galley = Some(ui.fonts_mut(|f| {
+                f.layout_no_wrap("ab\ncd".to_owned(), font_id, egui::Color32::WHITE)
+            }));
+        });
+        out.textures_delta.clear();
+        let galley = galley.unwrap();
+
+        assert!(super::selection_rects(&galley, (2, 2)).is_empty());
+        // "b\nc": the end of the first row, its newline, and the start of the second.
+        let rects = super::selection_rects(&galley, (1, 4));
+        assert_eq!(rects.len(), 2);
+        assert!(rects[0].min.x > 0.0, "starts after 'a'");
+        assert!(rects[0].max.x > galley.rows[0].size.x, "covers the newline");
+        assert_eq!(rects[1].min.x, 0.0);
+        assert!(rects[1].max.x < galley.rows[1].size.x, "stops before 'd'");
+        assert!(rects[1].min.y >= rects[0].center().y, "on the second row");
     }
 
     #[test]
