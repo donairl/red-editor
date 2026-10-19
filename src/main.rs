@@ -1,5 +1,6 @@
 mod activity_bar;
 mod app;
+mod embedded_sql;
 mod file_browser;
 mod find;
 mod gutter;

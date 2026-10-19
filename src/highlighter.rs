@@ -7,10 +7,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
-use syntect::easy::HighlightLines;
 use syntect::highlighting::{HighlightIterator, HighlightState, Highlighter, Theme, ThemeSet};
 use syntect::parsing::{ParseState, ScopeStack, SyntaxDefinition, SyntaxReference, SyntaxSet};
 use eframe::egui;
+
+use crate::embedded_sql::{self, Carry, StyledRange};
 
 /// Theme used for all highlighting.
 const THEME_NAME: &str = "InspiredGitHub";
@@ -34,6 +35,7 @@ pub enum Language {
     Markdown,
     Go,
     Python,
+    Sql,
     /// Laravel Blade templates (`*.blade.php`).
     Blade,
     Twig,
@@ -57,6 +59,7 @@ impl Language {
             Language::Markdown,
             Language::Go,
             Language::Python,
+            Language::Sql,
             Language::Blade,
             Language::Twig,
             Language::Smarty,
@@ -81,6 +84,7 @@ impl Language {
             "md" | "markdown" | "mdown" | "mkd" => Language::Markdown,
             "go" => Language::Go,
             "py" | "pyw" | "pyi" => Language::Python,
+            "sql" => Language::Sql,
             "twig" => Language::Twig,
             "tpl" | "smarty" => Language::Smarty,
             _ => Language::PlainText,
@@ -121,6 +125,7 @@ impl Language {
             Language::Markdown => "Markdown",
             Language::Go => "Go",
             Language::Python => "Python",
+            Language::Sql => "SQL",
             Language::Blade => "Blade",
             Language::Twig => "Twig",
             Language::Smarty => "Smarty",
@@ -142,10 +147,27 @@ impl Language {
             Language::Markdown => "Markdown",
             Language::Go => "Go",
             Language::Python => "Python",
+            Language::Sql => "SQL",
             Language::Blade => "Blade",
             Language::Twig => "Twig",
             Language::Smarty => "Smarty",
         }
+    }
+
+    /// Whether SQL inside this language's strings is coloured as SQL.
+    pub fn embeds_sql(&self) -> bool {
+        matches!(
+            self,
+            Language::Rust
+                | Language::C
+                | Language::Cpp
+                | Language::Php
+                | Language::JavaScript
+                | Language::TypeScript
+                | Language::Go
+                | Language::Python
+                | Language::Blade
+        )
     }
 }
 
@@ -198,8 +220,93 @@ const SYNC_HIGHLIGHT_LIMIT: usize = 8 * 1024;
 pub struct LineHighlightCache {
     pub text: String,
     pub layout: egui::text::LayoutJob,
-    pub parse_state: ParseState,
-    pub highlight_state: HighlightState,
+    pub state: LineState,
+}
+
+/// Where highlighting stands between two lines.
+#[derive(Clone, PartialEq)]
+pub struct LineState {
+    pub parse: ParseState,
+    pub highlight: HighlightState,
+    /// The string the line ended inside, for SQL that runs on into the next.
+    pub sql: Option<Carry>,
+}
+
+impl LineState {
+    /// The state at the start of a document.
+    fn new(syntax: &SyntaxReference, highlighter: &Highlighter) -> Self {
+        Self {
+            parse: ParseState::new(syntax),
+            highlight: HighlightState::new(highlighter, ScopeStack::new()),
+            sql: None,
+        }
+    }
+}
+
+/// The grammars and theme one line is highlighted with.
+struct LineContext<'a> {
+    syntax_set: &'a SyntaxSet,
+    highlighter: Highlighter<'a>,
+    /// The SQL grammar, for languages whose strings may hold SQL.
+    sql: Option<&'a SyntaxReference>,
+}
+
+impl<'a> LineContext<'a> {
+    fn new(syntax_set: &'a SyntaxSet, theme: &'a Theme, language: Language) -> Self {
+        Self {
+            syntax_set,
+            highlighter: Highlighter::new(theme),
+            sql: language
+                .embeds_sql()
+                .then(|| syntax_set.find_syntax_by_name(Language::Sql.syntax_name()))
+                .flatten(),
+        }
+    }
+
+    /// Colours `terminated`, a line with its `\n`, moving `state` past it.
+    /// `None` when the grammar cannot parse the line.
+    fn highlight(&self, state: &mut LineState, terminated: &str) -> Option<Vec<StyledRange>> {
+        let ops = state.parse.parse_line(terminated, self.syntax_set).ok()?;
+        let start = self.sql.is_some().then(|| state.highlight.path.clone());
+        let mut ranges = Vec::new();
+        let mut at = 0;
+        for (style, piece) in HighlightIterator::new(&mut state.highlight, &ops, terminated, &self.highlighter) {
+            ranges.push((style, at..at + piece.len()));
+            at += piece.len();
+        }
+        if let (Some(sql), Some(start)) = (self.sql, start) {
+            let patch = embedded_sql::sql_ranges(
+                terminated,
+                &ops,
+                start,
+                &mut state.sql,
+                sql,
+                self.syntax_set,
+                &self.highlighter,
+            );
+            ranges = embedded_sql::overlay(ranges, patch);
+        }
+        Some(ranges)
+    }
+
+    /// [`Self::highlight`] as a layout job for `line` (without its `\n`).
+    fn line_job(
+        &self,
+        state: &mut LineState,
+        line: &str,
+        default_foreground: Option<syntect::highlighting::Color>,
+        default_format: &egui::text::TextFormat,
+    ) -> egui::text::LayoutJob {
+        let terminated = with_newline(line);
+        match self.highlight(state, &terminated) {
+            Some(ranges) => ranges_to_job(
+                ranges.into_iter().map(|(style, range)| (style, &terminated[range])),
+                default_foreground,
+                default_format,
+            ),
+            None => plain_line_job(line, default_format),
+        }
+    }
 }
 
 /// Per-document line cache used by [`SyntaxHighlighter::highlight_incremental`].
@@ -356,16 +463,13 @@ fn highlight_incremental_with(
 
         let theme = pick_theme(theme_set);
         let syntax = pick_syntax(syntax_set, language);
-        let highlighter = Highlighter::new(theme);
+        let cx = LineContext::new(syntax_set, theme, language);
         let default_foreground = theme.settings.foreground;
         let default_format = egui::text::TextFormat {
             font_id: font_id.clone(),
             ..Default::default()
         };
-        let initial = (
-            ParseState::new(syntax),
-            HighlightState::new(&highlighter, ScopeStack::new()),
-        );
+        let initial = LineState::new(syntax, &cx.highlighter);
 
         let new_lines: Vec<&str> = text.split('\n').collect();
         let old = &cache.lines;
@@ -381,11 +485,11 @@ fn highlight_incremental_with(
 
         // The state before old line `index`, i.e. after the line preceding it.
         let state_before = |index: usize| match index.checked_sub(1) {
-            Some(prev) => (old[prev].parse_state.clone(), old[prev].highlight_state.clone()),
+            Some(prev) => old[prev].state.clone(),
             None => initial.clone(),
         };
 
-        let (mut parse_state, mut highlight_state) = state_before(prefix);
+        let mut state = state_before(prefix);
         let mut rebuilt = Vec::new();
         let mut converged_at = None;
         for (j, line) in new_lines.iter().enumerate().skip(prefix) {
@@ -395,26 +499,16 @@ fn highlight_incremental_with(
             }
             if j >= suffix_start_new {
                 let o = suffix_start_old + (j - suffix_start_new);
-                let (old_parse, old_highlight) = state_before(o);
-                if parse_state == old_parse && highlight_state == old_highlight {
+                if state == state_before(o) {
                     converged_at = Some(o);
                     break;
                 }
             }
-            let terminated = with_newline(line);
-            let layout = match parse_state.parse_line(&terminated, syntax_set) {
-                Ok(ops) => ranges_to_job(
-                    HighlightIterator::new(&mut highlight_state, &ops, &terminated, &highlighter),
-                    default_foreground,
-                    &default_format,
-                ),
-                Err(_) => plain_line_job(line, &default_format),
-            };
+            let layout = cx.line_job(&mut state, line, default_foreground, &default_format);
             rebuilt.push(LineHighlightCache {
                 text: (*line).to_owned(),
                 layout,
-                parse_state: parse_state.clone(),
-                highlight_state: highlight_state.clone(),
+                state: state.clone(),
             });
         }
 
@@ -468,12 +562,13 @@ fn color_to_egui(color: syntect::highlighting::Color) -> egui::Color32 {
 pub struct HighlighterLayouter<'a> {
     syntax_set: &'a Arc<SyntaxSet>,
     theme_set: &'a Arc<ThemeSet>,
-    theme: &'a Theme,
     syntax: &'a SyntaxReference,
     language: Language,
     default_foreground: Option<syntect::highlighting::Color>,
     default_format: egui::text::TextFormat,
-    lines: HighlightLines<'a>,
+    line_cx: LineContext<'a>,
+    /// Where `highlight_line` stands in the document.
+    line_state: LineState,
     cache: &'a mut Option<DocumentCache>,
     pending: &'a mut Option<PendingHighlight>,
     /// The open document's line cache. When set, small documents are
@@ -516,24 +611,6 @@ fn ranges_to_job<'s>(
     }
     job.wrap.max_width = f32::INFINITY;
     job
-}
-
-/// Highlights one line with an already-running parser state.
-///
-/// A line the grammar cannot parse falls back to unformatted text rather than
-/// failing.
-fn highlight_line_with(
-    lines: &mut HighlightLines<'_>,
-    syntax_set: &SyntaxSet,
-    default_foreground: Option<syntect::highlighting::Color>,
-    default_format: &egui::text::TextFormat,
-    line: &str,
-) -> egui::text::LayoutJob {
-    let terminated = with_newline(line);
-    match lines.highlight_line(&terminated, syntax_set) {
-        Ok(ranges) => ranges_to_job(ranges, default_foreground, default_format),
-        Err(_) => plain_line_job(line, default_format),
-    }
 }
 
 /// `line` followed by the newline the grammars expect.
@@ -794,7 +871,7 @@ impl<'a> HighlighterLayouter<'a> {
             return job;
         }
 
-        self.lines = HighlightLines::new(self.syntax, self.theme);
+        self.line_state = LineState::new(self.syntax, &self.line_cx.highlighter);
         let never = AtomicBool::new(false);
         let default_format = self.default_format.clone();
         let job = join_lines(text, &default_format, &never, |line| self.highlight_line(line))
@@ -808,14 +885,14 @@ impl<'a> HighlighterLayouter<'a> {
     /// Highlights one line and returns its layout job.
     ///
     /// Lines must be supplied in document order: state carried between calls is
-    /// what keeps multi-line constructs colored.
+    /// what keeps multi-line constructs colored. A line the grammar cannot
+    /// parse falls back to unformatted text rather than failing.
     pub fn highlight_line(&mut self, line: &str) -> egui::text::LayoutJob {
-        highlight_line_with(
-            &mut self.lines,
-            self.syntax_set,
+        self.line_cx.line_job(
+            &mut self.line_state,
+            line,
             self.default_foreground,
             &self.default_format,
-            line,
         )
     }
 
@@ -889,10 +966,11 @@ impl SyntaxHighlighter {
         // theme are shared with the layouter.
         let theme = pick_theme(&self.theme_set);
         let syntax = pick_syntax(&self.syntax_set, lang);
+        let line_cx = LineContext::new(&self.syntax_set, theme, lang);
+        let line_state = LineState::new(syntax, &line_cx.highlighter);
         HighlighterLayouter {
             syntax_set: &self.syntax_set,
             theme_set: &self.theme_set,
-            theme,
             syntax,
             language: lang,
             default_foreground: theme.settings.foreground,
@@ -900,7 +978,8 @@ impl SyntaxHighlighter {
                 font_id,
                 ..Default::default()
             },
-            lines: HighlightLines::new(syntax, theme),
+            line_cx,
+            line_state,
             cache: &mut self.cache,
             pending: &mut self.pending,
             document: None,
@@ -1058,6 +1137,7 @@ mod tests {
         assert_eq!(Language::from_extension("scss"), Language::Css);
         assert_eq!(Language::from_extension("less"), Language::Css);
         assert_eq!(Language::from_extension("go"), Language::Go);
+        assert_eq!(Language::from_extension("sql"), Language::Sql);
         for ext in ["py", "pyw", "pyi"] {
             assert_eq!(Language::from_extension(ext), Language::Python, "{ext}");
         }
@@ -1153,6 +1233,7 @@ mod tests {
         assert_eq!(Language::Markdown.display_name(), "Markdown");
         assert_eq!(Language::Go.display_name(), "Go");
         assert_eq!(Language::Python.display_name(), "Python");
+        assert_eq!(Language::Sql.display_name(), "SQL");
         assert_eq!(Language::Css.display_name(), "CSS");
         assert_eq!(Language::Blade.display_name(), "Blade");
         assert_eq!(Language::Twig.display_name(), "Twig");
@@ -1161,7 +1242,7 @@ mod tests {
 
     #[test]
     fn test_all_lists_every_variant() {
-        assert_eq!(Language::all().len(), 16);
+        assert_eq!(Language::all().len(), 17);
     }
 
     #[test]
@@ -1546,6 +1627,77 @@ mod tests {
                 job.sections.len()
             })
             .collect()
+    }
+
+    /// Colour of the text at `needle` in the lines of `lang`, highlighted in
+    /// order: the line index and the needle's first occurrence in it.
+    fn colors_at(lang: Language, lines: &[&str], needles: &[(usize, &str)]) -> Vec<egui::Color32> {
+        let mut highlighter = SyntaxHighlighter::new();
+        let mut layouter = highlighter.layouter(lang, egui::FontId::monospace(14.0));
+        let jobs: Vec<_> = lines.iter().map(|line| layouter.highlight_line(line)).collect();
+        needles
+            .iter()
+            .map(|&(line, needle)| {
+                let job = &jobs[line];
+                job.debug_sanity_check();
+                assert_eq!(job.text, lines[line], "text mangled for {lang:?}");
+                let at = job.text.find(needle).unwrap_or_else(|| panic!("{needle:?} not in line {line}"));
+                let section = job.sections.iter().find(|s| (s.byte_range.start.0..s.byte_range.end.0).contains(&at)).unwrap();
+                section.format.color
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_sql_files_are_coloured() {
+        let counts = section_counts(Language::Sql, &["SELECT id FROM users WHERE id = 1; -- note"]);
+        assert!(counts[0] > 1);
+    }
+
+    /// In a string that reads as SQL the keywords change colour while the
+    /// names keep the string's; a string of plain words keeps one colour.
+    #[test]
+    fn test_sql_in_strings_is_coloured_in_every_language() {
+        let samples = [
+            (Language::JavaScript, ["const q = \"SELECT id FROM users\";", "const s = \"pick id or users\";"]),
+            (Language::TypeScript, ["const q = 'select id from users';", "const s = 'pick id or users';"]),
+            (Language::Go, ["q := \"SELECT id FROM users\"", "s := \"pick id or users\""]),
+            (Language::Rust, ["let q = \"SELECT id FROM users\";", "let s = \"pick id or users\";"]),
+            (Language::C, ["char *q = \"SELECT id FROM users\";", "char *s = \"pick id or users\";"]),
+            (Language::Python, ["q = 'select id from users'", "s = 'pick id or users'"]),
+            (Language::Php, ["<?php $q = 'SELECT id FROM users';", "<?php $s = 'pick id or users';"]),
+        ];
+        for (lang, [sql, plain]) in samples {
+            let from = if sql.contains("FROM") { "FROM" } else { "from" };
+            let colors = colors_at(lang, &[sql, plain], &[(0, from), (0, "users"), (1, "or"), (1, "users")]);
+            let [keyword, sql_name, plain_word, plain_name] = colors[..] else { unreachable!() };
+            assert_eq!(sql_name, plain_name, "{lang:?}: SQL names keep the string colour");
+            assert_eq!(plain_word, plain_name, "{lang:?}: a plain string stays one colour");
+            assert_ne!(keyword, sql_name, "{lang:?}: {from} is coloured as a keyword");
+        }
+    }
+
+    #[test]
+    fn test_sql_in_a_multi_line_string_keeps_its_colour() {
+        let lines = ["const q = `", "  SELECT id", "  FROM users`;", "const s = `FROM`;"];
+        let colors = colors_at(
+            Language::JavaScript,
+            &lines,
+            &[(1, "SELECT"), (1, "id"), (2, "FROM"), (3, "FROM")],
+        );
+        assert_ne!(colors[0], colors[1], "SELECT on the line after the backtick is a keyword");
+        assert_eq!(colors[0], colors[2], "FROM on the next line is a keyword too");
+        assert_ne!(colors[2], colors[3], "a later string is not SQL");
+    }
+
+    #[test]
+    fn test_ui_text_in_strings_is_not_sql() {
+        let colors = colors_at(
+            Language::JavaScript,
+            &["alert(\"Select a file\");", "alert(\"pick a file\");"],
+            &[(0, "Select"), (1, "pick")],
+        );
+        assert_eq!(colors[0], colors[1]);
     }
 
     #[test]

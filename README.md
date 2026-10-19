@@ -9,7 +9,8 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 ## Features
 
 - **VS Code-style multi-tab**: Language badge on each tab, `●` indicator for unsaved files, `×` close button on hover, and `+` button for new tabs.
-- **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (also `.scss` and `.less`), JSON, Markdown, Go, Python, and the Blade (`.blade.php`), Twig (`.twig`), and Smarty (`.tpl`) templates, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting.
+- **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (also `.scss` and `.less`), JSON, Markdown, Go, Python, SQL, and the Blade (`.blade.php`), Twig (`.twig`), and Smarty (`.tpl`) templates, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting.
+- **SQL inside strings**: a string literal in Rust, C, C++, PHP, JavaScript, TypeScript, Go or Python that reads as an SQL statement (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) has its SQL keywords coloured, across multi-line strings too. Upper-case keywords are enough; lower case needs a second clause (`select … from`), so UI text like "Select a file" stays a plain string.
 - **Line numbers** that can be toggled on or off (**View → Line Numbers**). The active line number is highlighted.
 - **Word wrap** that can be toggled on or off (**View → Word Wrap**). When disabled, long lines scroll horizontally.
 - **VS Code-style Explorer and Activity Bar**: Open folders, browse tree hierarchy, click files to open in tabs. Includes **Refresh** and **Collapse All** actions in the folder header.
@@ -190,6 +191,7 @@ Source structure:
 | `src/find.rs` | Find/replace, find bar, and Go to Line bar |
 | `src/search.rs` | Find in Files: directory search and results panel |
 | `src/highlighter.rs` | Syntax highlighting (syntect) |
+| `src/embedded_sql.rs` | SQL colouring inside string literals |
 | `src/file_browser.rs` | Explorer: folder tree and sidebar |
 | `src/activity_bar.rs` | Activity Bar |
 | `src/modals.rs` | About dialog and unsaved changes confirmation |

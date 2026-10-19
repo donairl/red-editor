@@ -9,7 +9,8 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 ## Fitur
 
 - **Banyak tab** bergaya VS Code: badge bahasa di tiap tab, titik `●` untuk file yang belum disimpan, tombol `×` saat di-hover, tombol `+` untuk tab baru.
-- **Syntax highlighting** untuk Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (juga `.scss` dan `.less`), JSON, Markdown, Go, Python, serta template Blade (`.blade.php`), Twig (`.twig`), dan Smarty (`.tpl`), dikenali dari ekstensi file. Bahasa bisa diganti manual lewat menu **Tampilan → Bahasa**. File di atas 1 MB ditampilkan tanpa highlighting.
+- **Syntax highlighting** untuk Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (juga `.scss` dan `.less`), JSON, Markdown, Go, Python, SQL, serta template Blade (`.blade.php`), Twig (`.twig`), dan Smarty (`.tpl`), dikenali dari ekstensi file. Bahasa bisa diganti manual lewat menu **Tampilan → Bahasa**. File di atas 1 MB ditampilkan tanpa highlighting.
+- **SQL di dalam string**: string di Rust, C, C++, PHP, JavaScript, TypeScript, Go, atau Python yang berisi perintah SQL (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) diwarnai kata kunci SQL-nya, termasuk string multi-baris. Kata kunci huruf besar sudah cukup; huruf kecil butuh klausa kedua (`select … from`), jadi teks UI seperti "Select a file" tetap berwarna string biasa.
 - **Nomor baris** yang bisa ditampilkan atau disembunyikan (**Tampilan → Nomor Baris**). Nomor baris tempat kursor berada tampil lebih terang.
 - **Bungkus baris** (word wrap) yang bisa dinyalakan atau dimatikan (**Tampilan → Bungkus Baris**). Saat mati, baris panjang bisa digeser ke samping.
 - **Explorer dan Activity Bar** seperti VS Code: buka folder, jelajahi isinya sebagai tree, klik file untuk membukanya di tab. Ada tombol **Refresh** dan **Collapse All** di header folder.
@@ -189,6 +190,7 @@ Struktur kode:
 | `src/find.rs` | Cari/ganti, bar cari dan bar Ke Baris |
 | `src/search.rs` | Cari di File: pencarian folder dan panel hasil |
 | `src/highlighter.rs` | Syntax highlighting (syntect) |
+| `src/embedded_sql.rs` | Pewarnaan SQL di dalam string |
 | `src/file_browser.rs` | Explorer: tree folder dan sidebar |
 | `src/activity_bar.rs` | Activity Bar |
 | `src/modals.rs` | Dialog About dan konfirmasi simpan |
