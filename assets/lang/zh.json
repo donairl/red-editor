@@ -42,6 +42,7 @@
   "msg.replaced": "已替换 {count} 处。",
   "msg.prettified": "文档已格式化。",
   "msg.prettify_failed": "无法格式化：{error}",
+  "msg.console_failed": "无法启动控制台：{error}",
   "msg.prettify_unsupported": "美化支持 JSON、HTML、CSS 以及已安装格式化工具的语言（Rust、Go、C/C++、Python、JS/TS）。",
   "file.open_file": "打开文件...",
   "file.open_folder": "打开文件夹...",
@@ -53,6 +54,7 @@
   "view.line_numbers": "行号",
   "view.zen_mode": "禅模式",
   "view.markdown_preview": "Markdown 预览",
+  "view.console": "控制台",
   "preview.too_large": "文档过大，无法预览。",
 
   "help.about": "关于",
@@ -89,5 +91,9 @@
   "explorer.title": "资源管理器",
   "explorer.refresh": "刷新",
   "explorer.collapse_all": "全部折叠",
-  "activity.explorer": "资源管理器"
+  "activity.explorer": "资源管理器",
+  "activity.console": "控制台",
+  "console.title": "控制台",
+  "console.hide": "隐藏",
+  "console.kill": "终止"
 }

@@ -42,6 +42,7 @@
   "msg.replaced": "{count} diganti.",
   "msg.prettified": "Dokumen dirapikan.",
   "msg.prettify_failed": "Gagal merapikan: {error}",
+  "msg.console_failed": "Gagal memulai konsol: {error}",
   "msg.prettify_unsupported": "Prettify mendukung JSON, HTML, CSS, dan bahasa dengan formatter terpasang (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Buka File...",
   "file.open_folder": "Buka Folder...",
@@ -53,6 +54,7 @@
   "view.line_numbers": "Nomor Baris",
   "view.zen_mode": "Mode Zen",
   "view.markdown_preview": "Pratinjau Markdown",
+  "view.console": "Konsol",
   "preview.too_large": "Dokumen terlalu besar untuk dipratinjau.",
 
   "help.about": "About",
@@ -89,5 +91,9 @@
   "explorer.title": "EXPLORER",
   "explorer.refresh": "Muat Ulang",
   "explorer.collapse_all": "Ciutkan Semua",
-  "activity.explorer": "Explorer"
+  "activity.explorer": "Explorer",
+  "activity.console": "Konsol",
+  "console.title": "KONSOL",
+  "console.hide": "Sembunyikan",
+  "console.kill": "Hentikan"
 }

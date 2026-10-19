@@ -10,6 +10,7 @@ mod modals;
 mod prettify;
 mod search;
 mod tab_bar;
+mod terminal;
 
 use app::TextEditorApp;
 use eframe::egui;

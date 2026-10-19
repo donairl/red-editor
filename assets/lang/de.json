@@ -42,6 +42,7 @@
   "msg.replaced": "{count} ersetzt.",
   "msg.prettified": "Dokument formatiert.",
   "msg.prettify_failed": "Formatieren fehlgeschlagen: {error}",
+  "msg.console_failed": "Konsole kann nicht gestartet werden: {error}",
   "msg.prettify_unsupported": "Formatieren unterstützt JSON, HTML, CSS und Sprachen mit installiertem Formatierer (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Datei öffnen...",
   "file.open_folder": "Ordner öffnen...",
@@ -53,6 +54,7 @@
   "view.line_numbers": "Zeilennummern",
   "view.zen_mode": "Zen-Modus",
   "view.markdown_preview": "Markdown-Vorschau",
+  "view.console": "Konsole",
   "preview.too_large": "Dokument zu groß für die Vorschau.",
 
   "help.about": "Über",
@@ -89,5 +91,9 @@
   "explorer.title": "EXPLORER",
   "explorer.refresh": "Aktualisieren",
   "explorer.collapse_all": "Alle zuklappen",
-  "activity.explorer": "Explorer"
+  "activity.explorer": "Explorer",
+  "activity.console": "Konsole",
+  "console.title": "KONSOLE",
+  "console.hide": "Ausblenden",
+  "console.kill": "Beenden"
 }

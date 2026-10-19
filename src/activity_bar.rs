@@ -1,7 +1,7 @@
 //! VS Code-style Activity Bar: the icon column at the far left.
 //!
-//! Holds one item, the Explorer, and only reports clicks: `app.rs` decides
-//! what a click does.
+//! Holds two items, the Explorer and the Console, and only reports clicks:
+//! `app.rs` decides what a click does.
 
 use eframe::egui::{self, Color32, CornerRadius, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
@@ -15,15 +15,27 @@ const ACCENT_WIDTH: f32 = 2.0;
 /// One frame of the bar.
 #[derive(Clone, Copy, Debug)]
 pub struct ActivityBarResponse {
-    pub clicked: bool,
-    // Only the tests read where the item was drawn.
+    pub explorer_clicked: bool,
+    pub console_clicked: bool,
+    // Only the tests read where the items were drawn.
     #[cfg_attr(not(test), allow(dead_code))]
     pub explorer_rect: Rect,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub console_rect: Rect,
 }
 
-/// Draws the bar down the available height. `explorer_open` lights the
-/// Explorer item and marks it with the accent bar; `tooltip` names it.
-pub fn show(ui: &mut egui::Ui, explorer_open: bool, tooltip: &str) -> ActivityBarResponse {
+/// Whether each item's view is open, and the tooltips naming the items.
+#[derive(Clone, Copy, Debug)]
+pub struct ActivityItems<'a> {
+    pub explorer_open: bool,
+    pub console_open: bool,
+    pub explorer_tooltip: &'a str,
+    pub console_tooltip: &'a str,
+}
+
+/// Draws the bar down the available height. An item whose view is open is
+/// lit and marked with the accent bar.
+pub fn show(ui: &mut egui::Ui, items: ActivityItems) -> ActivityBarResponse {
     let palette = SidebarPalette::for_visuals(ui.visuals());
 
     // Right border, over the full height of the panel.
@@ -34,27 +46,74 @@ pub fn show(ui: &mut egui::Ui, explorer_open: bool, tooltip: &str) -> ActivityBa
         Stroke::new(1.0, palette.border),
     );
 
+    // Items sit flush, one below the other.
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let (explorer_rect, explorer_clicked) = item(
+        ui,
+        &palette,
+        items.explorer_open,
+        items.explorer_tooltip,
+        paint_explorer_icon,
+    );
+    let (console_rect, console_clicked) = item(
+        ui,
+        &palette,
+        items.console_open,
+        items.console_tooltip,
+        paint_console_icon,
+    );
+    ActivityBarResponse {
+        explorer_clicked,
+        console_clicked,
+        explorer_rect,
+        console_rect,
+    }
+}
+
+/// One square item below the previous one; returns where it was drawn and
+/// whether it was clicked.
+fn item(
+    ui: &mut egui::Ui,
+    palette: &SidebarPalette,
+    open: bool,
+    tooltip: &str,
+    paint_icon: fn(&egui::Painter, egui::Pos2, Color32),
+) -> (Rect, bool) {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(WIDTH), Sense::click());
     let response = response.on_hover_text(tooltip);
     let painter = ui.painter();
-    if explorer_open {
+    if open {
         painter.rect_filled(
             Rect::from_min_size(rect.min, vec2(ACCENT_WIDTH, WIDTH)),
             CornerRadius::ZERO,
             palette.accent,
         );
     }
-    let color = if explorer_open || response.hovered() {
+    let color = if open || response.hovered() {
         palette.icon_active
     } else {
         palette.icon_inactive
     };
-    paint_explorer_icon(painter, rect.center(), color);
+    paint_icon(painter, rect.center(), color);
+    (rect, response.clicked())
+}
 
-    ActivityBarResponse {
-        clicked: response.clicked(),
-        explorer_rect: rect,
-    }
+/// A window with a `>` prompt and an underscore caret.
+fn paint_console_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let frame = Rect::from_center_size(center, vec2(18.0, 15.0));
+    painter.rect_stroke(frame, CornerRadius::same(2), stroke, egui::StrokeKind::Middle);
+    let prompt = frame.left_center() + vec2(4.0, 0.0);
+    painter.line(
+        vec![
+            prompt + vec2(0.0, -3.0),
+            prompt + vec2(3.0, 0.0),
+            prompt + vec2(0.0, 3.0),
+        ],
+        stroke,
+    );
+    let caret_y = frame.center().y + 3.0;
+    painter.line_segment([pos2(prompt.x + 5.0, caret_y), pos2(prompt.x + 10.0, caret_y)], stroke);
 }
 
 /// Two overlapping pages, the front one with a folded top-right corner.
@@ -97,6 +156,7 @@ mod tests {
         ctx: &egui::Context,
         events: Vec<egui::Event>,
         explorer_open: bool,
+        console_open: bool,
     ) -> (ActivityBarResponse, Vec<egui::epaint::ClippedShape>) {
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(WIDTH, 600.0))),
@@ -104,7 +164,13 @@ mod tests {
             ..Default::default()
         };
         let mut response = None;
-        let mut output = ctx.run_ui(input, |ui| response = Some(show(ui, explorer_open, "Explorer")));
+        let items = ActivityItems {
+            explorer_open,
+            console_open,
+            explorer_tooltip: "Explorer",
+            console_tooltip: "Console",
+        };
+        let mut output = ctx.run_ui(input, |ui| response = Some(show(ui, items)));
         output.textures_delta.clear();
         (response.expect("show ran"), output.shapes)
     }
@@ -128,28 +194,34 @@ mod tests {
     }
 
     #[test]
-    fn test_explorer_item_is_a_square_at_the_top() {
+    fn test_items_are_squares_explorer_first() {
         let ctx = egui::Context::default();
-        let (bar, _) = run(&ctx, Vec::new(), false);
+        let (bar, _) = run(&ctx, Vec::new(), false, false);
         assert_eq!(bar.explorer_rect.size(), Vec2::splat(WIDTH));
-        assert!(!bar.clicked);
+        assert_eq!(bar.console_rect.size(), Vec2::splat(WIDTH));
+        assert_eq!(bar.console_rect.top(), bar.explorer_rect.bottom());
+        assert!(!bar.explorer_clicked && !bar.console_clicked);
     }
 
     #[test]
-    fn test_clicking_the_explorer_item_reports_it() {
+    fn test_clicking_an_item_reports_that_item_only() {
         let ctx = egui::Context::default();
-        let (bar, _) = run(&ctx, Vec::new(), false);
-        let (bar, _) = run(&ctx, click(bar.explorer_rect.center()), false);
-        assert!(bar.clicked);
+        let (bar, _) = run(&ctx, Vec::new(), false, false);
+        let (clicked, _) = run(&ctx, click(bar.explorer_rect.center()), false, false);
+        assert!(clicked.explorer_clicked && !clicked.console_clicked);
+        let (clicked, _) = run(&ctx, click(bar.console_rect.center()), false, false);
+        assert!(clicked.console_clicked && !clicked.explorer_clicked);
     }
 
     #[test]
-    fn test_accent_bar_marks_an_open_explorer_only() {
+    fn test_accent_bar_marks_open_items_only() {
         let ctx = egui::Context::default();
         let accent = SidebarPalette::for_visuals(&ctx.global_style().visuals).accent;
-        let (bar, shapes) = run(&ctx, Vec::new(), true);
+        let (bar, shapes) = run(&ctx, Vec::new(), true, false);
         assert!(painted_fill(&shapes, accent, bar.explorer_rect));
-        let (bar, shapes) = run(&ctx, Vec::new(), false);
+        assert!(!painted_fill(&shapes, accent, bar.console_rect));
+        let (bar, shapes) = run(&ctx, Vec::new(), false, true);
         assert!(!painted_fill(&shapes, accent, bar.explorer_rect));
+        assert!(painted_fill(&shapes, accent, bar.console_rect));
     }
 }

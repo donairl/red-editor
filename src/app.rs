@@ -15,6 +15,7 @@ use crate::prettify;
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
 use crate::tab_bar;
+use crate::terminal::{self, Terminal};
 
 /// Storage key under which eframe remembers the interface language.
 const UI_LANGUAGE_KEY: &str = "ui_language";
@@ -140,6 +141,11 @@ pub struct TextEditorApp {
     /// The editor a click on the menu bar took the focus from. It gets the
     /// focus and its selection back once every menu has closed.
     pub menu_focus: Option<egui::Id>,
+    /// Show the Console panel (the integrated terminal) below the editor.
+    pub show_console: bool,
+    /// The shell of the Console panel, started the first time it is shown.
+    /// Hiding the panel keeps it running.
+    pub console: Option<Terminal>,
 }
 
 /// What the app wants done to the editor widget, which only `render_editor`
@@ -187,6 +193,8 @@ impl Default for TextEditorApp {
             search: SearchState::default(),
             editor_request: EditorRequest::default(),
             menu_focus: None,
+            show_console: false,
+            console: None,
         }
     }
 }
@@ -252,6 +260,7 @@ pub mod shortcuts {
     pub const PRETTIFY: KeyboardShortcut = cmd_shift(Key::I);
     pub const ZEN_MODE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F11);
     pub const MARKDOWN_PREVIEW: KeyboardShortcut = cmd_shift(Key::V);
+    pub const TOGGLE_CONSOLE: KeyboardShortcut = cmd(Key::Backtick);
     pub const FIND: KeyboardShortcut = cmd(Key::F);
     pub const REPLACE: KeyboardShortcut = cmd(Key::H);
     pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
@@ -282,6 +291,7 @@ pub enum ShortcutAction {
     Prettify,
     ZenMode,
     MarkdownPreview,
+    ToggleConsole,
     FindInFiles,
     Find,
     Replace,
@@ -298,6 +308,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::FIND_NEXT, FindNext),
         (shortcuts::FIND_IN_FILES, FindInFiles),
         (shortcuts::MARKDOWN_PREVIEW, MarkdownPreview),
+        (shortcuts::TOGGLE_CONSOLE, ToggleConsole),
         (shortcuts::PRETTIFY, Prettify),
         (shortcuts::SAVE_AS, SaveAs),
         (shortcuts::OPEN_FOLDER, OpenFolder),
@@ -425,6 +436,19 @@ impl TextEditorApp {
             .clicked()
         {
             self.toggle_markdown_preview();
+            ui.close();
+        }
+        let console_label = self.i18n.t("view.console");
+        let console_shortcut = ctx.format_shortcut(&shortcuts::TOGGLE_CONSOLE);
+        if ui
+            .add(
+                egui::Button::new(console_label)
+                    .selected(self.show_console)
+                    .shortcut_text(console_shortcut),
+            )
+            .clicked()
+        {
+            self.toggle_console(&ctx);
             ui.close();
         }
         ui.separator();
@@ -875,6 +899,7 @@ impl TextEditorApp {
             ShortcutAction::Prettify => self.prettify_document(),
             ShortcutAction::ZenMode => self.toggle_zen_mode(ctx),
             ShortcutAction::MarkdownPreview => self.toggle_markdown_preview(),
+            ShortcutAction::ToggleConsole => self.toggle_console(ctx),
             ShortcutAction::FindInFiles => self.open_search(ctx),
             ShortcutAction::Find => self.open_find(ctx, false),
             ShortcutAction::Replace => self.open_find(ctx, true),
@@ -1092,6 +1117,80 @@ impl TextEditorApp {
 
     /// The Activity Bar's Explorer item: asks for a folder when none is
     /// open, otherwise shows or hides the sidebar.
+    /// Shows or hides the Console panel. Showing it starts the shell, in the
+    /// open folder, if none is running, and gives it the keyboard.
+    pub fn toggle_console(&mut self, ctx: &egui::Context) {
+        if self.show_console {
+            self.show_console = false;
+            self.editor_request.focus = true;
+            return;
+        }
+        if self.console.is_none() {
+            match Terminal::spawn(ctx, &self.console_dir()) {
+                Ok(console) => self.console = Some(console),
+                Err(error) => {
+                    let message = self.i18n.tf("msg.console_failed", &[("error", &error)]);
+                    self.status_message = Some((message, true));
+                    return;
+                }
+            }
+        }
+        self.show_console = true;
+        ctx.memory_mut(|m| m.request_focus(terminal::widget_id()));
+    }
+
+    /// The Console panel: a title row and the terminal under it. Drops the
+    /// terminal and hides the panel once the shell exits.
+    fn show_console_panel(&mut self, ui: &mut egui::Ui) {
+        let Some(console) = self.console.as_mut() else {
+            self.show_console = false;
+            return;
+        };
+        if console.has_exited() {
+            self.console = None;
+            self.show_console = false;
+            self.editor_request.focus = true;
+            return;
+        }
+        let (mut hide, mut kill) = (false, false);
+        egui::Panel::bottom("console_panel")
+            .resizable(true)
+            .default_size(220.0)
+            .min_size(80.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong(self.i18n.t("console.title"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        hide = ui.small_button(self.i18n.t("console.hide")).clicked();
+                        kill = ui.small_button(self.i18n.t("console.kill")).clicked();
+                    });
+                });
+                console.show(ui);
+            });
+        if kill {
+            self.console = None;
+        }
+        if hide || kill {
+            self.show_console = false;
+            self.editor_request.focus = true;
+        }
+    }
+
+    /// Where the shell starts: the open folder, else the active file's
+    /// folder, else the editor's working directory.
+    fn console_dir(&self) -> PathBuf {
+        self.explorer
+            .as_ref()
+            .map(|e| e.root().to_path_buf())
+            .or_else(|| {
+                let path = self.active_tab().current_path.as_ref()?;
+                path.parent().map(|dir| dir.to_path_buf())
+            })
+            .filter(|dir| dir.is_dir())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("/"))
+    }
+
     pub fn toggle_explorer(&mut self) {
         if self.explorer.is_none() {
             self.trigger_open_folder();
@@ -1510,24 +1609,37 @@ impl eframe::App for TextEditorApp {
         let ctx = ui.ctx().clone();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
 
-        if let Some(action) = ctx.input_mut(consume_shortcut) {
+        // While the Console has focus the shell gets every key, Escape
+        // included, but the shortcut that hides it.
+        let console_focused =
+            self.show_console && ctx.memory(|m| m.has_focus(terminal::widget_id()));
+        let shortcut = if console_focused {
+            ctx.input_mut(|i| i.consume_shortcut(&shortcuts::TOGGLE_CONSOLE))
+                .then_some(ShortcutAction::ToggleConsole)
+        } else {
+            ctx.input_mut(consume_shortcut)
+        };
+        if let Some(action) = shortcut {
             self.apply_shortcut(&ctx, action);
         }
 
-        if self.goto.visible
+        if !console_focused
+            && self.goto.visible
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.goto.visible = false;
             self.editor_request.focus = true;
         }
-        if self.search.visible
+        if !console_focused
+            && self.search.visible
             && !self.find.visible
             && !self.goto.visible
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.close_search();
         }
-        if self.find.visible
+        if !console_focused
+            && self.find.visible
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.close_find();
@@ -1625,11 +1737,20 @@ impl eframe::App for TextEditorApp {
                 .show_separator_line(false)
                 .frame(side_frame)
                 .show(ui, |ui| {
-                    activity_bar::show(ui, explorer_open, self.i18n.t("activity.explorer"))
+                    let items = activity_bar::ActivityItems {
+                        explorer_open,
+                        console_open: self.show_console,
+                        explorer_tooltip: self.i18n.t("activity.explorer"),
+                        console_tooltip: self.i18n.t("activity.console"),
+                    };
+                    activity_bar::show(ui, items)
                 })
                 .inner;
-            if activity.clicked {
+            if activity.explorer_clicked {
                 self.toggle_explorer();
+            }
+            if activity.console_clicked {
+                self.toggle_console(&ctx);
             }
         }
 
@@ -1655,6 +1776,12 @@ impl eframe::App for TextEditorApp {
 
         if let Some(path) = file_to_open {
             self.trigger_open_specific_file(path);
+        }
+
+        // Console panel, below the editor and the Markdown preview: declared
+        // after the side panels so it does not run under them.
+        if self.show_console && !self.zen_mode {
+            self.show_console_panel(ui);
         }
 
         // Markdown preview, right of the editor. Declared before the central

@@ -42,6 +42,7 @@
   "msg.replaced": "{count} reemplazados.",
   "msg.prettified": "Documento formateado.",
   "msg.prettify_failed": "No se puede formatear: {error}",
+  "msg.console_failed": "No se puede iniciar la consola: {error}",
   "msg.prettify_unsupported": "Embellecer admite JSON, HTML, CSS y lenguajes con formateador instalado (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Abrir archivo...",
   "file.open_folder": "Abrir carpeta...",
@@ -53,6 +54,7 @@
   "view.line_numbers": "Números de línea",
   "view.zen_mode": "Modo Zen",
   "view.markdown_preview": "Vista previa de Markdown",
+  "view.console": "Consola",
   "preview.too_large": "Documento demasiado grande para la vista previa.",
 
   "help.about": "Acerca de",
@@ -89,5 +91,9 @@
   "explorer.title": "EXPLORADOR",
   "explorer.refresh": "Actualizar",
   "explorer.collapse_all": "Contraer todo",
-  "activity.explorer": "Explorador"
+  "activity.explorer": "Explorador",
+  "activity.console": "Consola",
+  "console.title": "CONSOLA",
+  "console.hide": "Ocultar",
+  "console.kill": "Terminar"
 }

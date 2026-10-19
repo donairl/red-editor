@@ -42,6 +42,7 @@
   "msg.replaced": "{count} replaced.",
   "msg.prettified": "Document formatted.",
   "msg.prettify_failed": "Cannot format: {error}",
+  "msg.console_failed": "Cannot start the console: {error}",
   "msg.prettify_unsupported": "Prettify supports JSON, HTML, CSS and languages with an installed formatter (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Open File...",
   "file.open_folder": "Open Folder...",
@@ -53,6 +54,7 @@
   "view.line_numbers": "Line Numbers",
   "view.zen_mode": "Zen Mode",
   "view.markdown_preview": "Markdown Preview",
+  "view.console": "Console",
   "preview.too_large": "Document too large to preview.",
 
   "help.about": "About",
@@ -89,5 +91,9 @@
   "explorer.title": "EXPLORER",
   "explorer.refresh": "Refresh",
   "explorer.collapse_all": "Collapse All",
-  "activity.explorer": "Explorer"
+  "activity.explorer": "Explorer",
+  "activity.console": "Console",
+  "console.title": "CONSOLE",
+  "console.hide": "Hide",
+  "console.kill": "Kill"
 }

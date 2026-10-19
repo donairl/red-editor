@@ -395,6 +395,7 @@ mod tests {
             include_str!("find.rs"),
             include_str!("search.rs"),
             include_str!("activity_bar.rs"),
+            include_str!("terminal.rs"),
         ];
         let known = keys(BUILTIN[0].1);
         let mut used = HashSet::new();
