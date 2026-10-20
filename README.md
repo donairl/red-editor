@@ -13,6 +13,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **SQL inside strings**: a string literal in Rust, C, C++, PHP, JavaScript, TypeScript, Go or Python that reads as an SQL statement (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) has its SQL keywords coloured, across multi-line strings too. Upper-case keywords are enough; lower case needs a second clause (`select … from`), so UI text like "Select a file" stays a plain string.
 - **Line numbers** that can be toggled on or off (**View → Line Numbers**). The active line number is highlighted.
 - **Line bookmarks**: right-click a line in the editor and pick **Add Bookmark** (or **Remove Bookmark**). Bookmarked lines get a marker in the gutter and follow their line as you edit. A **Bookmarked: N** badge in the status bar opens the list of bookmarked lines; click one to jump to it. Bookmarks last for the session.
+- **Open Recent** (**File → Open Recent**): the last 20 files and folders you opened, newest first, kept across restarts. Click one to reopen it. If it no longer exists, the status bar says so and the entry is removed. **Clear Recently Opened** empties the list.
 - **Word wrap** that can be toggled on or off (**View → Word Wrap**). When disabled, long lines scroll horizontally.
 - **VS Code-style Explorer and Activity Bar**: Open folders, browse tree hierarchy, click files to open in tabs. Includes **Refresh** and **Collapse All** actions in the folder header.
 - **Find and Replace** (**Edit → Find**, **Edit → Replace**): Toolbar above the editor with highlighted search matches, case sensitivity option, and Replace All. Also includes **Go to Line…** to jump directly to a line number.
@@ -107,7 +108,7 @@ If installed outside `PATH`, provide the full binary path for `Exec=`, e.g. `Exe
 
 | Menu | Items |
 |---|---|
-| **File** | New Tab, Close Tab, Open File…, Open Folder…, Save, Save As…, Language, Exit |
+| **File** | New Tab, Close Tab, Open File…, Open Folder…, Open Recent, Save, Save As…, Language, Exit |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line…, Prettify |
 | **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Language, Interface Language |
 | **Help** | About |
@@ -189,6 +190,7 @@ Source structure:
 | `src/tab_bar.rs` | VS Code-style tab strip |
 | `src/gutter.rs` | Line number gutter and bookmark markers |
 | `src/bookmarks.rs` | Line bookmarks that follow edits |
+| `src/history.rs` | Recently opened files and folders (File → Open Recent) |
 | `src/prettify.rs` | Prettify: JSON/HTML/CSS in-process, other languages via external formatters |
 | `src/find.rs` | Find/replace, find bar, and Go to Line bar |
 | `src/search.rs` | Find in Files: directory search and results panel |

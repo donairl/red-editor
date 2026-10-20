@@ -6,6 +6,7 @@ mod file_browser;
 mod find;
 mod gutter;
 mod highlighter;
+mod history;
 mod i18n;
 mod markdown_preview;
 mod modals;

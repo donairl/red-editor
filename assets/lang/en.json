@@ -46,6 +46,9 @@
   "msg.prettify_unsupported": "Prettify supports JSON, HTML, CSS and languages with an installed formatter (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Open File...",
   "file.open_folder": "Open Folder...",
+  "file.open_recent": "Open Recent",
+  "file.clear_recent": "Clear Recently Opened",
+  "file.no_recent": "No recent items",
   "file.save": "Save",
   "file.save_as": "Save As...",
   "file.exit": "Exit",
@@ -82,6 +85,7 @@
   "msg.saved": "File saved.",
   "msg.save_failed": "Failed to save file: {error}",
   "msg.folder_opened": "Folder opened.",
+  "msg.recent_missing": "No longer exists, removed from recent: {path}",
   "msg.language_load_failed": "Failed to load language {file}: {error}",
 
   "about.title": "About Red Text Editor",

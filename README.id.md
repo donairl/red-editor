@@ -13,6 +13,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **SQL di dalam string**: string di Rust, C, C++, PHP, JavaScript, TypeScript, Go, atau Python yang berisi perintah SQL (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) diwarnai kata kunci SQL-nya, termasuk string multi-baris. Kata kunci huruf besar sudah cukup; huruf kecil butuh klausa kedua (`select … from`), jadi teks UI seperti "Select a file" tetap berwarna string biasa.
 - **Nomor baris** yang bisa ditampilkan atau disembunyikan (**Tampilan → Nomor Baris**). Nomor baris tempat kursor berada tampil lebih terang.
 - **Bookmark baris**: klik kanan sebuah baris di editor lalu pilih **Tambah Bookmark** (atau **Hapus Bookmark**). Baris yang di-bookmark diberi penanda di gutter dan ikut bergeser saat teks diedit. Badge **Di-bookmark: N** di status bar membuka daftar baris yang di-bookmark; klik salah satunya untuk melompat ke sana. Bookmark berlaku selama aplikasi terbuka.
+- **Buka Terbaru** (**File → Buka Terbaru**): 20 file dan folder terakhir yang dibuka, yang terbaru di atas, tetap tersimpan setelah aplikasi ditutup. Klik salah satunya untuk membukanya lagi. Kalau sudah tidak ada, status bar memberi tahu dan entri itu dihapus. **Hapus Riwayat** mengosongkan daftar.
 - **Bungkus baris** (word wrap) yang bisa dinyalakan atau dimatikan (**Tampilan → Bungkus Baris**). Saat mati, baris panjang bisa digeser ke samping.
 - **Explorer dan Activity Bar** seperti VS Code: buka folder, jelajahi isinya sebagai tree, klik file untuk membukanya di tab. Ada tombol **Refresh** dan **Collapse All** di header folder.
 - **Cari dan ganti** (**Edit → Cari**, **Edit → Ganti**): bar di atas editor dengan hasil yang disorot, opsi huruf besar/kecil, dan Ganti Semua. Ada juga **Ke Baris…** untuk melompat ke nomor baris.
@@ -107,7 +108,7 @@ Kalau dipasang di luar `PATH`, isi `Exec=` dengan path lengkapnya, misalnya `Exe
 
 | Menu | Isi |
 |---|---|
-| **File** | Tab Baru, Tutup Tab, Buka File…, Buka Folder…, Simpan, Simpan Sebagai…, Bahasa, Keluar |
+| **File** | Tab Baru, Tutup Tab, Buka File…, Buka Folder…, Buka Terbaru, Simpan, Simpan Sebagai…, Bahasa, Keluar |
 | **Edit** | Urungkan, Ulangi, Potong, Salin, Tempel, Cari, Ganti, Cari di File, Ke Baris… |
 | **Tampilan** | Bungkus Baris, Nomor Baris, Zen Mode, Pratinjau Markdown, Bahasa, Bahasa Antarmuka |
 | **Help** | About |
@@ -189,6 +190,7 @@ Struktur kode:
 | `src/tab_bar.rs` | Tab strip bergaya VS Code |
 | `src/gutter.rs` | Gutter nomor baris dan penanda bookmark |
 | `src/bookmarks.rs` | Bookmark baris yang ikut bergeser saat diedit |
+| `src/history.rs` | Riwayat file dan folder yang baru dibuka (File → Buka Terbaru) |
 | `src/find.rs` | Cari/ganti, bar cari dan bar Ke Baris |
 | `src/search.rs` | Cari di File: pencarian folder dan panel hasil |
 | `src/highlighter.rs` | Syntax highlighting (syntect) |

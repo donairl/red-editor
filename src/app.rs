@@ -10,6 +10,7 @@ use crate::bookmarks::Bookmarks;
 use crate::file_browser::{self, Explorer};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
+use crate::history::{Entry, EntryKind, History};
 use crate::i18n::{self, I18n};
 use crate::markdown_preview::{MarkdownPreview, ScrollPos, ScrollSync};
 use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
@@ -21,6 +22,10 @@ use crate::terminal::{self, Terminal};
 
 /// Storage key under which eframe remembers the interface language.
 const UI_LANGUAGE_KEY: &str = "ui_language";
+
+/// Storage key under which eframe remembers the recently opened files and
+/// folders.
+const HISTORY_KEY: &str = "recent_paths";
 
 /// The project page, opened by Help > Home.
 const HOME_URL: &str = "https://github.com/donairl/red-editor/";
@@ -220,6 +225,8 @@ pub struct TextEditorApp {
     /// The shell of the Console panel, started the first time it is shown.
     /// Hiding the panel keeps it running.
     pub console: Option<Terminal>,
+    /// Recently opened files and folders, for File > Open Recent.
+    pub history: History,
 }
 
 /// What the app wants done to the editor widget, which only `render_editor`
@@ -273,6 +280,7 @@ impl Default for TextEditorApp {
             menu_focus: None,
             show_console: false,
             console: None,
+            history: History::default(),
         }
     }
 }
@@ -428,6 +436,7 @@ impl TextEditorApp {
         Self {
             i18n,
             status_message,
+            history: saved_history(cc.storage),
             ..Default::default()
         }
     }
@@ -493,6 +502,40 @@ impl TextEditorApp {
                 }
             }
         });
+    }
+
+    /// The File > Open Recent submenu.
+    pub fn show_recent_menu(&mut self, ui: &mut egui::Ui) {
+        let label = self.i18n.t("file.open_recent").to_owned();
+        ui.menu_button(label, |ui| self.show_recent_items(ui));
+    }
+
+    /// The history, newest first, each entry's folder on its right; a click
+    /// reopens the entry. Ends with Clear Recently Opened.
+    fn show_recent_items(&mut self, ui: &mut egui::Ui) {
+        if self.history.is_empty() {
+            ui.weak(self.i18n.t("file.no_recent"));
+            return;
+        }
+        let mut picked = None;
+        for entry in self.history.entries() {
+            let (name, folder) = entry.label();
+            let row = ui
+                .add(egui::Button::new(name).shortcut_text(folder))
+                .on_hover_text(entry.path.display().to_string());
+            if row.clicked() {
+                picked = Some(entry.clone());
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui.button(self.i18n.t("file.clear_recent")).clicked() {
+            self.history.clear();
+            ui.close();
+        }
+        if let Some(entry) = picked {
+            self.open_recent(entry);
+        }
     }
 
     pub fn show_view_menu(&mut self, ui: &mut egui::Ui) {
@@ -1048,6 +1091,7 @@ impl TextEditorApp {
         if item(ui, self.i18n.t("file.open_folder"), &shortcuts::OPEN_FOLDER) {
             self.trigger_open_folder();
         }
+        self.show_recent_menu(ui);
         ui.separator();
         if item(ui, self.i18n.t("file.save"), &shortcuts::SAVE) {
             self.save();
@@ -1115,17 +1159,19 @@ impl TextEditorApp {
         {
             self.active_tab_index = index;
             self.status_message = Some((self.i18n.t("msg.already_open").to_owned(), false));
+            self.history.record(path, EntryKind::File);
             return;
         }
 
         if self.active_tab().is_pristine() {
             self.load_file(path);
         } else {
-            match DocumentTab::from_file(path) {
+            match DocumentTab::from_file(path.clone()) {
                 Ok(tab) => {
                     let exceeds = text_content_exceeds_highlight_limit(&tab.text_content);
                     self.tabs.push(tab);
                     self.active_tab_index = self.tabs.len() - 1;
+                    self.history.record(path, EntryKind::File);
                     self.status_message = Some((
                         if exceeds {
                             self.i18n.t("msg.too_large").to_owned()
@@ -1210,7 +1256,8 @@ impl TextEditorApp {
                 tab.disk_stamp = stamp;
                 tab.disk_conflict = false;
                 tab.active_language = Language::from_path(&path);
-                tab.current_path = Some(path);
+                tab.current_path = Some(path.clone());
+                self.history.record(path, EntryKind::File);
                 self.status_message = Some((
                     if exceeds_limit {
                         self.i18n.t("msg.too_large").to_owned()
@@ -1367,9 +1414,31 @@ impl TextEditorApp {
 
     pub fn trigger_open_folder(&mut self) {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-            self.explorer = Some(Explorer::new(folder));
-            self.show_sidebar = true;
-            self.status_message = Some((self.i18n.t("msg.folder_opened").to_owned(), false));
+            self.open_folder(folder);
+        }
+    }
+
+    /// Shows `folder` in the Explorer sidebar and records it in the history.
+    pub fn open_folder(&mut self, folder: PathBuf) {
+        self.history.record(folder.clone(), EntryKind::Folder);
+        self.explorer = Some(Explorer::new(folder));
+        self.show_sidebar = true;
+        self.status_message = Some((self.i18n.t("msg.folder_opened").to_owned(), false));
+    }
+
+    /// Reopens an entry of File > Open Recent. One no longer there is
+    /// dropped from the history, with an error in the status bar.
+    pub fn open_recent(&mut self, entry: Entry) {
+        if !entry.exists() {
+            self.history.remove(&entry.path);
+            let path = entry.path.display().to_string();
+            let message = self.i18n.tf("msg.recent_missing", &[("path", &path)]);
+            self.status_message = Some((message, true));
+            return;
+        }
+        match entry.kind {
+            EntryKind::File => self.open_file_in_tab(entry.path),
+            EntryKind::Folder => self.open_folder(entry.path),
         }
     }
 
@@ -1553,6 +1622,14 @@ impl TextEditorApp {
 /// `HighlighterLayouter::frame_job`), so this only bounds how long that pass can
 /// take, not how long the UI can freeze.
 const HIGHLIGHT_SIZE_LIMIT: usize = 1024 * 1024;
+
+/// The history eframe kept from the last run; empty on the first.
+fn saved_history(storage: Option<&dyn eframe::Storage>) -> History {
+    storage
+        .and_then(|storage| storage.get_string(HISTORY_KEY))
+        .map(|text| History::from_storage(&text))
+        .unwrap_or_default()
+}
 
 /// True when a document is too large to highlight cheaply.
 fn text_content_exceeds_highlight_limit(content: &str) -> bool {
@@ -1891,6 +1968,7 @@ fn render_editor_with(
 impl eframe::App for TextEditorApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(UI_LANGUAGE_KEY, self.i18n.code().to_owned());
+        storage.set_string(HISTORY_KEY, self.history.to_storage());
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -3958,6 +4036,171 @@ mod tests {
             eframe::Storage::get_string(&storage, super::UI_LANGUAGE_KEY).as_deref(),
             Some("en")
         );
+    }
+
+    /// A fresh folder `rred_history_<name>` in the temp directory holding
+    /// `a.txt` and `b.txt`.
+    fn history_folder(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rred_history_{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        fs::write(dir.join("b.txt"), "b").unwrap();
+        dir
+    }
+
+    fn history_of(app: &TextEditorApp) -> Vec<(PathBuf, EntryKind)> {
+        app.history
+            .entries()
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.kind))
+            .collect()
+    }
+
+    #[test]
+    fn test_opened_files_and_folders_are_recorded_newest_first() {
+        let dir = history_folder("record");
+        let (a, b) = (dir.join("a.txt"), dir.join("b.txt"));
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(a.clone());
+        app.open_file_in_tab(b.clone());
+        app.open_folder(dir.clone());
+        // Already open: its tab is focused, and it moves to the front.
+        app.open_file_in_tab(a.clone());
+        assert_eq!(
+            history_of(&app),
+            vec![
+                (a, EntryKind::File),
+                (dir.clone(), EntryKind::Folder),
+                (b, EntryKind::File),
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_files_that_fail_to_open_are_not_recorded() {
+        let missing = std::env::temp_dir().join("rred_history_no_such_file.txt");
+        let _ = fs::remove_file(&missing);
+        let mut app = TextEditorApp::default();
+        // Once into the blank tab, once into a new tab beside an edited one.
+        app.open_file_in_tab(missing.clone());
+        app.active_tab_mut().text_content = "edited".into();
+        app.open_file_in_tab(missing);
+        assert!(app.history.is_empty());
+        assert!(matches!(app.status_message, Some((_, true))));
+    }
+
+    #[test]
+    fn test_open_recent_reopens_files_and_folders() {
+        let dir = history_folder("reopen");
+        let a = dir.join("a.txt");
+        let mut app = TextEditorApp::default();
+        app.open_recent(Entry {
+            path: dir.clone(),
+            kind: EntryKind::Folder,
+        });
+        assert_eq!(
+            app.explorer.as_ref().map(Explorer::root),
+            Some(dir.as_path())
+        );
+        assert!(app.show_sidebar);
+
+        app.open_recent(Entry {
+            path: a.clone(),
+            kind: EntryKind::File,
+        });
+        assert_eq!(app.active_tab().current_path.as_ref(), Some(&a));
+        assert_eq!(app.active_tab().text_content, "a");
+        assert_eq!(
+            history_of(&app),
+            vec![(a, EntryKind::File), (dir.clone(), EntryKind::Folder)]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_open_recent_of_a_missing_path_reports_it_and_drops_it() {
+        let dir = history_folder("missing");
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(dir.join("a.txt"));
+        app.open_folder(dir.clone());
+        app.close_tab(0);
+        app.explorer = None;
+        fs::remove_dir_all(&dir).unwrap();
+
+        for entry in app.history.entries().to_vec() {
+            let path = entry.path.display().to_string();
+            app.open_recent(entry);
+            let message = app.i18n.tf("msg.recent_missing", &[("path", &path)]);
+            assert_eq!(app.status_message, Some((message, true)));
+        }
+        assert!(app.history.is_empty(), "missing entries are dropped");
+        assert!(app.active_tab().is_pristine(), "no file was opened");
+        assert!(app.explorer.is_none(), "no folder was opened");
+    }
+
+    #[test]
+    fn test_history_is_saved_and_restored() {
+        let mut app = TextEditorApp::default();
+        app.history
+            .record(PathBuf::from("/project"), EntryKind::Folder);
+        app.history
+            .record(PathBuf::from("/project/a.rs"), EntryKind::File);
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        assert!(eframe::Storage::get_string(&storage, super::HISTORY_KEY).is_some());
+        assert_eq!(saved_history(Some(&storage)), app.history);
+        assert_eq!(saved_history(None), History::default());
+    }
+
+    #[test]
+    fn test_open_recent_menu_lists_entries_and_reopens_the_clicked_one() {
+        let dir = history_folder("menu");
+        let (a, b) = (dir.join("a.txt"), dir.join("b.txt"));
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.history.record(a.clone(), EntryKind::File);
+        app.history.record(b, EntryKind::File);
+
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_recent_items(ui));
+        let (b_rect, _) = painted_text(&shapes, "b.txt").expect("b.txt is listed");
+        let (a_rect, _) = painted_text(&shapes, "a.txt").expect("a.txt is listed");
+        assert!(b_rect.top() < a_rect.top(), "the newest is listed first");
+        assert!(
+            painted_text(&shapes, &dir.display().to_string()).is_some(),
+            "each entry shows its folder"
+        );
+
+        run_frame_with_events(&ctx, click_events(a_rect.center()), |ui| {
+            app.show_recent_items(ui)
+        });
+        assert_eq!(
+            app.active_tab().current_path.as_ref(),
+            Some(&a),
+            "one click reopens the entry"
+        );
+        assert_eq!(app.history.entries()[0].path, a);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_open_recent_menu_when_empty_and_after_clearing() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        let empty = app.i18n.t("file.no_recent").to_owned();
+        let clear = app.i18n.t("file.clear_recent").to_owned();
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_recent_items(ui));
+        assert!(painted_text(&shapes, &empty).is_some());
+        assert!(painted_text(&shapes, &clear).is_none(), "nothing to clear");
+
+        app.history.record(PathBuf::from("/x.txt"), EntryKind::File);
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_recent_items(ui));
+        let (clear_rect, _) = painted_text(&shapes, &clear).expect("Clear is offered");
+        run_frame_with_events(&ctx, click_events(clear_rect.center()), |ui| {
+            app.show_recent_items(ui)
+        });
+        assert!(app.history.is_empty());
     }
 
     #[test]

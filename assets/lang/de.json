@@ -46,6 +46,9 @@
   "msg.prettify_unsupported": "Formatieren unterstützt JSON, HTML, CSS und Sprachen mit installiertem Formatierer (Rust, Go, C/C++, Python, JS/TS).",
   "file.open_file": "Datei öffnen...",
   "file.open_folder": "Ordner öffnen...",
+  "file.open_recent": "Zuletzt geöffnet",
+  "file.clear_recent": "Zuletzt geöffnete löschen",
+  "file.no_recent": "Keine zuletzt geöffneten Elemente",
   "file.save": "Speichern",
   "file.save_as": "Speichern unter...",
   "file.exit": "Beenden",
@@ -82,6 +85,7 @@
   "msg.saved": "Datei erfolgreich gespeichert.",
   "msg.save_failed": "Datei konnte nicht gespeichert werden: {error}",
   "msg.folder_opened": "Ordner geöffnet.",
+  "msg.recent_missing": "Existiert nicht mehr, aus „Zuletzt geöffnet“ entfernt: {path}",
   "msg.language_load_failed": "Sprache {file} konnte nicht geladen werden: {error}",
 
   "about.title": "Über Red Text Editor",
