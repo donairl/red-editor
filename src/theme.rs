@@ -309,6 +309,43 @@ pub const EIGHTIES_DARK: Theme = Theme::from_base(
     "base16-eighties.dark",
 );
 
+/// Where [`apply`] keeps the resolved theme in egui's memory.
+fn memory_id() -> egui::Id {
+    egui::Id::new("rred_theme")
+}
+
+/// Makes `choice` the theme this frame paints with, and returns it. egui's
+/// visuals are only replaced when the resolved theme changes.
+pub fn apply(ctx: &egui::Context, choice: ThemeId) -> &'static Theme {
+    let resolved = choice.resolve(ctx.system_theme());
+    let theme = resolved.theme();
+    if ctx.data(|d| d.get_temp::<ThemeId>(memory_id())) != Some(resolved) {
+        ctx.data_mut(|d| d.insert_temp(memory_id(), resolved));
+        let mode = if theme.dark {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        };
+        ctx.set_visuals_of(mode, theme.visuals());
+        ctx.set_theme(mode);
+    }
+    theme
+}
+
+/// The theme last [`apply`]-ed; before that, the Modern theme matching
+/// egui's dark mode.
+pub fn active(ctx: &egui::Context) -> &'static Theme {
+    ctx.data(|d| d.get_temp::<ThemeId>(memory_id()))
+        .unwrap_or_else(|| {
+            if ctx.global_style().visuals.dark_mode {
+                ThemeId::DarkModern
+            } else {
+                ThemeId::LightModern
+            }
+        })
+        .theme()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +413,30 @@ mod tests {
             assert_ne!(t.terminal.foreground, t.terminal.background, "{id:?}");
             assert_eq!(t.visuals().dark_mode, t.dark, "{id:?}");
         }
+    }
+
+    #[test]
+    fn test_active_falls_back_to_egui_dark_mode() {
+        let ctx = egui::Context::default();
+        ctx.set_theme(egui::Theme::Light);
+        assert_eq!(active(&ctx), ThemeId::LightModern.theme());
+        ctx.set_theme(egui::Theme::Dark);
+        assert_eq!(active(&ctx), ThemeId::DarkModern.theme());
+    }
+
+    #[test]
+    fn test_apply_stores_the_theme_and_its_visuals() {
+        let ctx = egui::Context::default();
+        let theme = apply(&ctx, ThemeId::SolarizedLight);
+        assert_eq!(theme, ThemeId::SolarizedLight.theme());
+        assert_eq!(active(&ctx), theme);
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        assert_eq!(ctx.global_style().visuals, theme.visuals());
+
+        apply(&ctx, ThemeId::MochaDark);
+        assert_eq!(active(&ctx), ThemeId::MochaDark.theme());
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        assert_eq!(ctx.global_style().visuals.panel_fill, hex(0x322A21));
     }
 
     #[test]
