@@ -21,6 +21,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Tab context menu**: Right-click tabs for Close Tab, Close Others, Close Tabs to the Right, and Close Saved. Unsaved tabs are protected from accidental closing.
 - **Unsaved changes confirmation** when closing tabs or quitting the application.
 - **Multilingual interface** (English, Indonesian, Spanish, German, Chinese, and additional languages via JSON files). Select via **View → Interface Language**; preference is persisted across restarts. See [Adding interface languages](#adding-interface-languages).
+- **Color themes** (**View → Theme**): System (follows the OS), Light Modern, Dark Modern, Solarized Light, Solarized Dark, Ocean Dark, Mocha Dark and Eighties Dark. The theme recolors syntax highlighting and the whole interface at once, without a restart, and is remembered across restarts.
 - **Zen Mode** (`F11`): Distraction-free full-screen mode showing only the editor; press `Esc` to exit.
 - **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON, HTML and CSS in place, and Rust, Go, C/C++, Python and JS/TS through the installed formatter (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Markdown preview** (`Ctrl+Shift+V`): rendered preview of `.md` files in a live split view beside the editor.
@@ -110,7 +111,7 @@ If installed outside `PATH`, provide the full binary path for `Exec=`, e.g. `Exe
 |---|---|
 | **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Open Recent, Save, Save As…, Language, Exit |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line…, Prettify |
-| **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Language, Interface Language |
+| **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Theme, Language, Interface Language |
 | **Help** | About |
 
 ### Keyboard Shortcuts

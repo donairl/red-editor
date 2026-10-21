@@ -6,6 +6,8 @@
   "menu.help": "Help",
   "menu.syntax": "Bahasa",
   "menu.ui_language": "Bahasa Antarmuka",
+  "menu.theme": "Tema",
+  "theme.system": "Sistem",
 
   "file.new_tab": "Tab Baru",
   "file.close_tab": "Tutup Tab",

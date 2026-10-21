@@ -29,6 +29,9 @@ const UI_LANGUAGE_KEY: &str = "ui_language";
 /// folders.
 const HISTORY_KEY: &str = "recent_paths";
 
+/// Storage key under which eframe remembers the chosen color theme.
+const THEME_KEY: &str = "theme";
+
 /// The project page, opened by Help > Home.
 const HOME_URL: &str = "https://github.com/donairl/red-editor/";
 
@@ -233,6 +236,8 @@ pub struct TextEditorApp {
     pub console: Option<Terminal>,
     /// Recently opened files and folders, for File > Open Recent.
     pub history: History,
+    /// The color theme picked in View > Theme; `System` follows the OS.
+    pub theme: ThemeId,
 }
 
 /// What the app wants done to the editor widget, which only `render_editor`
@@ -287,6 +292,7 @@ impl Default for TextEditorApp {
             show_console: false,
             console: None,
             history: History::default(),
+            theme: ThemeId::System,
         }
     }
 }
@@ -446,6 +452,7 @@ impl TextEditorApp {
             i18n,
             status_message,
             history: saved_history(cc.storage),
+            theme: saved_theme(cc.storage),
             ..Default::default()
         }
     }
@@ -580,9 +587,24 @@ impl TextEditorApp {
             self.toggle_console(&ctx);
             ui.close();
         }
+        self.show_theme_menu(ui);
         ui.separator();
         self.show_language_menu(ui);
         self.show_ui_language_menu(ui);
+    }
+
+    /// Lists every color theme; picking one switches to it at once.
+    pub fn show_theme_menu(&mut self, ui: &mut egui::Ui) {
+        let label = self.i18n.t("menu.theme").to_owned();
+        ui.menu_button(label, |ui| {
+            for id in ThemeId::ALL {
+                let name = id.name().unwrap_or_else(|| self.i18n.t("theme.system"));
+                if ui.selectable_label(self.theme == id, name).clicked() {
+                    self.theme = id;
+                    ui.close();
+                }
+            }
+        });
     }
 
     /// Lists every interface language; picking one switches to it.
@@ -1701,6 +1723,14 @@ fn saved_history(storage: Option<&dyn eframe::Storage>) -> History {
         .unwrap_or_default()
 }
 
+/// The theme eframe kept from the last run; `System` on the first.
+fn saved_theme(storage: Option<&dyn eframe::Storage>) -> ThemeId {
+    storage
+        .and_then(|storage| storage.get_string(THEME_KEY))
+        .map(|slug| ThemeId::from_slug(&slug))
+        .unwrap_or_default()
+}
+
 /// True when a document is too large to highlight cheaply.
 fn text_content_exceeds_highlight_limit(content: &str) -> bool {
     content.len() > HIGHLIGHT_SIZE_LIMIT
@@ -2039,10 +2069,13 @@ impl eframe::App for TextEditorApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(UI_LANGUAGE_KEY, self.i18n.code().to_owned());
         storage.set_string(HISTORY_KEY, self.history.to_storage());
+        storage.set_string(THEME_KEY, self.theme.slug().to_owned());
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let theme = theme::apply(&ctx, self.theme);
+        self.highlighter.set_theme(theme.syntax);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         self.poll_disk(&ctx);
 
@@ -4210,6 +4243,41 @@ mod tests {
         assert!(app.history.is_empty(), "missing entries are dropped");
         assert!(app.active_tab().is_pristine(), "no file was opened");
         assert!(app.explorer.is_none(), "no folder was opened");
+    }
+
+    #[test]
+    fn test_theme_is_saved_and_restored() {
+        let mut app = TextEditorApp::default();
+        assert_eq!(app.theme, ThemeId::System);
+        app.theme = ThemeId::SolarizedDark;
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        assert_eq!(
+            eframe::Storage::get_string(&storage, super::THEME_KEY).as_deref(),
+            Some("solarized-dark")
+        );
+        assert_eq!(saved_theme(Some(&storage)), ThemeId::SolarizedDark);
+        assert_eq!(saved_theme(None), ThemeId::System);
+    }
+
+    #[test]
+    fn test_a_frame_applies_the_chosen_theme() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        let frame = |app: &mut TextEditorApp| {
+            run_frame_with_events(&ctx, Vec::new(), |ui| {
+                eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
+            });
+        };
+        app.theme = ThemeId::EightiesDark;
+        frame(&mut app);
+        assert_eq!(theme::active(&ctx), ThemeId::EightiesDark.theme());
+        assert_eq!(app.highlighter.theme_name(), "base16-eighties.dark");
+
+        app.theme = ThemeId::LightModern;
+        frame(&mut app);
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        assert_eq!(app.highlighter.theme_name(), "InspiredGitHub");
     }
 
     #[test]

@@ -6,6 +6,8 @@
   "menu.help": "Hilfe",
   "menu.syntax": "Sprache",
   "menu.ui_language": "Oberflächensprache",
+  "menu.theme": "Farbschema",
+  "theme.system": "System",
 
   "file.new_tab": "Neuer Tab",
   "file.close_tab": "Tab schließen",

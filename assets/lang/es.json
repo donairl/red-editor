@@ -6,6 +6,8 @@
   "menu.help": "Ayuda",
   "menu.syntax": "Lenguaje",
   "menu.ui_language": "Idioma de la interfaz",
+  "menu.theme": "Tema",
+  "theme.system": "Sistema",
 
   "file.new_tab": "Pestaña nueva",
   "file.close_tab": "Cerrar pestaña",

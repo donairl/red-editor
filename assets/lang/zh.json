@@ -6,6 +6,8 @@
   "menu.help": "帮助",
   "menu.syntax": "语言",
   "menu.ui_language": "界面语言",
+  "menu.theme": "主题",
+  "theme.system": "跟随系统",
 
   "file.new_tab": "新建标签页",
   "file.close_tab": "关闭标签页",

@@ -21,6 +21,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Menu klik kanan pada tab**: Tutup Tab, Tutup Lainnya, Tutup Tab di Kanan, dan Tutup yang Tersimpan. Tab yang belum disimpan tidak ikut tertutup.
 - **Konfirmasi perubahan belum disimpan** saat menutup tab atau keluar dari aplikasi.
 - **Multi bahasa antarmuka** (Indonesia, English, Español, Deutsch, 中文, dan bahasa lain lewat file JSON). Pilih di **Tampilan → Bahasa Antarmuka**; pilihan diingat saat aplikasi dibuka lagi. Lihat [Menambah bahasa antarmuka](#menambah-bahasa-antarmuka).
+- **Tema warna** (**Tampilan → Tema**): Sistem (ikut OS), Light Modern, Dark Modern, Solarized Light, Solarized Dark, Ocean Dark, Mocha Dark, dan Eighties Dark. Tema mewarnai ulang syntax highlighting dan seluruh antarmuka sekaligus, tanpa restart, dan diingat saat aplikasi dibuka lagi.
 - **Zen mode** (`F11`): mode layar penuh tanpa gangguan, sembunyikan semua panel selain editor; tekan `Esc` untuk keluar.
 - **Prettify** (**Edit → Rapikan**, `Ctrl+Shift+I`): merapikan JSON, HTML, dan CSS langsung di editor, serta Rust, Go, C/C++, Python, JS/TS lewat formatter yang terpasang (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Pratinjau Markdown** (`Ctrl+Shift+V`): hasil render file `.md` dalam tampilan terbelah langsung di samping editor.
@@ -110,7 +111,7 @@ Kalau dipasang di luar `PATH`, isi `Exec=` dengan path lengkapnya, misalnya `Exe
 |---|---|
 | **File** | Tab Baru, Tutup Tab, Jendela Baru, Buka File…, Buka Folder…, Buka Terbaru, Simpan, Simpan Sebagai…, Bahasa, Keluar |
 | **Edit** | Urungkan, Ulangi, Potong, Salin, Tempel, Cari, Ganti, Cari di File, Ke Baris… |
-| **Tampilan** | Bungkus Baris, Nomor Baris, Zen Mode, Pratinjau Markdown, Bahasa, Bahasa Antarmuka |
+| **Tampilan** | Bungkus Baris, Nomor Baris, Zen Mode, Pratinjau Markdown, Tema, Bahasa, Bahasa Antarmuka |
 | **Help** | About |
 
 ### Shortcut keyboard
