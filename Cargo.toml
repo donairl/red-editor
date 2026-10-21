@@ -12,3 +12,8 @@ egui_commonmark = { version = "0.26", default-features = false, features = ["pul
 portable-pty = "0.9"
 vt100 = "0.18"
 
+
+# winit 0.30.13 with a fix for moving the window onto a monitor with another
+# display scale on Windows. See vendor/README.md.
+[patch.crates-io]
+winit = { path = "vendor/winit" }
