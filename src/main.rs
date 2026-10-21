@@ -1,3 +1,7 @@
+// Release builds on Windows run as a GUI program, so no console window opens
+// beside the editor. Debug builds keep the console for their output.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod activity_bar;
 mod app;
 mod bookmarks;

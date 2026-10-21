@@ -72,12 +72,27 @@ enum RunError {
     Failed(String),
 }
 
+/// Keeps a console formatter from opening a console window of its own: on
+/// Windows the editor runs without a console for it to share.
+#[cfg(windows)]
+fn hide_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console(_command: &mut Command) {}
+
 fn run_formatter(argv: &[&str], text: &str) -> Result<String, RunError> {
-    let mut child = Command::new(argv[0])
+    let mut command = Command::new(argv[0]);
+    command
         .args(&argv[1..])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_console(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => RunError::NotInstalled,
