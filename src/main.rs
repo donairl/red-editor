@@ -14,6 +14,7 @@ mod prettify;
 mod search;
 mod tab_bar;
 mod terminal;
+mod theme;
 
 use app::TextEditorApp;
 use eframe::egui;
