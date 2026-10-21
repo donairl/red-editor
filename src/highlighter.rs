@@ -13,8 +13,8 @@ use eframe::egui;
 
 use crate::embedded_sql::{self, Carry, StyledRange};
 
-/// Theme used for all highlighting.
-const THEME_NAME: &str = "InspiredGitHub";
+/// Theme used until [`SyntaxHighlighter::set_theme`] picks another.
+pub const DEFAULT_THEME: &str = "InspiredGitHub";
 
 /// Languages the editor can highlight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -199,6 +199,8 @@ pub struct SyntaxHighlighter {
     // `Arc` so a background pass can share the grammars without copying them.
     syntax_set: Arc<SyntaxSet>,
     theme_set: Arc<ThemeSet>,
+    /// Name of the bundled theme to highlight with.
+    theme: &'static str,
     /// The most recently highlighted document. `TextEdit` calls its layouter
     /// every frame, and highlighting a whole document is far too slow for that,
     /// so the result is reused until the text, language or font changes.
@@ -311,12 +313,13 @@ impl<'a> LineContext<'a> {
 
 /// Per-document line cache used by [`SyntaxHighlighter::highlight_incremental`].
 ///
-/// Keep one per open document: it is only valid for the language and font it
-/// was built with, and is rebuilt from scratch when either changes.
+/// Keep one per open document: it is only valid for the language, font and
+/// theme it was built with, and is rebuilt from scratch when any changes.
 #[derive(Default, Clone)]
 pub struct DocumentHighlightCache {
     pub language: Option<Language>,
     pub font_id: Option<egui::FontId>,
+    pub theme: Option<&'static str>,
     pub lines: Vec<LineHighlightCache>,
     pub full_job: Option<Arc<egui::text::LayoutJob>>,
 }
@@ -341,6 +344,7 @@ impl std::fmt::Debug for DocumentHighlightCache {
 struct DocumentCache {
     language: Language,
     font_id: egui::FontId,
+    theme: &'static str,
     text: String,
     job: Arc<egui::text::LayoutJob>,
 }
@@ -349,6 +353,7 @@ struct DocumentCache {
 struct PendingHighlight {
     language: Language,
     font_id: egui::FontId,
+    theme: &'static str,
     text: String,
     /// Plain-text stand-in shown until `result` arrives.
     placeholder: Arc<egui::text::LayoutJob>,
@@ -365,11 +370,11 @@ impl Drop for PendingHighlight {
     }
 }
 
-/// The configured theme, falling back to the first bundled one.
-fn pick_theme(theme_set: &ThemeSet) -> &Theme {
+/// The theme called `name`, falling back to the first bundled one.
+fn pick_theme<'a>(theme_set: &'a ThemeSet, name: &str) -> &'a Theme {
     theme_set
         .themes
-        .get(THEME_NAME)
+        .get(name)
         .or_else(|| theme_set.themes.values().next())
         .expect("syntect always bundles at least one theme")
 }
@@ -387,9 +392,16 @@ impl SyntaxHighlighter {
         Self {
             syntax_set: Arc::new(build_syntax_set()),
             theme_set: Arc::new(ThemeSet::load_defaults()),
+            theme: DEFAULT_THEME,
             cache: None,
             pending: None,
         }
+    }
+
+    /// Highlights with the bundled theme `name` from now on. Layouts cached
+    /// with another theme are rebuilt the next time they are asked for.
+    pub fn set_theme(&mut self, name: &'static str) {
+        self.theme = name;
     }
 
     /// The bundled grammar set.
@@ -405,7 +417,13 @@ impl SyntaxHighlighter {
     // Only the tests read the theme directly; `layouter` picks it itself.
     #[cfg(test)]
     pub fn theme(&self) -> &Theme {
-        pick_theme(&self.theme_set)
+        pick_theme(&self.theme_set, self.theme)
+    }
+
+    /// Name of the theme set by [`Self::set_theme`].
+    #[cfg(test)]
+    pub fn theme_name(&self) -> &'static str {
+        self.theme
     }
 }
 
@@ -417,7 +435,7 @@ impl SyntaxHighlighter {
     /// resumes from the last preserved line and stops as soon as the parser
     /// state after a re-highlighted line matches the cached one for the same
     /// unchanged trailing line, since everything after it would come out
-    /// identical. A change of language or font rebuilds the whole cache.
+    /// identical. A change of language, font or theme rebuilds the whole cache.
     // The runtime path goes through `HighlighterLayouter`, which borrows the
     // grammars directly; only the tests call this method.
     #[cfg(test)]
@@ -429,7 +447,7 @@ impl SyntaxHighlighter {
         text: &str,
     ) -> Arc<egui::text::LayoutJob> {
         let never = AtomicBool::new(false);
-        highlight_incremental_with(&self.syntax_set, &self.theme_set, cache, language, font_id, text, &never)
+        highlight_incremental_with(&self.syntax_set, &self.theme_set, self.theme, cache, language, font_id, text, &never)
             .expect("a pass that is never cancelled always finishes")
     }
 }
@@ -439,9 +457,12 @@ impl SyntaxHighlighter {
 ///
 /// Returns `None` if `cancel` is raised part-way through; `cache` then still
 /// describes the previous text.
+// One argument per cache key and grammar input; a struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 fn highlight_incremental_with(
     syntax_set: &SyntaxSet,
     theme_set: &ThemeSet,
+    theme_name: &'static str,
     cache: &mut DocumentHighlightCache,
     language: Language,
     font_id: &egui::FontId,
@@ -449,11 +470,15 @@ fn highlight_incremental_with(
     cancel: &AtomicBool,
 ) -> Option<Arc<egui::text::LayoutJob>> {
     {
-        if cache.language != Some(language) || cache.font_id.as_ref() != Some(font_id) {
+        if cache.language != Some(language)
+            || cache.font_id.as_ref() != Some(font_id)
+            || cache.theme != Some(theme_name)
+        {
             cache.lines.clear();
             cache.full_job = None;
             cache.language = Some(language);
             cache.font_id = Some(font_id.clone());
+            cache.theme = Some(theme_name);
         }
         if let Some(job) = &cache.full_job
             && job.text == text
@@ -461,7 +486,7 @@ fn highlight_incremental_with(
             return Some(Arc::clone(job));
         }
 
-        let theme = pick_theme(theme_set);
+        let theme = pick_theme(theme_set, theme_name);
         let syntax = pick_syntax(syntax_set, language);
         let cx = LineContext::new(syntax_set, theme, language);
         let default_foreground = theme.settings.foreground;
@@ -562,6 +587,7 @@ fn color_to_egui(color: syntect::highlighting::Color) -> egui::Color32 {
 pub struct HighlighterLayouter<'a> {
     syntax_set: &'a Arc<SyntaxSet>,
     theme_set: &'a Arc<ThemeSet>,
+    theme: &'static str,
     syntax: &'a SyntaxReference,
     language: Language,
     default_foreground: Option<syntect::highlighting::Color>,
@@ -686,6 +712,7 @@ impl<'a> HighlighterLayouter<'a> {
                 return highlight_incremental_with(
                     self.syntax_set,
                     self.theme_set,
+                    self.theme,
                     document,
                     self.language,
                     &self.default_format.font_id,
@@ -706,6 +733,7 @@ impl<'a> HighlighterLayouter<'a> {
         if let Some(pending) = self.pending.as_ref()
             && pending.language == self.language
             && pending.font_id == self.default_format.font_id
+            && pending.theme == self.theme
             && pending.text == text
         {
             match pending.result.try_recv() {
@@ -737,13 +765,15 @@ impl<'a> HighlighterLayouter<'a> {
     ///
     /// Once the cache is warm an edit re-parses only the touched lines, which
     /// is cheap at any document size, so it runs inline and the colors never
-    /// flash to plain text. A cold cache (first open, new language or font) or
-    /// an edit too big to re-parse inside a frame still goes to the background.
+    /// flash to plain text. A cold cache (first open, new language, font or
+    /// theme) or an edit too big to re-parse inside a frame still goes to the
+    /// background.
     fn large_document_job(&mut self, text: &str, ctx: &egui::Context) -> Arc<egui::text::LayoutJob> {
         let document = self.document.take().expect("checked by the caller");
         let font_id = self.default_format.font_id.clone();
         let warm = document.language == Some(self.language)
-            && document.font_id.as_ref() == Some(&font_id);
+            && document.font_id.as_ref() == Some(&font_id)
+            && document.theme == Some(self.theme);
 
         let job = 'job: {
             if warm
@@ -756,6 +786,7 @@ impl<'a> HighlighterLayouter<'a> {
             if let Some(pending) = self.pending.as_ref()
                 && pending.language == self.language
                 && pending.font_id == font_id
+                && pending.theme == self.theme
                 && pending.text == text
             {
                 match pending.result.try_recv() {
@@ -783,6 +814,7 @@ impl<'a> HighlighterLayouter<'a> {
                 break 'job highlight_incremental_with(
                     self.syntax_set,
                     self.theme_set,
+                    self.theme,
                     document,
                     self.language,
                     &font_id,
@@ -813,6 +845,7 @@ impl<'a> HighlighterLayouter<'a> {
         let worker = Worker {
             syntax_set: Arc::clone(self.syntax_set),
             theme_set: Arc::clone(self.theme_set),
+            theme: self.theme,
             language: self.language,
             default_format: self.default_format.clone(),
             text: text.to_owned(),
@@ -830,6 +863,7 @@ impl<'a> HighlighterLayouter<'a> {
         *self.pending = Some(PendingHighlight {
             language: self.language,
             font_id: self.default_format.font_id.clone(),
+            theme: self.theme,
             text: text.to_owned(),
             placeholder: Arc::clone(&placeholder),
             result: receiver,
@@ -838,13 +872,15 @@ impl<'a> HighlighterLayouter<'a> {
         placeholder
     }
 
-    /// The cached job, if it was built from exactly this text, language and font.
+    /// The cached job, if it was built from exactly this text, language, font
+    /// and theme.
     fn cached(&self, text: &str) -> Option<Arc<egui::text::LayoutJob>> {
         self.cache
             .as_ref()
             .filter(|cached| {
                 cached.language == self.language
                     && cached.font_id == self.default_format.font_id
+                    && cached.theme == self.theme
                     && cached.text == text
             })
             .map(|cached| Arc::clone(&cached.job))
@@ -854,13 +890,15 @@ impl<'a> HighlighterLayouter<'a> {
         *self.cache = Some(DocumentCache {
             language: self.language,
             font_id: self.default_format.font_id.clone(),
+            theme: self.theme,
             text: text.to_owned(),
             job: Arc::clone(job),
         });
     }
 
     /// Highlights a whole document synchronously into one layout job, reusing
-    /// the previous result when the text, language and font are unchanged.
+    /// the previous result when the text, language, font and theme are
+    /// unchanged.
     ///
     /// `TextEdit` asks for a layout every frame; without this cache each frame
     /// re-ran the grammar over the entire document and froze the UI. Every
@@ -908,6 +946,7 @@ impl<'a> HighlighterLayouter<'a> {
 struct Worker {
     syntax_set: Arc<SyntaxSet>,
     theme_set: Arc<ThemeSet>,
+    theme: &'static str,
     language: Language,
     default_format: egui::text::TextFormat,
     text: String,
@@ -923,6 +962,7 @@ impl Worker {
         highlight_incremental_with(
             &self.syntax_set,
             &self.theme_set,
+            self.theme,
             &mut cache,
             self.language,
             &self.default_format.font_id,
@@ -964,13 +1004,14 @@ impl SyntaxHighlighter {
     ) -> HighlighterLayouter<'_> {
         // Borrow the fields separately: the cache is mutable, the grammar and
         // theme are shared with the layouter.
-        let theme = pick_theme(&self.theme_set);
+        let theme = pick_theme(&self.theme_set, self.theme);
         let syntax = pick_syntax(&self.syntax_set, lang);
         let line_cx = LineContext::new(&self.syntax_set, theme, lang);
         let line_state = LineState::new(syntax, &line_cx.highlighter);
         HighlighterLayouter {
             syntax_set: &self.syntax_set,
             theme_set: &self.theme_set,
+            theme: self.theme,
             syntax,
             language: lang,
             default_foreground: theme.settings.foreground,
@@ -992,6 +1033,27 @@ mod tests {
     use eframe::egui;
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn test_switching_theme_recolors_cached_documents() {
+        let mut highlighter = SyntaxHighlighter::new();
+        let font_id = egui::FontId::monospace(14.0);
+        let doc = "fn main() { let x = 1; }";
+        let colors = |job: &egui::text::LayoutJob| -> Vec<egui::Color32> {
+            job.sections.iter().map(|s| s.format.color).collect()
+        };
+
+        let mut cache = DocumentHighlightCache::default();
+        let light = highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc);
+        highlighter.set_theme("base16-ocean.dark");
+        let dark = highlighter.highlight_incremental(&mut cache, Language::Rust, &font_id, doc);
+        assert_ne!(colors(&light), colors(&dark), "the line cache is rebuilt");
+
+        let first = highlighter.layouter(Language::Rust, font_id.clone()).document_job(doc);
+        highlighter.set_theme(DEFAULT_THEME);
+        let second = highlighter.layouter(Language::Rust, font_id).document_job(doc);
+        assert_ne!(colors(&first), colors(&second), "the document cache is rebuilt");
+    }
 
     #[test]
     fn test_incremental_highlight_preserves_unmodified_lines() {
@@ -1091,7 +1153,7 @@ mod tests {
     fn test_line_highlight_cache_step() {
         let highlighter = SyntaxHighlighter::new();
         let syntax = pick_syntax(&highlighter.syntax_set, Language::Rust);
-        let theme = pick_theme(&highlighter.theme_set);
+        let theme = pick_theme(&highlighter.theme_set, highlighter.theme);
         let mut parse_state = ParseState::new(syntax);
         let mut highlight_state =
             HighlightState::new(&Highlighter::new(theme), ScopeStack::new());

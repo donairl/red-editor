@@ -311,7 +311,7 @@ pub const EIGHTIES_DARK: Theme = Theme::from_base(
 
 /// Where [`apply`] keeps the resolved theme in egui's memory.
 fn memory_id() -> egui::Id {
-    egui::Id::new("rred_theme")
+    egui::Id::unique("rred_theme")
 }
 
 /// Makes `choice` the theme this frame paints with, and returns it. egui's
