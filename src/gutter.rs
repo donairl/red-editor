@@ -8,6 +8,7 @@ use eframe::egui::{self, Align2, Color32, FontId, Galley, Rect, pos2};
 
 use crate::bookmarks::Bookmarks;
 use crate::tab_bar::TabPalette;
+use crate::theme;
 
 /// Space between the left edge and the widest number.
 const PAD_LEFT: f32 = 8.0;
@@ -21,7 +22,8 @@ const MIN_DIGITS: usize = 3;
 const MARK_INSET: f32 = 2.0;
 const MARK_WIDTH: f32 = 4.0;
 
-/// Number colours, after VS Code's "Dark Modern" and "Light Modern".
+/// Number colours. `DARK` and `LIGHT` are VS Code's "Dark Modern" and
+/// "Light Modern"; the other themes derive theirs in `theme.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GutterPalette {
     pub number: Color32,
@@ -47,15 +49,6 @@ impl GutterPalette {
         bookmark: Color32::from_rgb(0x00, 0x5F, 0xB8),
         background: TabPalette::LIGHT.tab_active,
     };
-
-    /// The palette matching egui's current light or dark mode.
-    pub fn for_visuals(visuals: &egui::Visuals) -> GutterPalette {
-        if visuals.dark_mode {
-            Self::DARK
-        } else {
-            Self::LIGHT
-        }
-    }
 }
 
 /// Number of lines in `text`. A trailing `\n` opens one more, empty line, as
@@ -149,7 +142,7 @@ pub fn paint(
     width: f32,
     bookmarks: &Bookmarks,
 ) {
-    let palette = GutterPalette::for_visuals(ui.visuals());
+    let palette = theme::active(ui.ctx()).gutter;
     let clip = ui.clip_rect();
     let left = output.response.response.rect.left().max(clip.left());
     let rect = Rect::from_x_y_ranges(left..=left + width, clip.y_range());
@@ -216,14 +209,6 @@ mod tests {
         assert_eq!(
             GutterPalette::LIGHT.background,
             TabPalette::LIGHT.tab_active
-        );
-        assert_eq!(
-            GutterPalette::for_visuals(&egui::Visuals::dark()),
-            GutterPalette::DARK
-        );
-        assert_eq!(
-            GutterPalette::for_visuals(&egui::Visuals::light()),
-            GutterPalette::LIGHT
         );
     }
 

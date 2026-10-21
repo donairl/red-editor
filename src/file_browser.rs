@@ -15,7 +15,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::highlighter::Language;
 use crate::i18n::I18n;
-use crate::{find, search, tab_bar};
+use crate::{find, search, tab_bar, theme};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FsEntry {
@@ -55,8 +55,9 @@ pub fn scan_directory(dir: &Path) -> Vec<FsEntry> {
     entries
 }
 
-/// Colours of the Activity Bar and the sidebar, after VS Code's
-/// "Dark Modern" and "Light Modern".
+/// Colours of the Activity Bar and the sidebar. `DARK` and `LIGHT` are VS
+/// Code's "Dark Modern" and "Light Modern"; the other themes derive theirs
+/// in `theme.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarPalette {
     pub background: Color32,
@@ -96,15 +97,6 @@ impl SidebarPalette {
         row_selected: Color32::from_rgb(0xE4, 0xE6, 0xF1),
         indent_guide: Color32::from_rgb(0xD3, 0xD3, 0xD3),
     };
-
-    /// The palette matching egui's current light or dark mode.
-    pub fn for_visuals(visuals: &egui::Visuals) -> SidebarPalette {
-        if visuals.dark_mode {
-            Self::DARK
-        } else {
-            Self::LIGHT
-        }
-    }
 }
 
 /// One visible line of the tree.
@@ -310,7 +302,7 @@ pub fn show(
     active_file: Option<&Path>,
     i18n: &I18n,
 ) -> ExplorerResponse {
-    let palette = SidebarPalette::for_visuals(ui.visuals());
+    let palette = theme::active(ui.ctx()).sidebar;
     ui.spacing_mut().item_spacing = Vec2::ZERO;
     let width = ui.available_width();
 
@@ -793,15 +785,6 @@ mod tests {
         assert_eq!(l.row_hover, Color32::from_rgb(0xF2, 0xF2, 0xF2));
         assert_eq!(l.row_selected, Color32::from_rgb(0xE4, 0xE6, 0xF1));
         assert_eq!(l.indent_guide, Color32::from_rgb(0xD3, 0xD3, 0xD3));
-
-        assert_eq!(
-            SidebarPalette::for_visuals(&egui::Visuals::dark()),
-            SidebarPalette::DARK
-        );
-        assert_eq!(
-            SidebarPalette::for_visuals(&egui::Visuals::light()),
-            SidebarPalette::LIGHT
-        );
     }
 
     /// A fresh folder named `rred_explorer_<name>` in the temp directory:
@@ -1048,7 +1031,7 @@ mod tests {
         let active = root.join("Cargo.toml");
         let (response, shapes) = run(&ctx, Vec::new(), &mut explorer, Some(&active));
 
-        let palette = SidebarPalette::for_visuals(&ctx.global_style().visuals);
+        let palette = theme::active(&ctx).sidebar;
         assert_eq!(
             filled(&shapes, palette.row_selected),
             vec![row_rect(&response, &active)],

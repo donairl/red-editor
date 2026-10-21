@@ -8,6 +8,7 @@ use eframe::egui::{
 };
 
 use crate::highlighter::Language;
+use crate::theme;
 
 /// What the strip needs to know about one open document.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,7 +22,8 @@ pub struct TabView {
     pub dirty: bool,
 }
 
-/// Colours of the strip, after VS Code's "Dark Modern" and "Light Modern".
+/// Colours of the strip. `DARK` and `LIGHT` are VS Code's "Dark Modern" and
+/// "Light Modern"; the other themes derive theirs in `theme.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TabPalette {
     pub strip: Color32,
@@ -61,15 +63,6 @@ impl TabPalette {
         fg_inactive: Color32::from_rgb(0x86, 0x86, 0x86),
         close_hover: Color32::from_rgb(0xE9, 0xE9, 0xE9),
     };
-
-    /// The palette matching egui's current light or dark mode.
-    pub fn for_visuals(visuals: &egui::Visuals) -> TabPalette {
-        if visuals.dark_mode {
-            Self::DARK
-        } else {
-            Self::LIGHT
-        }
-    }
 }
 
 /// Short coloured label shown before a tab's name. A `None` colour means
@@ -169,7 +162,7 @@ pub fn show(
     active: usize,
     labels: &MenuLabels,
 ) -> TabBarResponse {
-    let palette = TabPalette::for_visuals(ui.visuals());
+    let palette = theme::active(ui.ctx()).tab;
 
     // Background and bottom border for the whole width, including the empty
     // part after the last tab. The active tab paints over the border.
@@ -409,18 +402,6 @@ mod tests {
         assert_eq!(p.accent, Color32::from_rgb(0x00, 0x5F, 0xB8));
         assert_eq!(p.fg_active, Color32::from_rgb(0x3B, 0x3B, 0x3B));
         assert_eq!(p.fg_inactive, Color32::from_rgb(0x86, 0x86, 0x86));
-    }
-
-    #[test]
-    fn test_palette_follows_egui_theme() {
-        assert_eq!(
-            TabPalette::for_visuals(&egui::Visuals::dark()),
-            TabPalette::DARK
-        );
-        assert_eq!(
-            TabPalette::for_visuals(&egui::Visuals::light()),
-            TabPalette::LIGHT
-        );
     }
 
     #[test]

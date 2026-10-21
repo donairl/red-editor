@@ -15,6 +15,7 @@ use eframe::egui::{self, Color32, Key, Modifiers, Rect, vec2};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::gutter::GutterPalette;
+use crate::theme;
 
 /// Lines kept above the screen for scrolling back.
 const SCROLLBACK: usize = 5000;
@@ -238,7 +239,7 @@ impl Terminal {
             }
         }
 
-        let palette = TerminalPalette::for_visuals(ui.visuals());
+        let palette = theme::active(ui.ctx()).terminal;
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, palette.background);
         let parser = lock(&self.parser);
@@ -270,7 +271,8 @@ fn pty_size((rows, cols): (u16, u16)) -> PtySize {
     }
 }
 
-/// Colours of the terminal, after VS Code's integrated terminal.
+/// Colours of the terminal. `DARK` and `LIGHT` are VS Code's integrated
+/// terminal; the other themes derive theirs in `theme.rs`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerminalPalette {
     pub background: Color32,
@@ -330,15 +332,6 @@ impl TerminalPalette {
             Self::rgb(0xA5A5A5),
         ],
     };
-
-    /// The palette matching egui's current light or dark mode.
-    pub fn for_visuals(visuals: &egui::Visuals) -> TerminalPalette {
-        if visuals.dark_mode {
-            Self::DARK
-        } else {
-            Self::LIGHT
-        }
-    }
 
     /// `color` as egui paints it; `Default` is `fallback`.
     fn color(&self, color: vt100::Color, fallback: Color32) -> Color32 {

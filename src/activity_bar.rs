@@ -6,6 +6,7 @@
 use eframe::egui::{self, Color32, CornerRadius, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
 use crate::file_browser::SidebarPalette;
+use crate::theme;
 
 /// Width of the bar, and side of each square item in it.
 pub const WIDTH: f32 = 48.0;
@@ -36,7 +37,7 @@ pub struct ActivityItems<'a> {
 /// Draws the bar down the available height. An item whose view is open is
 /// lit and marked with the accent bar.
 pub fn show(ui: &mut egui::Ui, items: ActivityItems) -> ActivityBarResponse {
-    let palette = SidebarPalette::for_visuals(ui.visuals());
+    let palette = theme::active(ui.ctx()).sidebar;
 
     // Right border, over the full height of the panel.
     let panel = ui.max_rect();
@@ -216,7 +217,7 @@ mod tests {
     #[test]
     fn test_accent_bar_marks_open_items_only() {
         let ctx = egui::Context::default();
-        let accent = SidebarPalette::for_visuals(&ctx.global_style().visuals).accent;
+        let accent = theme::active(&ctx).sidebar.accent;
         let (bar, shapes) = run(&ctx, Vec::new(), true, false);
         assert!(painted_fill(&shapes, accent, bar.explorer_rect));
         assert!(!painted_fill(&shapes, accent, bar.console_rect));

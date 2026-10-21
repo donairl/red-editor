@@ -20,6 +20,7 @@ use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
 use crate::tab_bar;
 use crate::terminal::{self, Terminal};
+use crate::theme::{self, ThemeId};
 
 /// Storage key under which eframe remembers the interface language.
 const UI_LANGUAGE_KEY: &str = "ui_language";
@@ -654,7 +655,7 @@ impl TextEditorApp {
                     }
                     if self.status_bookmarks > 0 {
                         let count = self.status_bookmarks.to_string();
-                        let color = gutter::GutterPalette::for_visuals(ui.visuals()).bookmark;
+                        let color = theme::active(ui.ctx()).gutter.bookmark;
                         let label = egui::RichText::new(
                             self.i18n.tf("status.bookmarks", &[("count", &count)]),
                         )
@@ -2160,7 +2161,7 @@ impl eframe::App for TextEditorApp {
 
         // 3. Activity Bar and Explorer sidebar. Both paint their own right
         // border, so egui's separator lines are turned off.
-        let side_fill = file_browser::SidebarPalette::for_visuals(ui.visuals()).background;
+        let side_fill = theme::active(&ctx).sidebar.background;
         let side_frame = egui::Frame::NONE.fill(side_fill);
         let explorer_open = self.show_sidebar && self.explorer.is_some();
         if !self.zen_mode {
@@ -2243,7 +2244,7 @@ impl eframe::App for TextEditorApp {
         // 4. Central Panel (Main Text Editor Area)
         // No margin and the active tab's colour, so the active tab and the
         // editor below it read as one surface, as in VS Code.
-        let editor_fill = tab_bar::TabPalette::for_visuals(ui.visuals()).tab_active;
+        let editor_fill = theme::active(&ctx).tab.tab_active;
         let editor_frame = egui::Frame::NONE.fill(editor_fill);
         egui::CentralPanel::default().frame(editor_frame).show(ui, |ui| {
             if !self.zen_mode {
@@ -3874,7 +3875,7 @@ mod tests {
                 );
             });
         });
-        let color = crate::gutter::GutterPalette::for_visuals(&ctx.global_style().visuals).bookmark;
+        let color = crate::theme::active(&ctx).gutter.bookmark;
         let marks: Vec<egui::Rect> = shapes
             .iter()
             .filter_map(|clipped| match &clipped.shape {
@@ -4487,7 +4488,7 @@ mod tests {
 
         render_with_gutter(&ctx, &mut text, false, false, true, click_events(line2));
         let shapes = render_with_gutter(&ctx, &mut text, false, false, true, Vec::new());
-        let palette = crate::gutter::GutterPalette::for_visuals(&ctx.global_style().visuals);
+        let palette = crate::theme::active(&ctx).gutter;
         assert_eq!(painted_number(&shapes, 2).unwrap().1, palette.number_active);
         assert_eq!(painted_number(&shapes, 1).unwrap().1, palette.number);
         assert_eq!(painted_number(&shapes, 3).unwrap().1, palette.number);
