@@ -9,6 +9,7 @@
 
   "file.new_tab": "Tab Baru",
   "file.close_tab": "Tutup Tab",
+  "file.new_window": "Jendela Baru",
   "tab.close_others": "Tutup Lainnya",
   "tab.close_to_right": "Tutup Tab di Kanan",
   "tab.close_saved": "Tutup yang Tersimpan",
@@ -86,6 +87,7 @@
   "msg.save_failed": "Gagal menyimpan file: {error}",
   "msg.folder_opened": "Folder dibuka.",
   "msg.recent_missing": "Sudah tidak ada, dihapus dari riwayat: {path}",
+  "msg.new_window_failed": "Gagal membuka jendela baru: {error}",
   "msg.language_load_failed": "Gagal memuat bahasa {file}: {error}",
 
   "about.title": "Tentang Red Text Editor",

@@ -3,6 +3,7 @@
 use eframe::egui;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 use crate::activity_bar;
@@ -35,6 +36,10 @@ const DISK_CHECK_SECS: f64 = 2.0;
 
 /// Under the editor's id, the `char` index it was last right-clicked at.
 const CONTEXT_CHAR: &str = "context_char";
+
+/// Least room worth giving an Open Recent entry's folder; with less, only
+/// the row's hover text shows it.
+const MIN_RECENT_FOLDER_WIDTH: f32 = 48.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DocumentTab {
@@ -332,6 +337,7 @@ pub mod shortcuts {
     }
 
     pub const NEW_TAB: KeyboardShortcut = cmd(Key::N);
+    pub const NEW_WINDOW: KeyboardShortcut = cmd_shift(Key::N);
     pub const CLOSE_TAB: KeyboardShortcut = cmd(Key::W);
     pub const OPEN_FILE: KeyboardShortcut = cmd(Key::O);
     pub const OPEN_FOLDER: KeyboardShortcut = cmd_shift(Key::O);
@@ -364,6 +370,7 @@ pub mod shortcuts {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShortcutAction {
     NewTab,
+    NewWindow,
     CloseTab,
     OpenFile,
     OpenFolder,
@@ -398,6 +405,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::PRETTIFY, Prettify),
         (shortcuts::SAVE_AS, SaveAs),
         (shortcuts::OPEN_FOLDER, OpenFolder),
+        (shortcuts::NEW_WINDOW, NewWindow),
         (shortcuts::PREV_TAB, PrevTab),
         (shortcuts::SAVE, Save),
         (shortcuts::OPEN_FILE, OpenFile),
@@ -519,9 +527,8 @@ impl TextEditorApp {
         }
         let mut picked = None;
         for entry in self.history.entries() {
-            let (name, folder) = entry.label();
             let row = ui
-                .add(egui::Button::new(name).shortcut_text(folder))
+                .add(recent_row(ui, entry))
                 .on_hover_text(entry.path.display().to_string());
             if row.clicked() {
                 picked = Some(entry.clone());
@@ -1084,6 +1091,9 @@ impl TextEditorApp {
         if item(ui, self.i18n.t("file.close_tab"), &shortcuts::CLOSE_TAB) {
             self.trigger_close_tab(self.active_tab_index);
         }
+        if item(ui, self.i18n.t("file.new_window"), &shortcuts::NEW_WINDOW) {
+            self.open_new_window();
+        }
         ui.separator();
         if item(ui, self.i18n.t("file.open_file"), &shortcuts::OPEN_FILE) {
             self.trigger_open_file();
@@ -1115,6 +1125,7 @@ impl TextEditorApp {
         }
         match action {
             ShortcutAction::NewTab => self.open_new_tab(),
+            ShortcutAction::NewWindow => self.open_new_window(),
             ShortcutAction::CloseTab => self.trigger_close_tab(self.active_tab_index),
             ShortcutAction::OpenFile => self.trigger_open_file(),
             ShortcutAction::OpenFolder => self.trigger_open_folder(),
@@ -1149,6 +1160,23 @@ impl TextEditorApp {
     pub fn open_new_tab(&mut self) {
         self.tabs.push(DocumentTab::default_new());
         self.active_tab_index = self.tabs.len() - 1;
+    }
+
+    /// File > New Window: starts another copy of the editor, in its own
+    /// process, sharing nothing with this window, which is left as it was.
+    pub fn open_new_window(&mut self) {
+        self.open_new_window_with(|| new_window_command().and_then(spawn_window));
+    }
+
+    /// [`Self::open_new_window`] with `spawn` starting the copy; a failure
+    /// is reported in the status bar.
+    fn open_new_window_with(&mut self, spawn: impl FnOnce() -> std::io::Result<()>) {
+        if let Err(err) = spawn() {
+            let message = self
+                .i18n
+                .tf("msg.new_window_failed", &[("error", &err.to_string())]);
+            self.status_message = Some((message, true));
+        }
     }
 
     pub fn open_file_in_tab(&mut self, path: PathBuf) {
@@ -1622,6 +1650,47 @@ impl TextEditorApp {
 /// `HighlighterLayouter::frame_job`), so this only bounds how long that pass can
 /// take, not how long the UI can freeze.
 const HIGHLIGHT_SIZE_LIMIT: usize = 1024 * 1024;
+
+/// One File > Open Recent row: the entry's name, then its folder dimmed,
+/// fitted into egui's menu width. A name too long for it is cut with `…`,
+/// as is the folder in the room the name leaves. Cuts fall between whole
+/// characters, and only change what is shown, never the entry.
+fn recent_row(ui: &egui::Ui, entry: &Entry) -> egui::Button<'static> {
+    let fit = |text: egui::RichText, width: f32| {
+        egui::WidgetText::from(text).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            width,
+            egui::TextStyle::Button,
+        )
+    };
+    let (name, folder) = entry.label();
+    let width = ui.spacing().menu_width;
+    let name = fit(egui::RichText::new(name), width);
+    let room = width - name.size().x - ui.spacing().item_spacing.x;
+    let row = egui::Button::new(name);
+    if room < MIN_RECENT_FOLDER_WIDTH {
+        return row;
+    }
+    row.shortcut_text(fit(egui::RichText::new(folder).weak(), room))
+}
+
+/// The command that starts another copy of this editor.
+fn new_window_command() -> std::io::Result<Command> {
+    let mut command = Command::new(std::env::current_exe()?);
+    command.stdin(Stdio::null());
+    Ok(command)
+}
+
+/// Runs `command` without waiting for it. A thread reaps the process when
+/// it exits, so it never lingers as a zombie while this window is open.
+fn spawn_window(mut command: Command) -> std::io::Result<()> {
+    let mut child = command.spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
 
 /// The history eframe kept from the last run; empty on the first.
 fn saved_history(storage: Option<&dyn eframe::Storage>) -> History {
@@ -2652,6 +2721,8 @@ mod tests {
             (egui::Key::Tab, ctrl, ShortcutAction::NextTab),
             (egui::Key::Tab, ctrl_shift, ShortcutAction::PrevTab),
             (egui::Key::Q, ctrl, ShortcutAction::Exit),
+            (egui::Key::N, ctrl, ShortcutAction::NewTab),
+            (egui::Key::N, ctrl_shift, ShortcutAction::NewWindow),
             (egui::Key::V, ctrl_shift, ShortcutAction::MarkdownPreview),
         ] {
             let mut got = None;
@@ -4184,6 +4255,92 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The painted text shape whose full text is `text`.
+    fn painted_galley(
+        shapes: &[egui::epaint::ClippedShape],
+        text: &str,
+    ) -> Option<std::sync::Arc<egui::Galley>> {
+        shapes.iter().find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(shape) if shape.galley.text() == text => Some(shape.galley.clone()),
+            _ => None,
+        })
+    }
+
+    /// The characters a galley actually shows, the `…` of a cut included.
+    fn shown_chars(galley: &egui::Galley) -> String {
+        galley
+            .rows
+            .iter()
+            .flat_map(|row| row.glyphs.iter().map(|glyph| glyph.chr))
+            .collect()
+    }
+
+    #[test]
+    fn test_open_recent_menu_cuts_long_names_with_an_ellipsis() {
+        let dir = history_folder("long_name");
+        // Two-, three- and one-byte characters, 220 bytes in all.
+        let name = format!("{}.txt", "café_ñandú_€_".repeat(12));
+        let long = dir.join(&name);
+        fs::write(&long, "long").unwrap();
+        let short = dir.join("a.txt");
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.history.record(short.clone(), EntryKind::File);
+        app.history.record(long.clone(), EntryKind::File);
+
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_recent_items(ui));
+        let menu_width = ctx.global_style().spacing.menu_width;
+        let cut = painted_galley(&shapes, &name).expect("the long name is painted");
+        assert!(cut.elided, "the long name is cut");
+        assert!(cut.size().x <= menu_width, "and fits the menu width");
+        let shown = shown_chars(&cut);
+        let kept = shown.strip_suffix('…').expect("the cut ends in …");
+        assert!(
+            !kept.is_empty() && name.starts_with(kept),
+            "{shown:?} is whole characters of {name:?}"
+        );
+
+        let whole = painted_galley(&shapes, "a.txt").expect("the short name is painted");
+        assert!(!whole.elided, "a short name is shown as is");
+        assert_eq!(shown_chars(&whole), "a.txt");
+
+        let (cut_rect, _) = painted_text(&shapes, &name).unwrap();
+        run_frame_with_events(&ctx, click_events(cut_rect.center()), |ui| {
+            app.show_recent_items(ui)
+        });
+        assert_eq!(
+            app.active_tab().current_path.as_ref(),
+            Some(&long),
+            "the full path is opened"
+        );
+        assert_eq!(app.active_tab().text_content, "long");
+        assert_eq!(
+            app.history.entries()[0].path,
+            long,
+            "the history keeps the full path"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_open_recent_menu_cuts_a_long_folder_to_the_room_left() {
+        let folder: PathBuf = std::iter::once(std::path::MAIN_SEPARATOR.to_string())
+            .chain((0..30).map(|i| format!("folder_{i}")))
+            .collect();
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.history.record(folder.join("x.txt"), EntryKind::File);
+
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_recent_items(ui));
+        let menu_width = ctx.global_style().spacing.menu_width;
+        let name = painted_galley(&shapes, "x.txt").expect("the name is painted");
+        assert!(!name.elided, "the name keeps its room");
+        let folder =
+            painted_galley(&shapes, &folder.display().to_string()).expect("the folder is painted");
+        assert!(folder.elided, "the long folder is cut");
+        assert!(name.size().x + folder.size().x <= menu_width);
+    }
+
     #[test]
     fn test_open_recent_menu_when_empty_and_after_clearing() {
         let ctx = egui::Context::default();
@@ -4485,6 +4642,79 @@ mod tests {
         });
         assert_eq!(app.tabs.len(), 1, "Menu 'Tutup Tab' should close active tab");
         assert_eq!(app.active_tab_index, 0);
+    }
+
+    #[test]
+    fn test_new_window_command_starts_this_executable() {
+        let command = new_window_command().expect("the executable is known");
+        assert_eq!(
+            Path::new(command.get_program()),
+            std::env::current_exe().unwrap()
+        );
+        assert_eq!(command.get_args().count(), 0, "a plain second copy");
+    }
+
+    #[test]
+    fn test_spawn_window_starts_a_process_or_reports_why_not() {
+        // `--list` makes the test binary print its tests and exit at once.
+        let mut quick = std::process::Command::new(std::env::current_exe().unwrap());
+        quick.arg("--list").stdout(std::process::Stdio::null());
+        assert!(spawn_window(quick).is_ok());
+        let missing = std::process::Command::new("/no/such/rred_editor_binary");
+        assert!(spawn_window(missing).is_err());
+    }
+
+    #[test]
+    fn test_new_window_leaves_this_window_unchanged() {
+        let dir = history_folder("new_window");
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(dir.join("a.txt"));
+        app.open_file_in_tab(dir.join("b.txt"));
+        app.active_tab_mut().text_content.push_str(" edited");
+        app.open_folder(dir.clone());
+        app.status_message = None;
+        let (tabs, active, history) = (app.tabs.clone(), app.active_tab_index, app.history.clone());
+
+        let mut spawned = 0;
+        app.open_new_window_with(|| {
+            spawned += 1;
+            Ok(())
+        });
+        assert_eq!(spawned, 1);
+        assert_eq!(app.tabs, tabs, "tabs, texts and unsaved edits stay");
+        assert_eq!(app.active_tab_index, active);
+        assert_eq!(app.history, history);
+        assert_eq!(
+            app.explorer.as_ref().map(Explorer::root),
+            Some(dir.as_path())
+        );
+        assert_eq!(app.status_message, None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_new_window_failure_is_reported() {
+        let mut app = TextEditorApp::default();
+        app.open_new_window_with(|| Err(std::io::Error::other("boom")));
+        let message = app.i18n.tf("msg.new_window_failed", &[("error", "boom")]);
+        assert_eq!(app.status_message, Some((message, true)));
+        assert_eq!(app.tabs.len(), 1, "this window is unchanged");
+    }
+
+    #[test]
+    fn test_file_menu_offers_new_window_after_close_tab() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| {
+            app.show_file_menu(ui, &ctx);
+        });
+        let (close_tab, _) = painted_text(&shapes, app.i18n.t("file.close_tab")).unwrap();
+        let (new_window, _) =
+            painted_text(&shapes, app.i18n.t("file.new_window")).expect("New Window is listed");
+        assert!(new_window.top() > close_tab.top(), "below Close Tab");
+        let shortcut = ctx.format_shortcut(&shortcuts::NEW_WINDOW);
+        let (shortcut, _) = painted_text(&shapes, &shortcut).expect("its shortcut is shown");
+        assert!((shortcut.center().y - new_window.center().y).abs() < 1.0);
     }
 
     #[test]

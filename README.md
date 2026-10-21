@@ -108,7 +108,7 @@ If installed outside `PATH`, provide the full binary path for `Exec=`, e.g. `Exe
 
 | Menu | Items |
 |---|---|
-| **File** | New Tab, Close Tab, Open File…, Open Folder…, Open Recent, Save, Save As…, Language, Exit |
+| **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Open Recent, Save, Save As…, Language, Exit |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line…, Prettify |
 | **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Language, Interface Language |
 | **Help** | About |
@@ -120,6 +120,7 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | Shortcut | Action |
 |---|---|
 | `Ctrl+N` | New tab |
+| `Ctrl+Shift+N` | New window (a second, independent copy of the editor) |
 | `Ctrl+W` | Close tab |
 | `Ctrl+O` | Open file |
 | `Ctrl+Shift+O` | Open folder |

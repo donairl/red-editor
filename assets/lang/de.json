@@ -9,6 +9,7 @@
 
   "file.new_tab": "Neuer Tab",
   "file.close_tab": "Tab schließen",
+  "file.new_window": "Neues Fenster",
   "tab.close_others": "Andere schließen",
   "tab.close_to_right": "Tabs rechts schließen",
   "tab.close_saved": "Gespeicherte schließen",
@@ -86,6 +87,7 @@
   "msg.save_failed": "Datei konnte nicht gespeichert werden: {error}",
   "msg.folder_opened": "Ordner geöffnet.",
   "msg.recent_missing": "Existiert nicht mehr, aus „Zuletzt geöffnet“ entfernt: {path}",
+  "msg.new_window_failed": "Neues Fenster konnte nicht geöffnet werden: {error}",
   "msg.language_load_failed": "Sprache {file} konnte nicht geladen werden: {error}",
 
   "about.title": "Über Red Text Editor",

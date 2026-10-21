@@ -108,7 +108,7 @@ Kalau dipasang di luar `PATH`, isi `Exec=` dengan path lengkapnya, misalnya `Exe
 
 | Menu | Isi |
 |---|---|
-| **File** | Tab Baru, Tutup Tab, Buka File…, Buka Folder…, Buka Terbaru, Simpan, Simpan Sebagai…, Bahasa, Keluar |
+| **File** | Tab Baru, Tutup Tab, Jendela Baru, Buka File…, Buka Folder…, Buka Terbaru, Simpan, Simpan Sebagai…, Bahasa, Keluar |
 | **Edit** | Urungkan, Ulangi, Potong, Salin, Tempel, Cari, Ganti, Cari di File, Ke Baris… |
 | **Tampilan** | Bungkus Baris, Nomor Baris, Zen Mode, Pratinjau Markdown, Bahasa, Bahasa Antarmuka |
 | **Help** | About |
@@ -120,6 +120,7 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | Shortcut | Aksi |
 |---|---|
 | `Ctrl+N` | Tab baru |
+| `Ctrl+Shift+N` | Jendela baru (salinan editor kedua yang berdiri sendiri) |
 | `Ctrl+W` | Tutup tab |
 | `Ctrl+O` | Buka file |
 | `Ctrl+Shift+O` | Buka folder |
