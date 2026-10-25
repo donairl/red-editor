@@ -13,6 +13,7 @@ use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::history::{Entry, EntryKind, History};
 use crate::i18n::{self, I18n};
+use crate::layout_cache::{self, LayoutCache};
 use crate::markdown_preview::{MarkdownPreview, ScrollPos, ScrollSync};
 use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
 use crate::prettify;
@@ -37,6 +38,10 @@ const HOME_URL: &str = "https://github.com/donairl/red-editor/";
 
 /// Seconds between checks for open files changed by other programs.
 const DISK_CHECK_SECS: f64 = 2.0;
+
+/// Largest file the editor opens. egui lays out the whole document, on every
+/// edit: past this size each keystroke takes well over a frame.
+const MAX_OPEN_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Under the editor's id, the `char` index it was last right-clicked at.
 const CONTEXT_CHAR: &str = "context_char";
@@ -73,6 +78,21 @@ fn disk_stamp(path: &Path) -> Option<DiskStamp> {
     Some((metadata.modified().ok()?, metadata.len()))
 }
 
+/// The contents of the file at `path` and its [`DiskStamp`]. A file over
+/// [`MAX_OPEN_BYTES`] is refused with [`std::io::ErrorKind::FileTooLarge`]
+/// before any of it is read.
+fn read_document(path: &Path) -> Result<(String, Option<DiskStamp>), std::io::Error> {
+    // Stamped before reading: a write in between shows as a change.
+    let stamp = disk_stamp(path);
+    if fs::metadata(path)?.len() > MAX_OPEN_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            "file too large to open",
+        ));
+    }
+    Ok((fs::read_to_string(path)?, stamp))
+}
+
 impl Default for DocumentTab {
     fn default() -> Self {
         Self::default_new()
@@ -95,9 +115,7 @@ impl DocumentTab {
     }
 
     pub fn from_file(path: PathBuf) -> Result<Self, std::io::Error> {
-        // Stamped before reading: a write in between shows as a change.
-        let disk_stamp = disk_stamp(&path);
-        let content = fs::read_to_string(&path)?;
+        let (content, disk_stamp) = read_document(&path)?;
         let active_language = Language::from_path(&path);
         Ok(Self {
             text_content: content.clone(),
@@ -126,8 +144,7 @@ impl DocumentTab {
         let path = self.current_path.as_deref().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, "No file path specified")
         })?;
-        let disk_stamp = disk_stamp(path);
-        let content = fs::read_to_string(path)?;
+        let (content, disk_stamp) = read_document(path)?;
         self.text_content = content.clone();
         self.saved_content = content;
         self.disk_stamp = disk_stamp;
@@ -206,6 +223,10 @@ pub struct TextEditorApp {
     /// egui's clock when the open files were last compared with the disk.
     last_disk_check: f64,
     pub highlighter: SyntaxHighlighter,
+    /// The editor's last layout, reused while the text does not change.
+    /// Kept for the active tab only: a galley takes tens of bytes per
+    /// character.
+    editor_layout: LayoutCache,
     /// Wrap long lines to the window width. Off by default: lines run on and
     /// the editor scrolls sideways instead.
     pub word_wrap: bool,
@@ -277,6 +298,7 @@ impl Default for TextEditorApp {
             show_bookmarks: false,
             last_disk_check: 0.0,
             highlighter: SyntaxHighlighter::new(),
+            editor_layout: LayoutCache::default(),
             word_wrap: false,
             show_line_numbers: true,
             zen_mode: false,
@@ -1233,7 +1255,7 @@ impl TextEditorApp {
                     ));
                 }
                 Err(err) => {
-                    self.status_message = Some((self.i18n.tf("msg.open_failed", &[("error", &err.to_string())]), true));
+                    self.status_message = Some((self.open_failed_message(&err), true));
                 }
             }
         }
@@ -1297,9 +1319,8 @@ impl TextEditorApp {
     }
 
     pub fn load_file(&mut self, path: PathBuf) {
-        let stamp = disk_stamp(&path);
-        match fs::read_to_string(&path) {
-            Ok(content) => {
+        match read_document(&path) {
+            Ok((content, stamp)) => {
                 let exceeds_limit = text_content_exceeds_highlight_limit(&content);
                 let tab = self.active_tab_mut();
                 tab.text_content = content.clone();
@@ -1319,8 +1340,19 @@ impl TextEditorApp {
                 ));
             }
             Err(err) => {
-                self.status_message = Some((self.i18n.tf("msg.open_failed", &[("error", &err.to_string())]), true));
+                self.status_message = Some((self.open_failed_message(&err), true));
             }
+        }
+    }
+
+    /// The status bar's message for a file that could not be read.
+    fn open_failed_message(&self, error: &std::io::Error) -> String {
+        if error.kind() == std::io::ErrorKind::FileTooLarge {
+            let limit = (MAX_OPEN_BYTES / (1024 * 1024)).to_string();
+            self.i18n.tf("msg.file_too_big", &[("limit", &limit)])
+        } else {
+            self.i18n
+                .tf("msg.open_failed", &[("error", &error.to_string())])
         }
     }
 
@@ -1373,7 +1405,7 @@ impl TextEditorApp {
             }
         };
         if let Err(err) = result {
-            self.status_message = Some((self.i18n.tf("msg.open_failed", &[("error", &err.to_string())]), true));
+            self.status_message = Some((self.open_failed_message(&err), true));
         }
     }
 
@@ -1789,6 +1821,7 @@ fn render_editor(
         EditorRequest::default(),
         None,
         &mut Bookmarks::default(),
+        &mut LayoutCache::default(),
     );
 }
 
@@ -1820,8 +1853,9 @@ fn selection_rects(galley: &egui::Galley, (start, end): find::Range) -> Vec<egui
 
 /// [`render_editor`] with a fixed widget `id` (so the app can find the
 /// editor's state) and a one-shot `request` to act on. `bookmarks` follow
-/// the edits and are marked in the gutter. Also returns the editor's
-/// response, for its right-click menu.
+/// the edits and are marked in the gutter. The text is laid out through
+/// `layout_cache`, which keeps the layout while nothing changes. Also
+/// returns the editor's response, for its right-click menu.
 #[allow(clippy::too_many_arguments)]
 fn render_editor_with(
     ui: &mut egui::Ui,
@@ -1834,6 +1868,7 @@ fn render_editor_with(
     request: EditorRequest,
     scroll_to: Option<f32>,
     bookmarks: &mut Bookmarks,
+    layout_cache: &mut LayoutCache,
 ) -> (ScrollPos, egui::Response) {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
@@ -1924,42 +1959,41 @@ fn render_editor_with(
                 // `TextEdit` calls this every frame. `frame_job` reuses the
                 // cached result, and highlights large documents on a background
                 // thread (plain text meanwhile) so the window never freezes.
-                // Wrapping is a layout concern, so it is applied to the clone and
-                // never reaches the cache.
+                // Wrapping is a layout concern, so it is applied by the layout
+                // cache and never reaches the highlighter's cache.
                 let mut lay = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                    let mut job = (*highlighter.frame_job(buf.as_str(), ui.ctx())).clone();
-                    job.wrap.max_width = if word_wrap { wrap_width } else { f32::INFINITY };
-                    ui.fonts_mut(|f| f.layout_job(job))
+                    let job = highlighter.frame_job(buf.as_str(), ui.ctx());
+                    let wrap_width = if word_wrap { wrap_width } else { f32::INFINITY };
+                    layout_cache.galley(
+                        ui,
+                        buf.as_str(),
+                        layout_cache::Style::Highlighted(job),
+                        wrap_width,
+                    )
                 };
                 text_edit.layouter(&mut lay).show(ui)
             }
-            None if word_wrap => text_edit.show(ui),
             None => {
-                // Mirror egui's stock `TextEdit` layouter so wrap-off plain text
-                // looks identical to the wrapped text: the colour is the
+                // Mirror egui's stock `TextEdit` layouter, so plain text looks
+                // the same with or without wrapping: the colour is the
                 // `inactive` widget colour (a text edit does not brighten on
                 // hover), unless the theme overrides it, and every section gets
-                // the same line height.
-                let font_id = font_id.clone();
+                // the same line height. Wrap off needs a layouter of its own: a
+                // stock multiline `TextEdit` always wraps.
                 let color = ui
                     .visuals()
                     .override_text_color
                     .unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
-                let line_height = ui.fonts_mut(|f| f.row_height(&font_id))
-                    + ui.spacing().extra_text_line_spacing;
-                let mut lay = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
-                    let mut job = egui::text::LayoutJob::simple(
-                        buf.as_str().to_owned(),
-                        font_id.clone(),
-                        color,
-                        f32::INFINITY,
-                    );
-                    // Typing a trailing space must not make the caret jump.
-                    job.keep_trailing_whitespace = true;
-                    for section in &mut job.sections {
-                        section.format.line_height = Some(line_height);
-                    }
-                    ui.fonts_mut(|f| f.layout_job(job))
+                let line_height =
+                    ui.fonts_mut(|f| f.row_height(&font_id)) + ui.spacing().extra_text_line_spacing;
+                let style = layout_cache::Style::Plain {
+                    font_id: font_id.clone(),
+                    color,
+                    line_height,
+                };
+                let mut lay = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                    let wrap_width = if word_wrap { wrap_width } else { f32::INFINITY };
+                    layout_cache.galley(ui, buf.as_str(), style.clone(), wrap_width)
                 };
                 text_edit.layouter(&mut lay).show(ui)
             }
@@ -2333,6 +2367,7 @@ impl eframe::App for TextEditorApp {
                         request,
                         scroll_to,
                         &mut tab.bookmarks,
+                        &mut self.editor_layout,
                     )
                 } else {
                     let mut layouter = self
@@ -2350,6 +2385,7 @@ impl eframe::App for TextEditorApp {
                         request,
                         scroll_to,
                         &mut tab.bookmarks,
+                        &mut self.editor_layout,
                     )
                 }
             })
@@ -2438,6 +2474,62 @@ mod tests {
 
         app.active_tab_mut().text_content = "Teks diedit".to_string();
         assert_eq!(app.window_title(), "document.txt * - Red Text Editor");
+    }
+
+    /// A file over `MAX_OPEN_BYTES` is not read at all: the editor would
+    /// freeze laying it out. The status bar says why.
+    #[test]
+    fn test_files_over_the_size_limit_are_not_opened() {
+        let path = std::env::temp_dir().join("red_test_too_big.log");
+        File::create(&path)
+            .unwrap()
+            .set_len(MAX_OPEN_BYTES + 1)
+            .unwrap();
+        let refused =
+            |app: &TextEditorApp| Some((app.i18n.tf("msg.file_too_big", &[("limit", "10")]), true));
+
+        // Into the untouched tab, and into a new tab beside an edited one.
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(path.clone());
+        assert_eq!(app.active_tab().current_path, None);
+        assert_eq!(app.status_message, refused(&app));
+
+        app.active_tab_mut().text_content = "edited".into();
+        app.status_message = None;
+        app.open_file_in_tab(path.clone());
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.status_message, refused(&app));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_a_file_at_the_size_limit_opens() {
+        let path = std::env::temp_dir().join("red_test_at_limit.log");
+        File::create(&path)
+            .unwrap()
+            .set_len(MAX_OPEN_BYTES)
+            .unwrap();
+        let tab = DocumentTab::from_file(path.clone()).unwrap();
+        assert_eq!(tab.text_content.len() as u64, MAX_OPEN_BYTES);
+        let _ = fs::remove_file(&path);
+    }
+
+    /// An open file that grows past the limit is not reloaded.
+    #[test]
+    fn test_reload_refuses_a_file_grown_past_the_size_limit() {
+        let path = std::env::temp_dir().join("red_test_grows.log");
+        fs::write(&path, "small").unwrap();
+        let mut tab = DocumentTab::from_file(path.clone()).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(MAX_OPEN_BYTES + 1)
+            .unwrap();
+        let error = tab.reload().unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::FileTooLarge);
+        assert_eq!(tab.text_content, "small");
+        let _ = fs::remove_file(&path);
     }
 
     #[test]
@@ -2828,6 +2920,7 @@ mod tests {
                     request.take().unwrap(),
                     None,
                     &mut Bookmarks::default(),
+                    &mut LayoutCache::default(),
                 );
             });
             out.textures_delta.clear();
@@ -2931,6 +3024,7 @@ mod tests {
                     request.take().unwrap(),
                     None,
                     &mut Bookmarks::default(),
+                    &mut LayoutCache::default(),
                 );
             });
             out.textures_delta.clear();
@@ -2972,6 +3066,7 @@ mod tests {
                     request.take().unwrap(),
                     None,
                     &mut Bookmarks::default(),
+                    &mut LayoutCache::default(),
                 );
             });
             out.textures_delta.clear();
@@ -3023,6 +3118,7 @@ mod tests {
                     request.take().unwrap(),
                     None,
                     &mut Bookmarks::default(),
+                    &mut LayoutCache::default(),
                 );
                 response.context_menu(|ui| {
                     ui.label("menu");
@@ -3369,6 +3465,76 @@ mod tests {
         frame(&mut tab_a);
         assert_eq!(tab_a.highlight_cache.lines[1].text, "fn two_edited() {}");
         assert_eq!(tab_b.highlight_cache.lines[0].text, "fn other() {}");
+    }
+
+    /// The editor lays its text out through the cache it is given, on the
+    /// highlighted and the plain path alike, so a frame where nothing
+    /// changed reuses the last layout.
+    #[test]
+    fn test_render_editor_lays_out_through_the_cache() {
+        let mut highlighter = SyntaxHighlighter::new();
+        for highlighted in [true, false] {
+            for word_wrap in [false, true] {
+                let ctx = egui::Context::default();
+                let original = "fn main() {}\nlet x = 1;".to_string();
+                let mut text = original.clone();
+                let mut cache = LayoutCache::default();
+                let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                        let mut layouter = highlighter.layouter(Language::Rust, font_id);
+                        super::render_editor_with(
+                            ui,
+                            &mut text,
+                            highlighted.then_some(&mut layouter),
+                            word_wrap,
+                            false,
+                            "",
+                            None,
+                            EditorRequest::default(),
+                            None,
+                            &mut Bookmarks::default(),
+                            &mut cache,
+                        );
+                    });
+                });
+                let painted = shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(shape) if shape.galley.text() == original => {
+                            Some(shape.galley.clone())
+                        }
+                        _ => None,
+                    })
+                    .expect("the editor painted the text");
+                let cached = cache.last_galley().expect("the editor filled the cache");
+                assert!(
+                    std::sync::Arc::ptr_eq(&painted, cached),
+                    "highlighted {highlighted}, wrap {word_wrap}"
+                );
+            }
+        }
+    }
+
+    /// A frame of the app lays the active tab out through the editor's
+    /// cache. There is one for all tabs: a galley takes tens of bytes per
+    /// character, too much to keep for tabs that are not shown.
+    #[test]
+    fn test_frame_lays_out_the_active_tab_through_the_editor_cache() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "fn main() {}\n".to_string();
+        app.open_new_tab();
+        app.active_tab_mut().text_content = "second\n".to_string();
+        let frame = |app: &mut TextEditorApp| {
+            run_frame_with_events(&ctx, Vec::new(), |ui| {
+                eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
+            });
+            app.editor_layout.last_galley().map(|g| g.text().to_owned())
+        };
+        assert_eq!(frame(&mut app).as_deref(), Some("second\n"));
+        app.active_tab_index = 0;
+        assert_eq!(frame(&mut app).as_deref(), Some("fn main() {}\n"));
     }
 
     /// Both branches of `render_editor` keep the buffer byte-identical.
@@ -3803,6 +3969,7 @@ mod tests {
                     request,
                     None,
                     &mut Bookmarks::default(),
+                    &mut LayoutCache::default(),
                 );
             })
         };
@@ -3852,6 +4019,7 @@ mod tests {
                     EditorRequest::default(),
                     None,
                     &mut tab.bookmarks,
+                    &mut LayoutCache::default(),
                 );
                 app.show_editor_context_menu(ui.ctx(), &editor);
             })
@@ -3905,6 +4073,7 @@ mod tests {
                     request,
                     None,
                     &mut bookmarks,
+                    &mut LayoutCache::default(),
                 );
             });
         });
@@ -3948,6 +4117,7 @@ mod tests {
                     request,
                     None,
                     &mut bookmarks,
+                    &mut LayoutCache::default(),
                 );
             });
         };

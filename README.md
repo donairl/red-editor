@@ -9,7 +9,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 ## Features
 
 - **VS Code-style multi-tab**: Language badge on each tab, `●` indicator for unsaved files, `×` close button on hover, and `+` button for new tabs.
-- **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (also `.scss` and `.less`), JSON, Markdown, Go, Python, SQL, and the Blade (`.blade.php`), Twig (`.twig`), and Smarty (`.tpl`) templates, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting.
+- **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (also `.scss` and `.less`), JSON, Markdown, Go, Python, SQL, and the Blade (`.blade.php`), Twig (`.twig`), and Smarty (`.tpl`) templates, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting, and files over 10 MB are not opened.
 - **SQL inside strings**: a string literal in Rust, C, C++, PHP, JavaScript, TypeScript, Go or Python that reads as an SQL statement (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) has its SQL keywords coloured, across multi-line strings too. Upper-case keywords are enough; lower case needs a second clause (`select … from`), so UI text like "Select a file" stays a plain string.
 - **Line numbers** that can be toggled on or off (**View → Line Numbers**). The active line number is highlighted.
 - **Line bookmarks**: right-click a line in the editor and pick **Add Bookmark** (or **Remove Bookmark**). Bookmarked lines get a marker in the gutter and follow their line as you edit. A **Bookmarked: N** badge in the status bar opens the list of bookmarked lines; click one to jump to it. Bookmarks last for the session.
@@ -191,6 +191,7 @@ Source structure:
 | `src/app.rs` | Application state, menus, panels, editor |
 | `src/tab_bar.rs` | VS Code-style tab strip |
 | `src/gutter.rs` | Line number gutter and bookmark markers |
+| `src/layout_cache.rs` | Keeps the editor's text layout between frames |
 | `src/bookmarks.rs` | Line bookmarks that follow edits |
 | `src/history.rs` | Recently opened files and folders (File → Open Recent) |
 | `src/prettify.rs` | Prettify: JSON/HTML/CSS in-process, other languages via external formatters |

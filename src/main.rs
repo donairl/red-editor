@@ -12,6 +12,7 @@ mod gutter;
 mod highlighter;
 mod history;
 mod i18n;
+mod layout_cache;
 mod markdown_preview;
 mod modals;
 mod prettify;

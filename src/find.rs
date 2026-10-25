@@ -69,10 +69,41 @@ pub fn prev_match(matches: &[Range], before: usize) -> Option<Range> {
         .copied()
 }
 
+/// Bytes counted at a time: a chunk's count fits a `u8`, which lets the
+/// compiler compare many bytes per instruction. Counting this way is over
+/// ten times faster than byte by byte, and the editor counts lines and the
+/// caret's place in the whole document every frame.
+const CHUNK: usize = 255;
+
+/// How many bytes of a chunk of at most [`CHUNK`] bytes pass `test`.
+fn count_in_chunk(chunk: &[u8], test: impl Fn(u8) -> bool) -> usize {
+    chunk.iter().map(|&b| test(b) as u8).sum::<u8>() as usize
+}
+
+/// Whether `byte` starts a `char` rather than continuing one.
+fn starts_char(byte: u8) -> bool {
+    (byte as i8) >= -0x40
+}
+
+/// Byte offset of the `char` index `char_index`, or the end of `text` past it.
 fn byte_offset(text: &str, char_index: usize) -> usize {
-    text.char_indices()
-        .nth(char_index)
-        .map_or(text.len(), |(byte, _)| byte)
+    let mut chars = 0;
+    for (n, chunk) in text.as_bytes().chunks(CHUNK).enumerate() {
+        let in_chunk = count_in_chunk(chunk, starts_char);
+        if chars + in_chunk <= char_index {
+            chars += in_chunk;
+            continue;
+        }
+        for (i, &byte) in chunk.iter().enumerate() {
+            if starts_char(byte) {
+                if chars == char_index {
+                    return n * CHUNK + i;
+                }
+                chars += 1;
+            }
+        }
+    }
+    text.len()
 }
 
 /// Replaces the `char` range `range` of `text` with `with`.
@@ -117,7 +148,12 @@ pub fn line_col(text: &str, at: usize) -> (usize, usize) {
 
 /// Number of lines in `text`; an empty text has one.
 pub fn line_count(text: &str) -> usize {
-    text.split('\n').count()
+    let newlines: usize = text
+        .as_bytes()
+        .chunks(CHUNK)
+        .map(|chunk| count_in_chunk(chunk, |b| b == b'\n'))
+        .sum();
+    newlines + 1
 }
 
 /// State of the go-to-line bar.
@@ -352,6 +388,32 @@ mod tests {
         assert_eq!(line_col(text, 99), (4, 2), "clamps to the end");
         assert_eq!(line_col("héé\nxé", 6), (2, 3), "counts chars, not bytes");
         assert_eq!(line_col("", 0), (1, 1));
+    }
+
+    /// Long texts are counted in chunks: positions and lines stay right
+    /// across the chunk edges, multibyte characters included.
+    #[test]
+    fn test_counts_hold_across_long_texts() {
+        let text: String = (0..2000)
+            .map(|i| match i % 7 {
+                0 => '\n',
+                1 => 'é',
+                2 => '漢',
+                3 => '🦀',
+                _ => 'a',
+            })
+            .collect();
+        let chars: Vec<usize> = text.char_indices().map(|(byte, _)| byte).collect();
+        for at in 0..chars.len() + 3 {
+            let byte = chars.get(at).copied().unwrap_or(text.len());
+            assert_eq!(byte_offset(&text, at), byte, "char {at}");
+            let before = &text[..byte];
+            let line = before.matches('\n').count() + 1;
+            let line_start = before.rfind('\n').map_or(0, |n| n + 1);
+            let col = before[line_start..].chars().count() + 1;
+            assert_eq!(line_col(&text, at), (line, col), "char {at}");
+        }
+        assert_eq!(line_count(&text), text.matches('\n').count() + 1);
     }
 
     #[test]

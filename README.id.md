@@ -9,7 +9,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 ## Fitur
 
 - **Banyak tab** bergaya VS Code: badge bahasa di tiap tab, titik `●` untuk file yang belum disimpan, tombol `×` saat di-hover, tombol `+` untuk tab baru.
-- **Syntax highlighting** untuk Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (juga `.scss` dan `.less`), JSON, Markdown, Go, Python, SQL, serta template Blade (`.blade.php`), Twig (`.twig`), dan Smarty (`.tpl`), dikenali dari ekstensi file. Bahasa bisa diganti manual lewat menu **Tampilan → Bahasa**. File di atas 1 MB ditampilkan tanpa highlighting.
+- **Syntax highlighting** untuk Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (juga `.scss` dan `.less`), JSON, Markdown, Go, Python, SQL, serta template Blade (`.blade.php`), Twig (`.twig`), dan Smarty (`.tpl`), dikenali dari ekstensi file. Bahasa bisa diganti manual lewat menu **Tampilan → Bahasa**. File di atas 1 MB ditampilkan tanpa highlighting, dan file di atas 10 MB tidak dibuka.
 - **SQL di dalam string**: string di Rust, C, C++, PHP, JavaScript, TypeScript, Go, atau Python yang berisi perintah SQL (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) diwarnai kata kunci SQL-nya, termasuk string multi-baris. Kata kunci huruf besar sudah cukup; huruf kecil butuh klausa kedua (`select … from`), jadi teks UI seperti "Select a file" tetap berwarna string biasa.
 - **Nomor baris** yang bisa ditampilkan atau disembunyikan (**Tampilan → Nomor Baris**). Nomor baris tempat kursor berada tampil lebih terang.
 - **Bookmark baris**: klik kanan sebuah baris di editor lalu pilih **Tambah Bookmark** (atau **Hapus Bookmark**). Baris yang di-bookmark diberi penanda di gutter dan ikut bergeser saat teks diedit. Badge **Di-bookmark: N** di status bar membuka daftar baris yang di-bookmark; klik salah satunya untuk melompat ke sana. Bookmark berlaku selama aplikasi terbuka.
@@ -191,6 +191,7 @@ Struktur kode:
 | `src/app.rs` | State aplikasi, menu, panel, editor |
 | `src/tab_bar.rs` | Tab strip bergaya VS Code |
 | `src/gutter.rs` | Gutter nomor baris dan penanda bookmark |
+| `src/layout_cache.rs` | Menyimpan layout teks editor antar-frame |
 | `src/bookmarks.rs` | Bookmark baris yang ikut bergeser saat diedit |
 | `src/history.rs` | Riwayat file dan folder yang baru dibuka (File → Buka Terbaru) |
 | `src/find.rs` | Cari/ganti, bar cari dan bar Ke Baris |

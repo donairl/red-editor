@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use crate::highlighter::Language;
 use crate::i18n::I18n;
@@ -40,17 +41,19 @@ pub fn scan_directory(dir: &Path) -> Vec<FsEntry> {
                 continue;
             }
 
-            let is_dir = path.is_dir();
+            // The listing already knows the type, so most entries cost no
+            // extra call to the file system; only a link is followed.
+            let is_dir = match entry.file_type() {
+                Ok(kind) if !kind.is_symlink() => kind.is_dir(),
+                _ => path.is_dir(),
+            };
             entries.push(FsEntry { path, is_dir, name });
         }
     }
 
-    // Sort: directories first, then alphabetical by name (case-insensitive)
-    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-    });
+    // Sort: directories first, then alphabetical by name (case-insensitive).
+    // Each name is lowered once, not at every comparison.
+    entries.sort_by_cached_key(|entry| (!entry.is_dir, entry.name.to_lowercase()));
 
     entries
 }
@@ -117,31 +120,110 @@ pub struct Explorer {
     expanded: HashSet<PathBuf>,
     /// What each folder held when it was last read from disk.
     children: HashMap<PathBuf, Vec<FsEntry>>,
+    /// The visible tree, kept until a folder opens or closes.
+    rows: Option<Vec<TreeRow>>,
     /// The file-name filter typed below the folder header.
     query: String,
-    /// Every file under the root, read the first time the filter is used.
-    files: Option<Vec<FsEntry>>,
+    /// Every file under the root, gathered the first time the filter is used.
+    index: Option<FileIndex>,
     /// The last filter applied, and what it matched.
-    found: Option<(String, Vec<FsEntry>)>,
+    found: Option<Found>,
+    /// How many times the visible tree was worked out.
+    #[cfg(test)]
+    row_builds: usize,
 }
 
-/// Most files the filter looks through, so a huge folder cannot stall the
-/// window.
+/// Most files the filter looks through, so a huge folder cannot take
+/// forever to index.
 const MAX_INDEXED_FILES: usize = 50_000;
 
-/// Every file under `root` that Find in Files would search, up to
-/// [`MAX_INDEXED_FILES`].
-fn index_files(root: &Path) -> Vec<FsEntry> {
-    let mut files = Vec::new();
-    search::walk_files(root, &AtomicBool::new(false), |entry| {
-        files.push(FsEntry {
-            path: entry.path(),
-            is_dir: false,
-            name: entry.file_name().to_string_lossy().into_owned(),
+/// Files the indexing thread hands over at a time.
+const INDEX_BATCH: usize = 512;
+
+/// Every file under a folder, gathered on a background thread: walking a
+/// big project takes seconds, and the window must not freeze meanwhile.
+struct FileIndex {
+    files: Vec<FsEntry>,
+    /// Batches still to come; `None` once the thread is done.
+    batches: Option<Receiver<Vec<FsEntry>>>,
+}
+
+impl FileIndex {
+    /// Indexes every file under `root` that Find in Files would search, up
+    /// to [`MAX_INDEXED_FILES`].
+    fn start(ctx: &egui::Context, root: PathBuf) -> Self {
+        Self::spawn(ctx, move |found| {
+            let mut batch = Vec::new();
+            let mut total = 0;
+            search::walk_files(&root, &AtomicBool::new(false), |entry| {
+                batch.push(FsEntry {
+                    path: entry.path(),
+                    is_dir: false,
+                    name: entry.file_name().to_string_lossy().into_owned(),
+                });
+                total += 1;
+                // `found` fails once the index is dropped: stop walking.
+                if batch.len() == INDEX_BATCH && !found(std::mem::take(&mut batch)) {
+                    return false;
+                }
+                total < MAX_INDEXED_FILES
+            });
+            if !batch.is_empty() {
+                found(batch);
+            }
+        })
+    }
+
+    /// Runs `walk` on a new thread. It passes what it finds to `found`, which
+    /// returns `false` once nobody listens any more, and wakes `ctx` each time.
+    fn spawn(
+        ctx: &egui::Context,
+        walk: impl FnOnce(&mut dyn FnMut(Vec<FsEntry>) -> bool) + Send + 'static,
+    ) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            walk(&mut |batch| {
+                let open = sender.send(batch).is_ok();
+                ctx.request_repaint();
+                open
+            });
+            drop(sender);
+            ctx.request_repaint();
         });
-        files.len() < MAX_INDEXED_FILES
-    });
-    files
+        Self {
+            files: Vec::new(),
+            batches: Some(receiver),
+        }
+    }
+
+    /// Takes in what the thread found since the last call.
+    fn poll(&mut self) {
+        let Some(batches) = &self.batches else { return };
+        loop {
+            match batches.try_recv() {
+                Ok(batch) => self.files.extend(batch),
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.batches = None;
+                    return;
+                }
+            }
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        self.batches.is_none()
+    }
+}
+
+/// What a filter matched among the files indexed so far.
+struct Found {
+    query: String,
+    /// How many of the index's files have been looked at.
+    checked: usize,
+    /// Best first.
+    files: Vec<FsEntry>,
 }
 
 impl Explorer {
@@ -151,9 +233,12 @@ impl Explorer {
             section_open: true,
             expanded: HashSet::new(),
             children: HashMap::new(),
+            rows: None,
             query: String::new(),
-            files: None,
+            index: None,
             found: None,
+            #[cfg(test)]
+            row_builds: 0,
         }
     }
 
@@ -170,15 +255,18 @@ impl Explorer {
         if !self.expanded.remove(dir) {
             self.expanded.insert(dir.to_path_buf());
         }
+        self.rows = None;
     }
 
     pub fn toggle_section(&mut self) {
         self.section_open = !self.section_open;
+        self.rows = None;
     }
 
     /// Collapses every folder; the section stays open.
     pub fn collapse_all(&mut self) {
         self.expanded.clear();
+        self.rows = None;
     }
 
     /// Forgets what every folder held, so the next [`Self::rows`] and
@@ -186,7 +274,8 @@ impl Explorer {
     /// expanded.
     pub fn refresh(&mut self) {
         self.children.clear();
-        self.files = None;
+        self.rows = None;
+        self.index = None;
         self.found = None;
     }
 
@@ -196,43 +285,79 @@ impl Explorer {
         !self.query.trim().is_empty()
     }
 
+    /// Brings [`Self::matches`] up to date with the filter and with what the
+    /// index found since the last call, starting the index on first use.
+    /// Never waits for the index: `ctx` is woken when more files arrive.
+    pub fn update_matches(&mut self, ctx: &egui::Context) {
+        let query = self.query.trim();
+        if query.is_empty() {
+            return;
+        }
+        let index = self
+            .index
+            .get_or_insert_with(|| FileIndex::start(ctx, self.root.clone()));
+        index.poll();
+        let found = match &mut self.found {
+            Some(found) if found.query == query => found,
+            _ => self.found.insert(Found {
+                query: query.to_owned(),
+                checked: 0,
+                files: Vec::new(),
+            }),
+        };
+        if found.checked == index.files.len() {
+            return;
+        }
+        // Only the files new since the last call are looked at.
+        let words = |file: &FsEntry| find::words_found(&file.name, query, false);
+        found.files.extend(
+            index.files[found.checked..]
+                .iter()
+                .filter(|file| words(file) > 0)
+                .cloned(),
+        );
+        found.checked = index.files.len();
+        found.files.sort_by_cached_key(|file| {
+            (
+                std::cmp::Reverse(words(file)),
+                file.name.to_lowercase(),
+                file.path.clone(),
+            )
+        });
+    }
+
     /// Files anywhere under the root whose names hold at least one word of
     /// the filter, ignoring case: those holding the most words first, then
     /// by name. Hidden files and the folders Find in Files skips are left
-    /// out.
-    pub fn matches(&mut self) -> &[FsEntry] {
-        let query = self.query.trim();
-        if query.is_empty() {
-            return &[];
+    /// out. Holds what [`Self::update_matches`] found so far.
+    pub fn matches(&self) -> &[FsEntry] {
+        match &self.found {
+            Some(found) if found.query == self.query.trim() => &found.files,
+            _ => &[],
         }
-        if self.found.as_ref().is_none_or(|(last, _)| last != query) {
-            let files = self.files.get_or_insert_with(|| index_files(&self.root));
-            let mut found: Vec<(usize, &FsEntry)> = files
-                .iter()
-                .map(|file| (find::words_found(&file.name, query, false), file))
-                .filter(|(words, _)| *words > 0)
-                .collect();
-            found.sort_by_cached_key(|(words, file)| {
-                (
-                    std::cmp::Reverse(*words),
-                    file.name.to_lowercase(),
-                    file.path.clone(),
-                )
-            });
-            let found = found.into_iter().map(|(_, file)| file.clone()).collect();
-            self.found = Some((query.to_owned(), found));
-        }
-        self.found.as_ref().map_or(&[], |(_, found)| found)
+    }
+
+    /// Whether every file under the root has been indexed, so
+    /// [`Self::matches`] is complete.
+    pub fn is_indexed(&self) -> bool {
+        self.index.as_ref().is_some_and(FileIndex::is_done)
     }
 
     /// The visible tree in display order, reading any folder not yet cached.
-    pub fn rows(&mut self) -> Vec<TreeRow> {
-        let mut rows = Vec::new();
-        if self.section_open {
-            let root = self.root.clone();
-            self.push_rows(&root, 0, &mut rows);
+    pub fn rows(&mut self) -> &[TreeRow] {
+        if self.rows.is_none() {
+            #[cfg(test)]
+            {
+                self.row_builds += 1;
+            }
+            let mut rows = Vec::new();
+            if self.section_open {
+                let root = self.root.clone();
+                self.push_rows(&root, 0, &mut rows);
+            }
+            self.rows = Some(rows);
         }
-        rows
+        self.rows.as_deref().unwrap_or_default()
     }
 
     fn push_rows(&mut self, dir: &Path, depth: usize, rows: &mut Vec<TreeRow>) {
@@ -287,7 +412,7 @@ pub struct ExplorerResponse {
     /// [`Rect::NOTHING`] while the section is closed.
     #[cfg_attr(not(test), allow(dead_code))]
     pub filter_rect: Rect,
-    /// The tree rows, or the matches shown while filtering.
+    /// The tree rows in view, or the matches in view while filtering.
     #[cfg_attr(not(test), allow(dead_code))]
     pub rows: Vec<(PathBuf, Rect)>,
 }
@@ -395,28 +520,27 @@ pub fn show(
         return response;
     }
 
+    // Only the rows in view are laid out: a folder can hold thousands.
     let rows = explorer.rows();
     let mut toggled = None;
     egui::ScrollArea::vertical()
         .id_salt("explorer_tree")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, range| {
             ui.spacing_mut().item_spacing = Vec2::ZERO;
-            for row in &rows {
+            for row in &rows[range] {
                 let (rect, row_response) =
                     ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-                if ui.is_rect_visible(rect) {
-                    let selected = active_file == Some(row.entry.path.as_path());
-                    paint_row(
-                        ui,
-                        &palette,
-                        row,
-                        None,
-                        rect,
-                        row_response.hovered(),
-                        selected,
-                    );
-                }
+                let selected = active_file == Some(row.entry.path.as_path());
+                paint_row(
+                    ui,
+                    &palette,
+                    row,
+                    None,
+                    rect,
+                    row_response.hovered(),
+                    selected,
+                );
                 if row_response.clicked() {
                     if row.entry.is_dir {
                         toggled = Some(row.entry.path.clone());
@@ -445,14 +569,20 @@ fn show_matches(
     response: &mut ExplorerResponse,
 ) {
     let root = explorer.root().to_path_buf();
+    explorer.update_matches(ui.ctx());
     let found = explorer.matches();
     if found.is_empty() {
+        let message = if explorer.is_indexed() {
+            "explorer.no_matches"
+        } else {
+            "explorer.indexing"
+        };
         let (rect, _) =
             ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
         ui.painter().text(
             pos2(rect.left() + TITLE_PADDING_X, rect.center().y),
             Align2::LEFT_CENTER,
-            i18n.t("explorer.no_matches"),
+            i18n.t(message),
             FontId::proportional(13.0),
             palette.icon_inactive,
         );
@@ -762,6 +892,39 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
+    /// A link is listed as what it points to, so a linked folder opens.
+    #[cfg(unix)]
+    #[test]
+    fn test_scan_directory_follows_symlinks() {
+        let temp_dir = std::env::temp_dir().join("rred_test_scan_links");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(temp_dir.join("real_dir")).unwrap();
+        File::create(temp_dir.join("real_file.txt")).unwrap();
+        std::os::unix::fs::symlink(temp_dir.join("real_dir"), temp_dir.join("link_dir")).unwrap();
+        std::os::unix::fs::symlink(
+            temp_dir.join("real_file.txt"),
+            temp_dir.join("link_file.txt"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(temp_dir.join("gone"), temp_dir.join("broken")).unwrap();
+
+        let listed: Vec<(String, bool)> = scan_directory(&temp_dir)
+            .into_iter()
+            .map(|entry| (entry.name, entry.is_dir))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("link_dir".to_owned(), true),
+                ("real_dir".to_owned(), true),
+                ("broken".to_owned(), false),
+                ("link_file.txt".to_owned(), false),
+                ("real_file.txt".to_owned(), false),
+            ]
+        );
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
     #[test]
     fn test_palettes_match_vscode_modern_themes() {
         let d = SidebarPalette::DARK;
@@ -813,8 +976,8 @@ mod tests {
     fn outline(explorer: &mut Explorer) -> Vec<(String, usize)> {
         explorer
             .rows()
-            .into_iter()
-            .map(|row| (row.entry.name, row.depth))
+            .iter()
+            .map(|row| (row.entry.name.clone(), row.depth))
             .collect()
     }
 
@@ -826,7 +989,7 @@ mod tests {
     fn test_rows_list_root_entries_folders_first() {
         let root = fixture("root_rows");
         let mut explorer = Explorer::new(root.clone());
-        let rows = explorer.rows();
+        let rows = explorer.rows().to_vec();
         assert_eq!(
             outline(&mut explorer),
             owned(&[("docs", 0), ("src", 0), ("Cargo.toml", 0)])
@@ -903,8 +1066,8 @@ mod tests {
         let names = |explorer: &mut Explorer| -> Vec<String> {
             explorer
                 .rows()
-                .into_iter()
-                .map(|row| row.entry.name)
+                .iter()
+                .map(|row| row.entry.name.clone())
                 .collect()
         };
         assert!(
@@ -1055,7 +1218,11 @@ mod tests {
             &mut explorer,
             None,
         );
-        let names: Vec<String> = explorer.rows().into_iter().map(|r| r.entry.name).collect();
+        let names: Vec<String> = explorer
+            .rows()
+            .iter()
+            .map(|r| r.entry.name.clone())
+            .collect();
         assert!(
             names.contains(&"added.txt".to_string()),
             "Refresh reads the folder again"
@@ -1163,9 +1330,91 @@ mod tests {
         root
     }
 
-    fn match_names(explorer: &mut Explorer, query: &str) -> Vec<String> {
-        explorer.query = query.to_owned();
+    /// Calls `done` every millisecond until it holds; fails after 10 s.
+    fn wait_until(mut done: impl FnMut() -> bool) {
+        let start = std::time::Instant::now();
+        while !done() {
+            assert!(start.elapsed().as_secs() < 10, "timed out");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    fn names(explorer: &Explorer) -> Vec<String> {
         explorer.matches().iter().map(|e| e.name.clone()).collect()
+    }
+
+    /// The names matching `query` once the whole folder is indexed.
+    fn match_names(explorer: &mut Explorer, query: &str) -> Vec<String> {
+        let ctx = egui::Context::default();
+        explorer.query = query.to_owned();
+        wait_until(|| {
+            explorer.update_matches(&ctx);
+            !explorer.is_filtering() || explorer.is_indexed()
+        });
+        names(explorer)
+    }
+
+    /// The filter never waits for the folder to be indexed: it lists what
+    /// was found so far, and the rest as it arrives.
+    #[test]
+    fn test_filter_lists_matches_while_the_folder_is_still_indexed() {
+        let ctx = egui::Context::default();
+        let root = PathBuf::from("project");
+        let entry = |name: &str| FsEntry {
+            path: root.join(name),
+            is_dir: false,
+            name: name.to_owned(),
+        };
+        let first = vec![entry("b_match.txt"), entry("other.txt")];
+        let second = vec![entry("a_match.txt")];
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let mut explorer = Explorer::new(root.clone());
+        explorer.index = Some(FileIndex::spawn(&ctx, move |found| {
+            found(first);
+            let _ = gate.recv();
+            found(second);
+        }));
+        explorer.query = "match".into();
+
+        wait_until(|| {
+            explorer.update_matches(&ctx);
+            !explorer.matches().is_empty()
+        });
+        assert_eq!(names(&explorer), ["b_match.txt"]);
+        assert!(!explorer.is_indexed());
+
+        release.send(()).unwrap();
+        wait_until(|| {
+            explorer.update_matches(&ctx);
+            explorer.is_indexed()
+        });
+        assert_eq!(names(&explorer), ["a_match.txt", "b_match.txt"]);
+    }
+
+    /// Until the first match turns up, the sidebar says it is still
+    /// looking rather than that nothing matches.
+    #[test]
+    fn test_filter_says_it_is_indexing_until_done() {
+        let ctx = egui::Context::default();
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let mut explorer = Explorer::new(PathBuf::from("project"));
+        explorer.index = Some(FileIndex::spawn(&ctx, move |_| {
+            let _ = gate.recv();
+        }));
+        explorer.query = "zzz".into();
+        let i18n = I18n::builtin();
+        let (indexing, none) = (i18n.t("explorer.indexing"), i18n.t("explorer.no_matches"));
+
+        let (_, shapes) = run(&ctx, Vec::new(), &mut explorer, None);
+        assert!(painted_texts(&shapes).contains(&indexing.to_owned()));
+
+        release.send(()).unwrap();
+        wait_until(|| {
+            run(&ctx, Vec::new(), &mut explorer, None);
+            explorer.is_indexed()
+        });
+        let (_, shapes) = run(&ctx, Vec::new(), &mut explorer, None);
+        assert!(painted_texts(&shapes).contains(&none.to_owned()));
     }
 
     #[test]
@@ -1236,8 +1485,13 @@ mod tests {
             None,
         );
         let typed = vec![egui::Event::Text("SMS keluar".into())];
-        let (response, shapes) = run(&ctx, typed, &mut explorer, None);
+        run(&ctx, typed, &mut explorer, None);
         assert_eq!(explorer.query, "SMS keluar");
+        wait_until(|| {
+            run(&ctx, Vec::new(), &mut explorer, None);
+            explorer.is_indexed()
+        });
+        let (response, shapes) = run(&ctx, Vec::new(), &mut explorer, None);
         let listed: Vec<&Path> = response.rows.iter().map(|(p, _)| p.as_path()).collect();
         assert_eq!(
             listed,
@@ -1259,12 +1513,63 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// The visible tree is worked out once and kept until a folder opens or
+    /// closes, the section folds, or the tree is refreshed: building it
+    /// every frame cloned every listed entry.
+    #[test]
+    fn test_rows_are_built_once_until_the_tree_changes() {
+        let root = fixture("rows_cached");
+        let mut explorer = Explorer::new(root.clone());
+        explorer.rows();
+        explorer.rows();
+        assert_eq!(explorer.row_builds, 1);
+
+        explorer.toggle(&root.join("src"));
+        assert_eq!(explorer.rows().len(), 5);
+        explorer.collapse_all();
+        assert_eq!(explorer.rows().len(), 3);
+        explorer.toggle_section();
+        assert!(explorer.rows().is_empty());
+        explorer.toggle_section();
+        File::create(root.join("added.txt")).unwrap();
+        explorer.refresh();
+        assert_eq!(explorer.rows().len(), 4);
+        assert_eq!(explorer.row_builds, 5);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A folder of thousands of entries costs only the rows in view.
+    #[test]
+    fn test_only_the_rows_in_view_are_laid_out() {
+        let root = std::env::temp_dir().join("rred_explorer_many_rows");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        for i in 0..500 {
+            File::create(root.join(format!("file_{i:03}.txt"))).unwrap();
+        }
+        let ctx = egui::Context::default();
+        let mut explorer = Explorer::new(root.clone());
+        let (response, _) = run(&ctx, Vec::new(), &mut explorer, None);
+        // A 600-point window holds fewer than 30 rows of 22 points.
+        assert!(
+            response.rows.len() < 30,
+            "{} rows laid out",
+            response.rows.len()
+        );
+        assert_eq!(response.rows[0].0, root.join("file_000.txt"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn test_no_matches_shows_a_message() {
         let root = sms_fixture("no_matches");
         let ctx = egui::Context::default();
         let mut explorer = Explorer::new(root.clone());
         explorer.query = "zzz".into();
+        wait_until(|| {
+            run(&ctx, Vec::new(), &mut explorer, None);
+            explorer.is_indexed()
+        });
         let (response, shapes) = run(&ctx, Vec::new(), &mut explorer, None);
         assert!(response.rows.is_empty());
         let message = I18n::builtin().t("explorer.no_matches").to_owned();

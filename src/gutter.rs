@@ -7,6 +7,7 @@
 use eframe::egui::{self, Align2, Color32, FontId, Galley, Rect, pos2};
 
 use crate::bookmarks::Bookmarks;
+use crate::find;
 use crate::tab_bar::TabPalette;
 use crate::theme;
 
@@ -54,7 +55,7 @@ impl GutterPalette {
 /// Number of lines in `text`. A trailing `\n` opens one more, empty line, as
 /// the caret can sit there.
 pub fn line_count(text: &str) -> usize {
-    text.bytes().filter(|&b| b == b'\n').count() + 1
+    find::line_count(text)
 }
 
 /// Digits the gutter makes room for when the last line is `lines`.
