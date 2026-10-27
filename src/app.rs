@@ -19,6 +19,7 @@ use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
 use crate::prettify;
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
+use crate::symbols::{self, PickerAction, SymbolPicker};
 use crate::tab_bar;
 use crate::terminal::{self, Terminal};
 use crate::theme::{self, ThemeId};
@@ -244,6 +245,7 @@ pub struct TextEditorApp {
     pub i18n: I18n,
     pub find: FindState,
     pub goto: GotoState,
+    pub symbol_picker: SymbolPicker,
     pub search: SearchState,
     /// One-shot asks for the editor widget, applied on its next frame.
     pub editor_request: EditorRequest,
@@ -308,6 +310,7 @@ impl Default for TextEditorApp {
             i18n: I18n::builtin(),
             find: FindState::default(),
             goto: GotoState::default(),
+            symbol_picker: SymbolPicker::default(),
             search: SearchState::default(),
             editor_request: EditorRequest::default(),
             menu_focus: None,
@@ -389,6 +392,10 @@ pub mod shortcuts {
     pub const PREV_HEADING: KeyboardShortcut = KeyboardShortcut::new(Modifiers::ALT, Key::ArrowUp);
     pub const NEXT_HEADING: KeyboardShortcut =
         KeyboardShortcut::new(Modifiers::ALT, Key::ArrowDown);
+    pub const GOTO_SYMBOL: KeyboardShortcut = cmd(Key::R);
+    pub const GOTO_DEFINITION: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F12);
+    pub const FIND_REFERENCES: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::SHIFT, Key::F12);
     // Shown in the Edit menu only: the focused text editor handles these
     // keys itself.
     pub const UNDO: KeyboardShortcut = cmd(Key::Z);
@@ -424,6 +431,9 @@ pub enum ShortcutAction {
     FindPrev,
     PrevHeading,
     NextHeading,
+    GotoSymbol,
+    GotoDefinition,
+    FindReferences,
 }
 
 /// Takes at most one shortcut out of this frame's input. Shift variants are
@@ -432,6 +442,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
     use ShortcutAction::*;
     [
         (shortcuts::FIND_PREV, FindPrev),
+        (shortcuts::FIND_REFERENCES, FindReferences),
         (shortcuts::FIND_NEXT, FindNext),
         (shortcuts::FIND_IN_FILES, FindInFiles),
         (shortcuts::MARKDOWN_PREVIEW, MarkdownPreview),
@@ -454,6 +465,8 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::REPLACE, Replace),
         (shortcuts::PREV_HEADING, PrevHeading),
         (shortcuts::NEXT_HEADING, NextHeading),
+        (shortcuts::GOTO_SYMBOL, GotoSymbol),
+        (shortcuts::GOTO_DEFINITION, GotoDefinition),
     ]
     .into_iter()
     .find(|(shortcut, _)| input.consume_shortcut(shortcut))
@@ -761,6 +774,24 @@ impl TextEditorApp {
         if item(ui, self.i18n.t("edit.goto_line"), &shortcuts::GOTO_LINE) {
             self.open_goto();
         }
+        let navigable = symbols::supports(self.effective_language());
+        let nav_item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
+            let button = egui::Button::new(label).shortcut_text(ctx.format_shortcut(shortcut));
+            let clicked = ui.add_enabled(navigable, button).clicked();
+            if clicked {
+                ui.close();
+            }
+            clicked
+        };
+        if nav_item(ui, self.i18n.t("edit.goto_symbol"), &shortcuts::GOTO_SYMBOL) {
+            self.open_symbol_picker();
+        }
+        if nav_item(ui, self.i18n.t("edit.goto_definition"), &shortcuts::GOTO_DEFINITION) {
+            self.goto_definition(ctx, None);
+        }
+        if nav_item(ui, self.i18n.t("edit.find_references"), &shortcuts::FIND_REFERENCES) {
+            self.find_references(ctx, None);
+        }
         ui.separator();
         let prettify_label = self.i18n.t("edit.prettify");
         let prettify_shortcut = ctx.format_shortcut(&shortcuts::PRETTIFY);
@@ -803,6 +834,19 @@ impl TextEditorApp {
         }
         editor.context_menu(|ui| {
             self.show_clipboard_items(ui, ctx);
+            if symbols::supports(self.effective_language()) {
+                ui.separator();
+                let at = ctx.data(|d| d.get_temp::<usize>(self.editor_id().with(CONTEXT_CHAR)));
+                let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
+                    menu_item(ui, label, &ctx.format_shortcut(shortcut))
+                };
+                if item(ui, self.i18n.t("edit.goto_definition"), &shortcuts::GOTO_DEFINITION) {
+                    self.goto_definition(ctx, at);
+                }
+                if item(ui, self.i18n.t("edit.find_references"), &shortcuts::FIND_REFERENCES) {
+                    self.find_references(ctx, at);
+                }
+            }
             if let Some(line) = self.context_line(ctx) {
                 ui.separator();
                 let key = if self.active_tab().bookmarks.contains(line) {
@@ -1052,6 +1096,68 @@ impl TextEditorApp {
         self.editor_request.focus = true;
     }
 
+    /// Edit > Go to Symbol: the bar listing what the active document
+    /// defines. Does nothing for languages code navigation does not know.
+    pub fn open_symbol_picker(&mut self) {
+        let language = self.effective_language();
+        if symbols::supports(language) {
+            self.goto.visible = false;
+            let found = symbols::symbols(&self.active_tab().text_content, language);
+            self.symbol_picker.open(found);
+        }
+    }
+
+    /// The identifier at the `char` index `at`, else at the caret, when code
+    /// navigation knows the active document's language.
+    fn navigation_word(&self, ctx: &egui::Context, at: Option<usize>) -> Option<(String, usize)> {
+        if !symbols::supports(self.effective_language()) {
+            return None;
+        }
+        let at = at.or_else(|| self.editor_selection(ctx).map(|(a, _)| a))?;
+        let word = symbols::word_at(&self.active_tab().text_content, at)?;
+        Some((word, at))
+    }
+
+    /// Jumps to the definition of the identifier at `at` (else the caret's):
+    /// in the document when it has one elsewhere, else in the open folder's
+    /// files of the same language, listed when there are several.
+    pub fn goto_definition(&mut self, ctx: &egui::Context, at: Option<usize>) {
+        let Some((name, at)) = self.navigation_word(ctx, at) else { return };
+        let language = self.effective_language();
+        let text = &self.active_tab().text_content;
+        let here = find::line_col(text, at).0;
+        let local = symbols::symbols(text, language)
+            .into_iter()
+            .find(|symbol| symbol.defines(&name) && symbol.line != here);
+        if let Some(symbol) = local {
+            self.goto_line(symbol.line);
+            return;
+        }
+        match self.explorer.as_ref().map(|e| e.root().to_path_buf()) {
+            Some(root) => {
+                self.search.visible = true;
+                self.search.start_definitions(ctx, root, name, language);
+            }
+            None => {
+                let message = self.i18n.tf("symbol.no_definition", &[("name", &name)]);
+                self.status_message = Some((message, true));
+            }
+        }
+    }
+
+    /// Lists every whole-word use of the identifier at `at` (else the
+    /// caret's) in the open folder, in the Find in Files panel.
+    pub fn find_references(&mut self, ctx: &egui::Context, at: Option<usize>) {
+        let Some((name, _)) = self.navigation_word(ctx, at) else { return };
+        self.search.visible = true;
+        self.search.query = name;
+        self.search.case_sensitive = true;
+        self.search.whole_word = true;
+        if let Some(root) = self.explorer.as_ref().map(|e| e.root().to_path_buf()) {
+            self.search.start(ctx, root);
+        }
+    }
+
     pub fn open_goto(&mut self) {
         self.goto.visible = true;
         self.goto.focus = true;
@@ -1216,6 +1322,9 @@ impl TextEditorApp {
             ShortcutAction::FindPrev => self.find_step(ctx, FindAction::Prev),
             ShortcutAction::PrevHeading => self.step_heading(false),
             ShortcutAction::NextHeading => self.step_heading(true),
+            ShortcutAction::GotoSymbol => self.open_symbol_picker(),
+            ShortcutAction::GotoDefinition => self.goto_definition(ctx, None),
+            ShortcutAction::FindReferences => self.find_references(ctx, None),
             ShortcutAction::PrevTab => {
                 self.active_tab_index =
                     (self.active_tab_index + self.tabs.len() - 1) % self.tabs.len();
@@ -2229,8 +2338,15 @@ impl eframe::App for TextEditorApp {
             });
         }
 
-        if self.search.visible && !self.zen_mode {
+        if self.search.visible {
             self.search.poll();
+            // Go to Definition found one place: go there instead of listing it.
+            if let Some(hit) = self.search.take_single() {
+                self.close_search();
+                self.open_search_hit(hit.path, hit.line);
+            }
+        }
+        if self.search.visible && !self.zen_mode {
             let root = self.explorer.as_ref().map(|e| e.root().to_path_buf());
             let mut action = None;
             egui::Panel::bottom("find_in_files")
@@ -2361,6 +2477,19 @@ impl eframe::App for TextEditorApp {
                     None => {}
                 }
             }
+            if self.symbol_picker.visible {
+                match symbols::show_picker(ui, &mut self.symbol_picker, &self.i18n) {
+                    Some(PickerAction::Go(line)) => {
+                        self.symbol_picker.visible = false;
+                        self.goto_line(line);
+                    }
+                    Some(PickerAction::Close) => {
+                        self.symbol_picker.visible = false;
+                        self.editor_request.focus = true;
+                    }
+                    None => {}
+                }
+            }
             let mut request = std::mem::take(&mut self.editor_request);
             request.highlight = self.find.visible.then_some(self.find.current).flatten();
             request.inactive_selection = (self.menu_focus == Some(self.editor_id()))
@@ -2418,6 +2547,9 @@ impl eframe::App for TextEditorApp {
             })
             .inner;
             self.show_editor_context_menu(&ctx, &editor);
+            if editor.clicked() && ctx.input(|i| i.modifiers.command) {
+                self.goto_definition(&ctx, None);
+            }
             match preview_pos {
                 Some(preview_pos) => self.scroll_sync.observe(editor_pos, preview_pos),
                 None => self.scroll_sync.reset(),
@@ -2879,6 +3011,9 @@ mod tests {
             (egui::Key::V, ctrl_shift, ShortcutAction::MarkdownPreview),
             (egui::Key::ArrowUp, egui::Modifiers::ALT, ShortcutAction::PrevHeading),
             (egui::Key::ArrowDown, egui::Modifiers::ALT, ShortcutAction::NextHeading),
+            (egui::Key::R, ctrl, ShortcutAction::GotoSymbol),
+            (egui::Key::F12, egui::Modifiers::NONE, ShortcutAction::GotoDefinition),
+            (egui::Key::F12, egui::Modifiers::SHIFT, ShortcutAction::FindReferences),
         ] {
             let mut got = None;
             let mut output = ctx.run_ui(press(key, mods), |ui| {
@@ -5150,5 +5285,95 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "saved text");
         assert!(!app.tabs[0].is_dirty());
         let _ = fs::remove_file(&path);
+    }
+
+    fn rust_app(text: &str) -> TextEditorApp {
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = text.into();
+        app.active_tab_mut().language_override = Some(Language::Rust);
+        app
+    }
+
+    #[test]
+    fn test_code_navigation_only_for_its_languages() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.active_tab_mut().text_content = "fn main() {}\nmain();\n".into();
+        app.apply_shortcut(&ctx, ShortcutAction::GotoSymbol);
+        assert!(!app.symbol_picker.visible, "plain text has no symbols");
+        app.goto_definition(&ctx, Some(14));
+        assert_eq!(app.editor_request.goto, None);
+        app.find_references(&ctx, Some(14));
+        assert!(!app.search.visible);
+    }
+
+    #[test]
+    fn test_goto_symbol_lists_the_document() {
+        let ctx = egui::Context::default();
+        let mut app = rust_app("struct A;\n\nfn run() {}\n");
+        app.goto.visible = true;
+        app.apply_shortcut(&ctx, ShortcutAction::GotoSymbol);
+        assert!(app.symbol_picker.visible && app.symbol_picker.focus);
+        assert!(!app.goto.visible, "one bar at a time");
+        let names: Vec<_> = app.symbol_picker.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["A", "run"]);
+    }
+
+    #[test]
+    fn test_goto_definition_in_the_document() {
+        let ctx = egui::Context::default();
+        let mut app = rust_app("fn main() {\n    helper();\n}\n\nfn helper() {}\n");
+        // The caret inside `helper` on line 2.
+        app.goto_definition(&ctx, Some(18));
+        assert_eq!(app.editor_request.goto, Some(find::line_start(&app.active_tab().text_content, 5)));
+        assert!(!app.search.visible, "found without searching the folder");
+    }
+
+    #[test]
+    fn test_goto_definition_without_a_folder_reports_it() {
+        let ctx = egui::Context::default();
+        let mut app = rust_app("fn main() {\n    missing();\n}\n");
+        app.goto_definition(&ctx, Some(18));
+        assert_eq!(app.editor_request.goto, None);
+        let (message, is_error) = app.status_message.clone().unwrap();
+        assert!(message.contains("missing") && is_error, "{message}");
+    }
+
+    #[test]
+    fn test_goto_definition_opens_a_single_match_in_the_folder() {
+        let ctx = egui::Context::default();
+        let dir = std::env::temp_dir().join(format!("red_goto_def_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let other = dir.join("other.rs");
+        fs::write(&other, "\npub fn helper() {}\n").unwrap();
+
+        let mut app = rust_app("fn main() {\n    helper();\n}\n");
+        app.explorer = Some(Explorer::new(dir.clone()));
+        app.goto_definition(&ctx, Some(18));
+        assert!(app.search.visible && app.search.query == "helper");
+        for _ in 0..200 {
+            if app.active_tab().current_path.as_ref() == Some(&other) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(app.active_tab().current_path.as_ref(), Some(&other));
+        assert!(!app.search.visible, "a lone definition is opened, not listed");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_references_searches_whole_words() {
+        let ctx = egui::Context::default();
+        let mut app = rust_app("fn main() {\n    helper();\n}\n");
+        app.find_references(&ctx, Some(18));
+        assert!(app.search.visible);
+        assert_eq!(app.search.query, "helper");
+        assert!(app.search.case_sensitive && app.search.whole_word);
     }
 }

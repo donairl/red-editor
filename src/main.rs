@@ -17,6 +17,7 @@ mod markdown_preview;
 mod modals;
 mod prettify;
 mod search;
+mod symbols;
 mod tab_bar;
 mod terminal;
 mod theme;
