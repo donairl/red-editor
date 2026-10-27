@@ -62,6 +62,9 @@
   "view.markdown_preview": "Vista previa de Markdown",
   "view.console": "Consola",
   "preview.too_large": "Documento demasiado grande para la vista previa.",
+  "preview.outline": "Esquema",
+  "preview.prev_heading": "Encabezado anterior",
+  "preview.next_heading": "Encabezado siguiente",
 
   "help.home": "Inicio",
   "help.about": "Acerca de",

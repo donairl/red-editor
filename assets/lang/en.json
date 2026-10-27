@@ -62,6 +62,9 @@
   "view.markdown_preview": "Markdown Preview",
   "view.console": "Console",
   "preview.too_large": "Document too large to preview.",
+  "preview.outline": "Outline",
+  "preview.prev_heading": "Previous heading",
+  "preview.next_heading": "Next heading",
 
   "help.home": "Home",
   "help.about": "About",

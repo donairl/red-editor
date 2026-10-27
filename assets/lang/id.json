@@ -62,6 +62,9 @@
   "view.markdown_preview": "Pratinjau Markdown",
   "view.console": "Konsol",
   "preview.too_large": "Dokumen terlalu besar untuk dipratinjau.",
+  "preview.outline": "Daftar isi",
+  "preview.prev_heading": "Heading sebelumnya",
+  "preview.next_heading": "Heading berikutnya",
 
   "help.home": "Beranda",
   "help.about": "About",

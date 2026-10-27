@@ -62,6 +62,9 @@
   "view.markdown_preview": "Markdown-Vorschau",
   "view.console": "Konsole",
   "preview.too_large": "Dokument zu groß für die Vorschau.",
+  "preview.outline": "Gliederung",
+  "preview.prev_heading": "Vorherige Überschrift",
+  "preview.next_heading": "Nächste Überschrift",
 
   "help.home": "Startseite",
   "help.about": "Über",

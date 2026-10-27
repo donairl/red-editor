@@ -2882,6 +2882,7 @@ dependencies = [
  "eframe",
  "egui_commonmark",
  "portable-pty",
+ "pulldown-cmark",
  "rfd",
  "serde_json",
  "syntect",

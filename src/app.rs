@@ -386,6 +386,9 @@ pub mod shortcuts {
     pub const REPLACE: KeyboardShortcut = cmd(Key::H);
     pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
     pub const FIND_PREV: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::F3);
+    pub const PREV_HEADING: KeyboardShortcut = KeyboardShortcut::new(Modifiers::ALT, Key::ArrowUp);
+    pub const NEXT_HEADING: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::ALT, Key::ArrowDown);
     // Shown in the Edit menu only: the focused text editor handles these
     // keys itself.
     pub const UNDO: KeyboardShortcut = cmd(Key::Z);
@@ -419,6 +422,8 @@ pub enum ShortcutAction {
     Replace,
     FindNext,
     FindPrev,
+    PrevHeading,
+    NextHeading,
 }
 
 /// Takes at most one shortcut out of this frame's input. Shift variants are
@@ -447,6 +452,8 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::ZEN_MODE, ZenMode),
         (shortcuts::FIND, Find),
         (shortcuts::REPLACE, Replace),
+        (shortcuts::PREV_HEADING, PrevHeading),
+        (shortcuts::NEXT_HEADING, NextHeading),
     ]
     .into_iter()
     .find(|(shortcut, _)| input.consume_shortcut(shortcut))
@@ -1027,6 +1034,18 @@ impl TextEditorApp {
         }
     }
 
+    fn previewing(&self) -> bool {
+        self.show_markdown_preview && self.preview_available() && !self.zen_mode
+    }
+
+    /// Moves the preview, and the editor with it, to the next or previous
+    /// heading. Does nothing while no preview is shown.
+    fn step_heading(&mut self, forward: bool) {
+        if self.previewing() {
+            self.markdown_preview.step(forward);
+        }
+    }
+
     pub fn toggle_zen_mode(&mut self, ctx: &egui::Context) {
         self.zen_mode = !self.zen_mode;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.zen_mode));
@@ -1195,6 +1214,8 @@ impl TextEditorApp {
             ShortcutAction::Replace => self.open_find(ctx, true),
             ShortcutAction::FindNext => self.find_step(ctx, FindAction::Next),
             ShortcutAction::FindPrev => self.find_step(ctx, FindAction::Prev),
+            ShortcutAction::PrevHeading => self.step_heading(false),
+            ShortcutAction::NextHeading => self.step_heading(true),
             ShortcutAction::PrevTab => {
                 self.active_tab_index =
                     (self.active_tab_index + self.tabs.len() - 1) % self.tabs.len();
@@ -2292,8 +2313,9 @@ impl eframe::App for TextEditorApp {
 
         // Markdown preview, right of the editor. Declared before the central
         // panel so the editor takes whatever width is left.
-        let previewing = self.show_markdown_preview && self.preview_available() && !self.zen_mode;
+        let previewing = self.previewing();
         let mut preview_pos = None;
+        let mut preview_jump = None;
         if previewing {
             let half = ui.available_width() / 2.0;
             egui::Panel::right("markdown_preview")
@@ -2301,11 +2323,16 @@ impl eframe::App for TextEditorApp {
                 .default_size(half)
                 .min_size(200.0)
                 .show(ui, |ui| {
-                    let too_large = self.i18n.t("preview.too_large");
                     let text = &self.tabs[self.active_tab_index].text_content;
                     let scroll_to = self.scroll_sync.take_preview_offset();
-                    preview_pos = Some(self.markdown_preview.show(ui, text, too_large, scroll_to));
+                    let shown = self.markdown_preview.show(ui, text, &self.i18n, scroll_to);
+                    preview_pos = Some(shown.pos);
+                    preview_jump = shown.jumped_to_line;
                 });
+        }
+        // The editor follows a jump to a heading in the preview.
+        if let Some(line) = preview_jump {
+            self.goto_line(line);
         }
 
         // 4. Central Panel (Main Text Editor Area)
@@ -2850,6 +2877,8 @@ mod tests {
             (egui::Key::N, ctrl, ShortcutAction::NewTab),
             (egui::Key::N, ctrl_shift, ShortcutAction::NewWindow),
             (egui::Key::V, ctrl_shift, ShortcutAction::MarkdownPreview),
+            (egui::Key::ArrowUp, egui::Modifiers::ALT, ShortcutAction::PrevHeading),
+            (egui::Key::ArrowDown, egui::Modifiers::ALT, ShortcutAction::NextHeading),
         ] {
             let mut got = None;
             let mut output = ctx.run_ui(press(key, mods), |ui| {
