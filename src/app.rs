@@ -2036,6 +2036,14 @@ impl TextEditorApp {
         }
     }
 
+    /// Shows the commits touching `path` in the Source Control view.
+    pub fn open_file_history(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.git.load_log(ctx, Some(path));
+        self.show_sidebar = true;
+        self.sidebar_view = SidebarView::SourceControl;
+        self.scm.commits_open = true;
+    }
+
     /// Does what the Source Control view asked.
     fn apply_scm_action(&mut self, ctx: &egui::Context, action: ScmAction) {
         match action {
@@ -2185,6 +2193,7 @@ impl TextEditorApp {
             close_others: self.i18n.t("tab.close_others"),
             close_to_right: self.i18n.t("tab.close_to_right"),
             close_saved: self.i18n.t("tab.close_saved"),
+            file_history: self.i18n.t("history.file_history"),
         };
         let response = tab_bar::show(ui, &views, self.active_tab_index, &labels);
         match response.action {
@@ -2198,6 +2207,11 @@ impl TextEditorApp {
             }
             Some(tab_bar::TabBarAction::CloseSaved) => {
                 self.close_tabs_where(self.active_tab_index, |_, _| true)
+            }
+            Some(tab_bar::TabBarAction::FileHistory(index)) => {
+                if let Some(path) = self.tabs.get(index).and_then(|t| t.current_path.clone()) {
+                    self.open_file_history(&ui.ctx().clone(), path);
+                }
             }
             Some(tab_bar::TabBarAction::New) => self.open_new_tab(),
             None => {}
@@ -2782,6 +2796,7 @@ impl eframe::App for TextEditorApp {
         }
 
         let mut file_to_open = None;
+        let mut file_history = None;
         let mut find_in_files = false;
         let active_file = self.active_tab().current_path.clone();
         let mut scm_action = None;
@@ -2827,6 +2842,7 @@ impl eframe::App for TextEditorApp {
                             &self.i18n,
                         );
                         file_to_open = tree.open_file;
+                        file_history = tree.file_history;
                         find_in_files = tree.find_in_files;
                     });
             }
@@ -2834,6 +2850,9 @@ impl eframe::App for TextEditorApp {
 
         if let Some(path) = file_to_open {
             self.trigger_open_specific_file(path);
+        }
+        if let Some(path) = file_history {
+            self.open_file_history(&ctx, path);
         }
         if find_in_files {
             self.open_search(&ctx);
@@ -4564,6 +4583,39 @@ mod tests {
         let mut output = ctx.run_ui(input, |ui| action = ui.ctx().input_mut(consume_shortcut));
         output.textures_delta.clear();
         assert_eq!(action, Some(ShortcutAction::SourceControl));
+    }
+
+    #[test]
+    fn test_file_history_opens_source_control_filtered_to_the_file() {
+        let Some(repo) = crate::git::temp_repo("app_history") else { return };
+        let a = repo.root().join("a.txt");
+        let b = repo.root().join("b.txt");
+        fs::write(&a, "a\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("add a").unwrap();
+        fs::write(&b, "b\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("add b").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp {
+            explorer: Some(Explorer::new(repo.root().to_path_buf())),
+            ..Default::default()
+        };
+        poll_git_until(&mut app, &ctx, |app| app.git.status.is_some());
+        app.open_file_history(&ctx, b.clone());
+        assert!(app.show_sidebar);
+        assert_eq!(app.sidebar_view, SidebarView::SourceControl);
+        assert!(app.scm.commits_open);
+        poll_git_until(&mut app, &ctx, |app| app.git.log.complete);
+        let subjects: Vec<&str> = app.git.log.commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, ["add b"]);
+        assert_eq!(app.git.log.filter.as_ref(), Some(&b));
+
+        app.apply_scm_action(&ctx, ScmAction::ClearHistoryFilter);
+        poll_git_until(&mut app, &ctx, |app| app.git.log.complete);
+        assert_eq!(app.git.log.commits.len(), 2);
+        let _ = fs::remove_dir_all(repo.root());
     }
 
     #[test]

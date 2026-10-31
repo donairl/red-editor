@@ -201,5 +201,7 @@
   "history.restore_tooltip": "Make the work-tree file what it was in this commit",
   "history.restore_message": "Restore {name} to its version in commit {hash}? Uncommitted changes to the file are lost.",
   "history.restore_confirm": "Restore",
-  "history.restored": "File restored."
+  "history.restored": "File restored.",
+
+  "history.file_history": "File History"
 }

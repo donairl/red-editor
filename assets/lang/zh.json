@@ -201,5 +201,7 @@
   "history.restore_tooltip": "将工作区文件恢复为此提交中的内容",
   "history.restore_message": "将 {name} 恢复到提交 {hash} 中的版本？该文件未提交的更改将丢失。",
   "history.restore_confirm": "恢复",
-  "history.restored": "文件已恢复。"
+  "history.restored": "文件已恢复。",
+
+  "history.file_history": "文件历史"
 }

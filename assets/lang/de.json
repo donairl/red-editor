@@ -201,5 +201,7 @@
   "history.restore_tooltip": "Die Datei im Arbeitsverzeichnis auf den Stand dieses Commits setzen",
   "history.restore_message": "{name} auf den Stand von Commit {hash} zurücksetzen? Nicht committete Änderungen an der Datei gehen verloren.",
   "history.restore_confirm": "Wiederherstellen",
-  "history.restored": "Datei wiederhergestellt."
+  "history.restored": "Datei wiederhergestellt.",
+
+  "history.file_history": "Dateiverlauf"
 }

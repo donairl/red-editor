@@ -425,6 +425,8 @@ pub(crate) const ACTION_SIZE: f32 = 22.0;
 #[derive(Clone, Debug)]
 pub struct ExplorerResponse {
     pub open_file: Option<PathBuf>,
+    /// The file whose commit history was asked for (right-click menu).
+    pub file_history: Option<PathBuf>,
     /// The Search button was clicked: the caller opens Find in Files.
     pub find_in_files: bool,
     // Only the tests read where things were drawn.
@@ -535,6 +537,7 @@ pub fn show(
 
     let mut response = ExplorerResponse {
         open_file: None,
+        file_history: None,
         find_in_files: search.clicked(),
         section_rect,
         search_rect,
@@ -576,6 +579,9 @@ pub fn show(
                     } else {
                         response.open_file = Some(row.entry.path.clone());
                     }
+                }
+                if !row.entry.is_dir {
+                    file_menu(&row_response, &row.entry.path, i18n, &mut response);
                 }
                 response.rows.push((row.entry.path.clone(), rect));
             }
@@ -651,6 +657,7 @@ fn show_matches(
                 if row_response.clicked() {
                     response.open_file = Some(entry.path.clone());
                 }
+                file_menu(&row_response, &entry.path, i18n, response);
                 response.rows.push((entry.path.clone(), rect));
             }
         });
@@ -716,6 +723,16 @@ fn paint_section_header(
 
 /// Background, indent guides, chevron or badge, and the name of one row,
 /// followed by `detail` in a dimmer colour.
+/// The right-click menu of a file row.
+fn file_menu(row: &egui::Response, path: &Path, i18n: &I18n, response: &mut ExplorerResponse) {
+    row.context_menu(|ui| {
+        if ui.button(i18n.t("history.file_history")).clicked() {
+            response.file_history = Some(path.to_path_buf());
+            ui.close();
+        }
+    });
+}
+
 /// The git change an Explorer entry is marked with.
 fn git_kind(git: Option<&Decorations>, entry: &FsEntry) -> Option<Kind> {
     let git = git?;

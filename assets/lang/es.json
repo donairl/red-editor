@@ -201,5 +201,7 @@
   "history.restore_tooltip": "Dejar el archivo del árbol de trabajo como en este commit",
   "history.restore_message": "¿Restaurar {name} a su versión del commit {hash}? Los cambios sin commit del archivo se pierden.",
   "history.restore_confirm": "Restaurar",
-  "history.restored": "Archivo restaurado."
+  "history.restored": "Archivo restaurado.",
+
+  "history.file_history": "Historial del archivo"
 }

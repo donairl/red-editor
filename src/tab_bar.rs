@@ -130,6 +130,8 @@ pub enum TabBarAction {
     CloseToRight(usize),
     /// Context menu: close every tab without unsaved changes.
     CloseSaved,
+    /// Context menu: show this tab's file in the commit log.
+    FileHistory(usize),
     New,
 }
 
@@ -140,6 +142,7 @@ pub struct MenuLabels<'a> {
     pub close_others: &'a str,
     pub close_to_right: &'a str,
     pub close_saved: &'a str,
+    pub file_history: &'a str,
 }
 
 /// One frame of the strip: what was clicked, and where each part was drawn.
@@ -331,6 +334,14 @@ fn show_tab(
         if ui.button(labels.close_saved).clicked() {
             menu_action = Some(TabBarAction::CloseSaved);
         }
+        ui.separator();
+        // Only a saved document has a history.
+        if ui
+            .add_enabled(tab.tooltip.is_some(), egui::Button::new(labels.file_history))
+            .clicked()
+        {
+            menu_action = Some(TabBarAction::FileHistory(index));
+        }
         if menu_action.is_some() {
             ui.close();
         }
@@ -445,6 +456,7 @@ mod tests {
         close_others: "Close Others",
         close_to_right: "Close to the Right",
         close_saved: "Close Saved",
+        file_history: "File History",
     };
 
     fn view(title: &str, dirty: bool) -> TabView {
