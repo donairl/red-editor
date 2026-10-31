@@ -131,6 +131,7 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+Q` | Exit |
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+Shift+G` | Source Control view |
+| `Ctrl+Alt+B` | Git Blame column |
 | `F11` | Zen mode (full screen, editor only); `Esc` to exit |
 | `Ctrl+Shift+V` | Toggle Markdown preview (`.md` files) |
 | `Ctrl+Shift+I` | Prettify the document |
@@ -162,6 +163,9 @@ The editor runs the `git` installed on the machine, so your credential helper, s
 - **Gutter**: lines that differ from the last commit get a bar between the line numbers and the text, green for added and blue for modified; a red triangle marks removed lines. Markers follow your typing.
 - **Source Control** (Activity Bar, `Ctrl+Shift+G`): type a message and press **Commit** (or `Ctrl+Enter`). Files are listed under **Staged Changes** and **Changes** (and **Merge Changes** during a conflict); hover a row or a list header for **Open File**, **Stage** (`+`), **Unstage** (`−`) and **Discard**. Discarding asks first and cannot be undone. Committing with nothing staged offers to stage everything. The title bar has **Pull**, **Push** and **Refresh**; the badge on the Activity Bar counts changed files.
 - **Diff**: click a file in Source Control to open it with its changes in a panel beside the editor. Click a line in the diff to jump there.
+- **Commits**: the **COMMITS** section below the changes lists the branch's history, 100 commits at a time (short hash, subject, branch and tag names, author, age). Click a commit to see the files it changed; click a file to see what the commit did to it in the diff panel, where **Restore This Version** makes the work-tree file what it was in that commit. Each commit row has a **Checkout** button that detaches HEAD at it; both ask first, and the branch menu in the status bar takes you back.
+- **File History**: right-click a tab or an Explorer file and pick **File History** to limit the COMMITS section to the commits touching that file; a chip with the file name clears the filter. Clicking a commit then shows the file's diff in it directly.
+- **Blame** (**View → Git Blame**, `Ctrl+Alt+B`): a column left of the line numbers names who last changed each line and how long ago, from the last commit. Hover a line for the commit's hash and message. With unsaved edits the column asks you to save first, as the lines would no longer match.
 - Pull only fast-forwards; if the branch has diverged, merge or rebase in the Console. Git never prompts inside the editor: a pull or push that needs a password or key tells you to run it once in the Console, with a button to open it.
 
 ## Adding Interface Languages

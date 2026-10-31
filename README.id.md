@@ -131,6 +131,7 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | `Ctrl+Q` | Keluar |
 | `Ctrl+B` | Tampilkan/sembunyikan sidebar |
 | `Ctrl+Shift+G` | View Source Control |
+| `Ctrl+Alt+B` | Kolom Git Blame |
 | `F11` | Zen mode (layar penuh, hanya editor); `Esc` untuk keluar |
 | `Ctrl+Shift+V` | Tampilkan/sembunyikan pratinjau Markdown (file `.md`) |
 | `Ctrl+Shift+I` | Rapikan dokumen |
@@ -162,6 +163,9 @@ Editor menjalankan `git` yang terpasang di komputer, jadi credential helper, ssh
 - **Gutter**: baris yang berbeda dari commit terakhir diberi bar di antara nomor baris dan teks, hijau untuk baris baru dan biru untuk baris yang diubah; segitiga merah menandai baris yang dihapus. Penanda ikut saat mengetik.
 - **Source Control** (Activity Bar, `Ctrl+Shift+G`): ketik pesan lalu tekan **Commit** (atau `Ctrl+Enter`). File tampil di **Perubahan Staged** dan **Perubahan** (serta **Konflik Merge** saat ada konflik); arahkan mouse ke baris atau header daftar untuk **Buka File**, **Stage** (`+`), **Batalkan Stage** (`−`), dan **Buang Perubahan**. Membuang perubahan selalu ditanya dulu dan tidak bisa dibatalkan. Commit tanpa file yang di-stage menawarkan untuk men-stage semuanya. Di judul view ada **Pull**, **Push**, dan **Refresh**; badge di Activity Bar menghitung file yang berubah.
 - **Diff**: klik file di Source Control untuk membukanya beserta perubahannya di panel samping editor. Klik baris di diff untuk melompat ke sana.
+- **Commit**: seksi **COMMIT** di bawah daftar perubahan menampilkan riwayat branch, 100 commit sekali muat (hash pendek, pesan, nama branch dan tag, penulis, umur). Klik commit untuk melihat file yang diubahnya; klik file untuk melihat perubahan commit itu di panel diff, yang punya tombol **Pulihkan Versi Ini** untuk menjadikan file di work tree seperti di commit itu. Tiap baris commit punya tombol **Checkout** yang melepas HEAD ke commit itu; keduanya ditanya dulu, dan menu branch di status bar mengembalikanmu.
+- **Riwayat File**: klik kanan tab atau file di Explorer lalu pilih **Riwayat File** untuk membatasi seksi COMMIT ke commit yang menyentuh file itu; chip bernama file itu menghapus filternya. Klik commit lalu langsung menampilkan diff file itu di commit tersebut.
+- **Blame** (**Tampilan → Git Blame**, `Ctrl+Alt+B`): kolom di kiri nomor baris menampilkan siapa yang terakhir mengubah tiap baris dan berapa lama lalu, dari commit terakhir. Arahkan mouse ke baris untuk hash dan pesan commit-nya. Saat ada perubahan belum disimpan, kolom meminta simpan dulu karena barisnya tidak lagi cocok.
 - Pull hanya fast-forward; kalau branch sudah bercabang, lakukan merge atau rebase di Console. Git tidak pernah meminta password di dalam editor: pull atau push yang butuh password atau key memberi tahu untuk menjalankannya sekali di Console, dengan tombol untuk membukanya.
 
 ## Menambah bahasa antarmuka
