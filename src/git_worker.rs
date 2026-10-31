@@ -18,6 +18,8 @@ pub enum Op {
     Unstage(Vec<PathBuf>),
     Discard(Vec<FileChange>),
     Commit(String),
+    /// Stages everything, then commits.
+    CommitAll(String),
     Fetch,
     Pull,
     Push,
@@ -46,6 +48,7 @@ impl Op {
             Op::Unstage(paths) => repo.unstage(paths),
             Op::Discard(changes) => repo.discard(changes),
             Op::Commit(message) => repo.commit(message),
+            Op::CommitAll(message) => repo.stage_all().and_then(|()| repo.commit(message)),
             Op::Fetch => repo.fetch(),
             Op::Pull => repo.pull(),
             Op::Push => repo.push(),

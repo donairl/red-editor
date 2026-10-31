@@ -21,6 +21,7 @@ mod modals;
 mod prettify;
 mod process;
 mod search;
+mod source_control;
 mod symbols;
 mod tab_bar;
 mod terminal;

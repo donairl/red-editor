@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::activity_bar;
 use crate::bookmarks::Bookmarks;
 use crate::file_browser::{self, Explorer};
-use crate::git::GitError;
+use crate::git::{FileChange, GitError};
 use crate::git_worker::{Base, GitState, Op};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
@@ -22,6 +22,7 @@ use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
 use crate::prettify;
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
+use crate::source_control::{self, ScmAction, ScmUi};
 use crate::symbols::{self, PickerAction, SymbolPicker};
 use crate::tab_bar;
 use crate::terminal::{self, Terminal};
@@ -223,13 +224,32 @@ impl DocumentTab {
     }
 }
 
+/// What the sidebar shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SidebarView {
+    #[default]
+    Explorer,
+    SourceControl,
+}
+
+/// A git command that waits for the user to confirm it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GitConfirm {
+    /// Throwing work-tree changes away cannot be undone.
+    Discard(Vec<FileChange>),
+    /// Nothing is staged: stage everything, then commit this message.
+    CommitAll(String),
+}
+
 pub struct TextEditorApp {
     pub tabs: Vec<DocumentTab>,
     pub active_tab_index: usize,
     /// The open folder's tree; `None` until a folder is opened.
     pub explorer: Option<Explorer>,
-    /// Whether the Explorer sidebar is shown, once a folder is open.
+    /// Whether the sidebar is shown.
     pub show_sidebar: bool,
+    /// Which view the sidebar shows.
+    pub sidebar_view: SidebarView,
     pub pending_action: Option<PendingAction>,
     pub show_about_modal: bool,
     pub status_message: Option<(String, bool)>, // (message, is_error)
@@ -283,6 +303,10 @@ pub struct TextEditorApp {
     pub git: GitState,
     /// The name typed in the status bar's branch menu.
     pub new_branch_name: String,
+    /// The Source Control view's commit message and open lists.
+    pub scm: ScmUi,
+    /// A git command asking for confirmation.
+    pub git_confirm: Option<GitConfirm>,
     /// When the gutter's change markers were last computed.
     last_marks_at: Option<Instant>,
 }
@@ -316,6 +340,7 @@ impl Default for TextEditorApp {
             active_tab_index: 0,
             explorer: None,
             show_sidebar: false,
+            sidebar_view: SidebarView::Explorer,
             pending_action: None,
             show_about_modal: false,
             status_message: None,
@@ -344,6 +369,8 @@ impl Default for TextEditorApp {
             theme: ThemeId::System,
             git: GitState::default(),
             new_branch_name: String::new(),
+            scm: ScmUi::default(),
+            git_confirm: None,
             last_marks_at: None,
         }
     }
@@ -404,6 +431,7 @@ pub mod shortcuts {
     pub const SAVE_AS: KeyboardShortcut = cmd_shift(Key::S);
     pub const EXIT: KeyboardShortcut = cmd(Key::Q);
     pub const TOGGLE_SIDEBAR: KeyboardShortcut = cmd(Key::B);
+    pub const SOURCE_CONTROL: KeyboardShortcut = cmd_shift(Key::G);
     pub const NEXT_TAB: KeyboardShortcut = cmd(Key::Tab);
     pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
     pub const FIND_IN_FILES: KeyboardShortcut = cmd_shift(Key::F);
@@ -444,6 +472,7 @@ pub enum ShortcutAction {
     SaveAs,
     Exit,
     ToggleSidebar,
+    SourceControl,
     NextTab,
     PrevTab,
     GotoLine,
@@ -479,6 +508,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::OPEN_FOLDER, OpenFolder),
         (shortcuts::NEW_WINDOW, NewWindow),
         (shortcuts::PREV_TAB, PrevTab),
+        (shortcuts::SOURCE_CONTROL, SourceControl),
         (shortcuts::SAVE, Save),
         (shortcuts::OPEN_FILE, OpenFile),
         (shortcuts::NEW_TAB, NewTab),
@@ -641,6 +671,16 @@ impl TextEditorApp {
             .clicked()
         {
             self.toggle_markdown_preview();
+            ui.close();
+        }
+        let scm_label = self.i18n.t("view.source_control");
+        let scm_shortcut = ctx.format_shortcut(&shortcuts::SOURCE_CONTROL);
+        let scm_open = self.show_sidebar && self.sidebar_view == SidebarView::SourceControl;
+        if ui
+            .add(egui::Button::new(scm_label).selected(scm_open).shortcut_text(scm_shortcut))
+            .clicked()
+        {
+            self.toggle_source_control();
             ui.close();
         }
         let console_label = self.i18n.t("view.console");
@@ -1104,7 +1144,8 @@ impl TextEditorApp {
             return;
         }
         self.menu_focus = None;
-        let dialog_open = self.show_about_modal || self.pending_action.is_some();
+        let dialog_open =
+            self.show_about_modal || self.pending_action.is_some() || self.git_confirm.is_some();
         let focus_free = ctx.memory(|m| m.focused().is_none());
         if id == self.editor_id() && !dialog_open && focus_free {
             self.editor_request.focus = true;
@@ -1376,7 +1417,7 @@ impl TextEditorApp {
     /// Runs the action of a keyboard shortcut. Ignored while a dialog waits
     /// for an answer.
     pub fn apply_shortcut(&mut self, ctx: &egui::Context, action: ShortcutAction) {
-        if self.pending_action.is_some() || self.show_about_modal {
+        if self.pending_action.is_some() || self.show_about_modal || self.git_confirm.is_some() {
             return;
         }
         match action {
@@ -1392,7 +1433,8 @@ impl TextEditorApp {
                 self.save_as();
             }
             ShortcutAction::Exit => self.trigger_exit(ctx),
-            ShortcutAction::ToggleSidebar => self.toggle_explorer(),
+            ShortcutAction::ToggleSidebar => self.toggle_sidebar(),
+            ShortcutAction::SourceControl => self.toggle_source_control(),
             ShortcutAction::NextTab => {
                 self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
             }
@@ -1636,6 +1678,9 @@ impl TextEditorApp {
             if op.touches_work_tree() {
                 self.check_files_on_disk();
             }
+            if matches!(op, Op::Commit(_) | Op::CommitAll(_)) && result.is_ok() {
+                self.scm.message.clear();
+            }
             self.status_message = self.git_outcome_message(&op, result);
         }
         for base in self.git.take_bases() {
@@ -1713,7 +1758,7 @@ impl TextEditorApp {
                 let text = match op {
                     Op::Stage(_) | Op::Unstage(_) => return self.status_message.clone(),
                     Op::Discard(_) => self.i18n.t("git.discarded").to_owned(),
-                    Op::Commit(_) => self.i18n.t("git.committed").to_owned(),
+                    Op::Commit(_) | Op::CommitAll(_) => self.i18n.t("git.committed").to_owned(),
                     Op::Fetch => self.i18n.t("git.fetched").to_owned(),
                     Op::Pull => self.i18n.t("git.pulled").to_owned(),
                     Op::Push => self.i18n.t("git.pushed").to_owned(),
@@ -1841,6 +1886,7 @@ impl TextEditorApp {
         self.history.record(folder.clone(), EntryKind::Folder);
         self.explorer = Some(Explorer::new(folder));
         self.show_sidebar = true;
+        self.sidebar_view = SidebarView::Explorer;
         self.status_message = Some((self.i18n.t("msg.folder_opened").to_owned(), false));
     }
 
@@ -1940,7 +1986,85 @@ impl TextEditorApp {
         if self.explorer.is_none() {
             self.trigger_open_folder();
         } else {
-            self.show_sidebar = !self.show_sidebar;
+            self.toggle_view(SidebarView::Explorer);
+        }
+    }
+
+    /// The Activity Bar's Source Control item: shows the view, or hides
+    /// the sidebar when the view is already shown.
+    pub fn toggle_source_control(&mut self) {
+        self.toggle_view(SidebarView::SourceControl);
+    }
+
+    fn toggle_view(&mut self, view: SidebarView) {
+        if self.show_sidebar && self.sidebar_view == view {
+            self.show_sidebar = false;
+        } else {
+            self.show_sidebar = true;
+            self.sidebar_view = view;
+        }
+    }
+
+    /// Ctrl+B: hides the sidebar, or shows it with the view it had. With no
+    /// folder open the Explorer asks for one.
+    pub fn toggle_sidebar(&mut self) {
+        if self.show_sidebar {
+            self.show_sidebar = false;
+        } else if self.sidebar_view == SidebarView::Explorer {
+            self.toggle_explorer();
+        } else {
+            self.show_sidebar = true;
+        }
+    }
+
+    /// Does what the Source Control view asked.
+    fn apply_scm_action(&mut self, ctx: &egui::Context, action: ScmAction) {
+        match action {
+            ScmAction::Run(op) => self.run_git(ctx, op),
+            ScmAction::Discard(changes) => self.git_confirm = Some(GitConfirm::Discard(changes)),
+            ScmAction::CommitAll(message) => self.git_confirm = Some(GitConfirm::CommitAll(message)),
+            ScmAction::Open(path) => self.trigger_open_specific_file(path),
+            ScmAction::Diff { path, .. } => {
+                if path.is_file() {
+                    self.trigger_open_specific_file(path);
+                }
+            }
+            ScmAction::Refresh => self.git.refresh(ctx),
+        }
+    }
+
+    /// Asks before a git command that waits for confirmation.
+    fn show_git_confirm(&mut self, ctx: &egui::Context) {
+        let Some(confirm) = &self.git_confirm else { return };
+        let (title, message, yes) = match confirm {
+            GitConfirm::Discard(changes) => {
+                let message = match changes.as_slice() {
+                    [one] => {
+                        let name = one.path.file_name().unwrap_or_default().to_string_lossy();
+                        self.i18n.tf("scm.discard_one", &[("name", &name)])
+                    }
+                    many => self.i18n.tf("scm.discard_many", &[("count", &many.len().to_string())]),
+                };
+                (self.i18n.t("scm.discard_title"), message, self.i18n.t("scm.discard_confirm"))
+            }
+            GitConfirm::CommitAll(_) => (
+                self.i18n.t("scm.commit_all_title"),
+                self.i18n.t("scm.commit_all_message").to_owned(),
+                self.i18n.t("scm.commit_all_confirm"),
+            ),
+        };
+        let answer = modals::show_confirm_modal(ctx, title, &message, yes, self.i18n.t("unsaved.cancel"));
+        match answer {
+            Some(true) => {
+                let op = match self.git_confirm.take() {
+                    Some(GitConfirm::Discard(changes)) => Op::Discard(changes),
+                    Some(GitConfirm::CommitAll(message)) => Op::CommitAll(message),
+                    None => return,
+                };
+                self.run_git(ctx, op);
+            }
+            Some(false) => self.git_confirm = None,
+            None => {}
         }
     }
 
@@ -2575,7 +2699,10 @@ impl eframe::App for TextEditorApp {
         // border, so egui's separator lines are turned off.
         let side_fill = theme::active(&ctx).sidebar.background;
         let side_frame = egui::Frame::NONE.fill(side_fill);
-        let explorer_open = self.show_sidebar && self.explorer.is_some();
+        let explorer_open =
+            self.show_sidebar && self.sidebar_view == SidebarView::Explorer && self.explorer.is_some();
+        let source_control_open =
+            self.show_sidebar && self.sidebar_view == SidebarView::SourceControl;
         if !self.zen_mode {
             let activity = egui::Panel::left("activity_bar")
                 .exact_size(activity_bar::WIDTH)
@@ -2585,15 +2712,21 @@ impl eframe::App for TextEditorApp {
                 .show(ui, |ui| {
                     let items = activity_bar::ActivityItems {
                         explorer_open,
+                        source_control_open,
                         console_open: self.show_console,
                         explorer_tooltip: self.i18n.t("activity.explorer"),
+                        source_control_tooltip: self.i18n.t("activity.source_control"),
                         console_tooltip: self.i18n.t("activity.console"),
+                        changes: self.git.change_count(),
                     };
                     activity_bar::show(ui, items)
                 })
                 .inner;
             if activity.explorer_clicked {
                 self.toggle_explorer();
+            }
+            if activity.source_control_clicked {
+                self.toggle_source_control();
             }
             if activity.console_clicked {
                 self.toggle_console(&ctx);
@@ -2603,8 +2736,26 @@ impl eframe::App for TextEditorApp {
         let mut file_to_open = None;
         let mut find_in_files = false;
         let active_file = self.active_tab().current_path.clone();
+        let mut scm_action = None;
+        if self.show_sidebar && !self.zen_mode && self.sidebar_view == SidebarView::SourceControl {
+            let folder = self.git_dir();
+            egui::Panel::left("source_control_panel")
+                .resizable(true)
+                .default_size(240.0)
+                .min_size(170.0)
+                .max_size(500.0)
+                .show_separator_line(false)
+                .frame(side_frame)
+                .show(ui, |ui| {
+                    scm_action =
+                        source_control::show(ui, &self.git, &mut self.scm, folder.as_deref(), &self.i18n);
+                });
+        }
+        if let Some(action) = scm_action {
+            self.apply_scm_action(&ctx, action);
+        }
         #[allow(clippy::collapsible_if)]
-        if self.show_sidebar && !self.zen_mode {
+        if self.show_sidebar && !self.zen_mode && self.sidebar_view == SidebarView::Explorer {
             if let Some(explorer) = self.explorer.as_mut() {
                 egui::Panel::left("file_browser_panel")
                     .resizable(true)
@@ -2801,6 +2952,8 @@ impl eframe::App for TextEditorApp {
             if let Some(choice) = modals::show_disk_conflict_modal(&ctx, &name, &self.i18n) {
                 self.resolve_disk_conflict(choice);
             }
+        } else if self.git_confirm.is_some() {
+            self.show_git_confirm(&ctx);
         }
 
         self.return_focus_after_menu(&ctx);
@@ -4284,8 +4437,52 @@ mod tests {
         assert!(text.is_empty(), "the hint never enters the buffer");
     }
 
-    /// The caret's line and column sit at the right end of the status bar,
-    /// once the editor has a caret; the document name stays on the left.
+    #[test]
+    fn test_sidebar_switches_between_explorer_and_source_control() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp {
+            explorer: Some(Explorer::new(std::env::temp_dir())),
+            show_sidebar: true,
+            ..Default::default()
+        };
+
+        app.apply_shortcut(&ctx, ShortcutAction::SourceControl);
+        assert!(app.show_sidebar);
+        assert_eq!(app.sidebar_view, SidebarView::SourceControl);
+        // Ctrl+B hides and brings back the same view.
+        app.apply_shortcut(&ctx, ShortcutAction::ToggleSidebar);
+        assert!(!app.show_sidebar);
+        app.apply_shortcut(&ctx, ShortcutAction::ToggleSidebar);
+        assert!(app.show_sidebar);
+        assert_eq!(app.sidebar_view, SidebarView::SourceControl);
+
+        app.toggle_explorer();
+        assert_eq!(app.sidebar_view, SidebarView::Explorer);
+        assert!(app.show_sidebar);
+        app.toggle_explorer();
+        assert!(!app.show_sidebar);
+    }
+
+    #[test]
+    fn test_ctrl_shift_g_is_source_control_not_goto_line() {
+        let ctx = egui::Context::default();
+        let event = egui::Event::Key {
+            key: egui::Key::G,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        };
+        let input = egui::RawInput {
+            events: vec![event],
+            ..Default::default()
+        };
+        let mut action = None;
+        let mut output = ctx.run_ui(input, |ui| action = ui.ctx().input_mut(consume_shortcut));
+        output.textures_delta.clear();
+        assert_eq!(action, Some(ShortcutAction::SourceControl));
+    }
+
     #[test]
     fn test_status_bar_shows_the_git_branch() {
         let mut app = TextEditorApp::default();
@@ -4352,6 +4549,8 @@ mod tests {
         let _ = fs::remove_dir_all(repo.root());
     }
 
+    /// The caret's line and column sit at the right end of the status bar,
+    /// once the editor has a caret; the document name stays on the left.
     #[test]
     fn test_status_bar_shows_the_caret_position_on_the_right() {
         let mut app = TextEditorApp::default();

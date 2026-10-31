@@ -407,19 +407,19 @@ impl Explorer {
 }
 
 /// Height of the `EXPLORER` title row, level with the tab strip.
-const TITLE_HEIGHT: f32 = tab_bar::TAB_HEIGHT;
-const TITLE_PADDING_X: f32 = 20.0;
+pub(crate) const TITLE_HEIGHT: f32 = tab_bar::TAB_HEIGHT;
+pub(crate) const TITLE_PADDING_X: f32 = 20.0;
 /// Height of the section header and of every tree row.
-const ROW_HEIGHT: f32 = 22.0;
-const ROW_PADDING_X: f32 = 8.0;
+pub(crate) const ROW_HEIGHT: f32 = 22.0;
+pub(crate) const ROW_PADDING_X: f32 = 8.0;
 /// Extra left offset per depth level.
 const INDENT: f32 = 8.0;
-const CHEVRON_WIDTH: f32 = 16.0;
-const BADGE_GAP: f32 = 6.0;
+pub(crate) const CHEVRON_WIDTH: f32 = 16.0;
+pub(crate) const BADGE_GAP: f32 = 6.0;
 /// Room for a git status letter at the end of a row.
 const GIT_MARK_WIDTH: f32 = 10.0;
 /// Side of the Search, Refresh and Collapse All buttons.
-const ACTION_SIZE: f32 = 22.0;
+pub(crate) const ACTION_SIZE: f32 = 22.0;
 
 /// One frame of the sidebar: the file to open, and where each part was drawn.
 #[derive(Clone, Debug)]
@@ -835,7 +835,7 @@ fn paint_row(
 }
 
 /// `text` on one line, cut with `…` where it would pass `max_width`.
-fn elided(
+pub(crate) fn elided(
     ui: &egui::Ui,
     text: String,
     font_id: FontId,
@@ -849,7 +849,7 @@ fn elided(
 
 /// `›` pointing right when collapsed, down when expanded. Drawn as lines,
 /// so it never depends on the bundled fonts.
-fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, expanded: bool, color: Color32) {
+pub(crate) fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, expanded: bool, color: Color32) {
     let stroke = Stroke::new(1.2, color);
     let points = if expanded {
         [vec2(-4.0, -2.0), vec2(0.0, 2.0), vec2(4.0, -2.0)]
@@ -871,7 +871,7 @@ fn paint_search_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32
 }
 
 /// A circular arrow, open at the top right.
-fn paint_refresh_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+pub(crate) fn paint_refresh_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
     use std::f32::consts::PI;
     let stroke = Stroke::new(1.2, color);
     let radius = 5.0;

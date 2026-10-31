@@ -1,9 +1,9 @@
 //! VS Code-style Activity Bar: the icon column at the far left.
 //!
-//! Holds two items, the Explorer and the Console, and only reports clicks:
-//! `app.rs` decides what a click does.
+//! Holds three items, the Explorer, Source Control and the Console, and only
+//! reports clicks: `app.rs` decides what a click does.
 
-use eframe::egui::{self, Color32, CornerRadius, Rect, Sense, Stroke, Vec2, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
 use crate::file_browser::SidebarPalette;
 use crate::theme;
@@ -17,10 +17,13 @@ const ACCENT_WIDTH: f32 = 2.0;
 #[derive(Clone, Copy, Debug)]
 pub struct ActivityBarResponse {
     pub explorer_clicked: bool,
+    pub source_control_clicked: bool,
     pub console_clicked: bool,
     // Only the tests read where the items were drawn.
     #[cfg_attr(not(test), allow(dead_code))]
     pub explorer_rect: Rect,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub source_control_rect: Rect,
     #[cfg_attr(not(test), allow(dead_code))]
     pub console_rect: Rect,
 }
@@ -29,9 +32,13 @@ pub struct ActivityBarResponse {
 #[derive(Clone, Copy, Debug)]
 pub struct ActivityItems<'a> {
     pub explorer_open: bool,
+    pub source_control_open: bool,
     pub console_open: bool,
     pub explorer_tooltip: &'a str,
+    pub source_control_tooltip: &'a str,
     pub console_tooltip: &'a str,
+    /// Changed files, shown in a badge on the Source Control item.
+    pub changes: usize,
 }
 
 /// Draws the bar down the available height. An item whose view is open is
@@ -56,6 +63,16 @@ pub fn show(ui: &mut egui::Ui, items: ActivityItems) -> ActivityBarResponse {
         items.explorer_tooltip,
         paint_explorer_icon,
     );
+    let (source_control_rect, source_control_clicked) = item(
+        ui,
+        &palette,
+        items.source_control_open,
+        items.source_control_tooltip,
+        paint_source_control_icon,
+    );
+    if items.changes > 0 {
+        paint_badge(ui.painter(), &palette, source_control_rect, items.changes);
+    }
     let (console_rect, console_clicked) = item(
         ui,
         &palette,
@@ -65,8 +82,10 @@ pub fn show(ui: &mut egui::Ui, items: ActivityItems) -> ActivityBarResponse {
     );
     ActivityBarResponse {
         explorer_clicked,
+        source_control_clicked,
         console_clicked,
         explorer_rect,
+        source_control_rect,
         console_rect,
     }
 }
@@ -97,6 +116,46 @@ fn item(
     };
     paint_icon(painter, rect.center(), color);
     (rect, response.clicked())
+}
+
+/// The number of changes in a pill at the bottom right of `item`.
+fn paint_badge(painter: &egui::Painter, palette: &SidebarPalette, item: Rect, count: usize) {
+    let text = if count > 99 { "99+".to_owned() } else { count.to_string() };
+    let galley = painter.layout_no_wrap(text, FontId::proportional(9.0), Color32::WHITE);
+    let size = vec2((galley.size().x + 8.0).max(16.0), 16.0);
+    let badge = Rect::from_center_size(item.center() + vec2(9.0, 8.0), size);
+    painter.rect_filled(badge, CornerRadius::same(8), palette.accent);
+    painter.galley(
+        Align2::CENTER_CENTER.anchor_size(badge.center(), galley.size()).min,
+        galley,
+        Color32::WHITE,
+    );
+}
+
+/// Git's branch symbol: two commits on a line, a third branching off.
+fn paint_source_control_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let top = center + vec2(-4.0, -7.0);
+    let bottom = center + vec2(-4.0, 7.0);
+    let side = center + vec2(5.0, -4.0);
+    for c in [top, bottom, side] {
+        painter.circle_stroke(c, 2.2, stroke);
+    }
+    painter.line_segment([top + vec2(0.0, 2.2), bottom - vec2(0.0, 2.2)], stroke);
+    // From the side commit down and across into the line.
+    let points: Vec<egui::Pos2> = (0..=12)
+        .map(|i| {
+            let t = i as f32 / 12.0;
+            let start = side + vec2(0.0, 2.2);
+            let end = center + vec2(-4.0, 3.5);
+            let control = pos2(side.x, end.y);
+            // Quadratic Bézier.
+            let a = start.lerp(control, t);
+            let b = control.lerp(end, t);
+            a.lerp(b, t)
+        })
+        .collect();
+    painter.line(points, stroke);
 }
 
 /// A window with a `>` prompt and an underscore caret.
@@ -159,18 +218,29 @@ mod tests {
         explorer_open: bool,
         console_open: bool,
     ) -> (ActivityBarResponse, Vec<egui::epaint::ClippedShape>) {
+        let items = ActivityItems {
+            explorer_open,
+            source_control_open: false,
+            console_open,
+            explorer_tooltip: "Explorer",
+            source_control_tooltip: "Source Control",
+            console_tooltip: "Console",
+            changes: 0,
+        };
+        run_with(ctx, events, items)
+    }
+
+    fn run_with(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        items: ActivityItems,
+    ) -> (ActivityBarResponse, Vec<egui::epaint::ClippedShape>) {
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(WIDTH, 600.0))),
             events,
             ..Default::default()
         };
         let mut response = None;
-        let items = ActivityItems {
-            explorer_open,
-            console_open,
-            explorer_tooltip: "Explorer",
-            console_tooltip: "Console",
-        };
         let mut output = ctx.run_ui(input, |ui| response = Some(show(ui, items)));
         output.textures_delta.clear();
         (response.expect("show ran"), output.shapes)
@@ -199,9 +269,11 @@ mod tests {
         let ctx = egui::Context::default();
         let (bar, _) = run(&ctx, Vec::new(), false, false);
         assert_eq!(bar.explorer_rect.size(), Vec2::splat(WIDTH));
+        assert_eq!(bar.source_control_rect.size(), Vec2::splat(WIDTH));
         assert_eq!(bar.console_rect.size(), Vec2::splat(WIDTH));
-        assert_eq!(bar.console_rect.top(), bar.explorer_rect.bottom());
-        assert!(!bar.explorer_clicked && !bar.console_clicked);
+        assert_eq!(bar.source_control_rect.top(), bar.explorer_rect.bottom());
+        assert_eq!(bar.console_rect.top(), bar.source_control_rect.bottom());
+        assert!(!bar.explorer_clicked && !bar.source_control_clicked && !bar.console_clicked);
     }
 
     #[test]
@@ -212,6 +284,37 @@ mod tests {
         assert!(clicked.explorer_clicked && !clicked.console_clicked);
         let (clicked, _) = run(&ctx, click(bar.console_rect.center()), false, false);
         assert!(clicked.console_clicked && !clicked.explorer_clicked);
+        let (clicked, _) = run(&ctx, click(bar.source_control_rect.center()), false, false);
+        assert!(clicked.source_control_clicked && !clicked.explorer_clicked && !clicked.console_clicked);
+    }
+
+    #[test]
+    fn test_source_control_badge_counts_changes() {
+        let ctx = egui::Context::default();
+        let items = |changes| ActivityItems {
+            explorer_open: false,
+            source_control_open: true,
+            console_open: false,
+            explorer_tooltip: "",
+            source_control_tooltip: "",
+            console_tooltip: "",
+            changes,
+        };
+        let texts = |shapes: &[egui::epaint::ClippedShape]| -> Vec<String> {
+            shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (_, shapes) = run_with(&ctx, Vec::new(), items(0));
+        assert!(texts(&shapes).is_empty());
+        let (_, shapes) = run_with(&ctx, Vec::new(), items(7));
+        assert_eq!(texts(&shapes), ["7"]);
+        let (_, shapes) = run_with(&ctx, Vec::new(), items(250));
+        assert_eq!(texts(&shapes), ["99+"]);
     }
 
     #[test]

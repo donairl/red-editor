@@ -34,6 +34,7 @@ impl LineMarks {
         self.lines.get(line.checked_sub(1)?).copied().flatten()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_empty(&self) -> bool {
         self.lines.iter().all(Option::is_none)
     }

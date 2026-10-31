@@ -70,6 +70,38 @@ pub fn show_unsaved_changes_modal(
     response
 }
 
+/// Asks `message` with a confirm and a cancel button: `Some(true)` once
+/// confirmed, `Some(false)` once cancelled (Escape too).
+pub fn show_confirm_modal(
+    ctx: &egui::Context,
+    title: &str,
+    message: &str,
+    confirm: &str,
+    cancel: &str,
+) -> Option<bool> {
+    let mut answer = None;
+    egui::Window::new(title)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label(message);
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui.button(confirm).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(cancel).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        answer = Some(false);
+    }
+    answer
+}
+
 /// What to keep when a file with unsaved edits changed on disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiskChoice {

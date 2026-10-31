@@ -267,6 +267,11 @@ impl Repo {
         self.git_paths(&["add", "-A"], paths).map(drop)
     }
 
+    /// Stages every change in the work tree, new files included.
+    pub fn stage_all(&self) -> Result<(), GitError> {
+        self.git(&["add", "-A"]).map(drop)
+    }
+
     pub fn unstage(&self, paths: &[PathBuf]) -> Result<(), GitError> {
         match self.git_paths(&["restore", "--staged"], paths) {
             Ok(_) => Ok(()),
