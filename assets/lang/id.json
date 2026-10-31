@@ -179,5 +179,10 @@
   "scm.discard_confirm": "Buang",
   "scm.commit_all_title": "Belum Ada yang Di-stage",
   "scm.commit_all_message": "Tidak ada perubahan yang di-stage. Stage semua perubahan lalu commit?",
-  "scm.commit_all_confirm": "Stage Semua & Commit"
+  "scm.commit_all_confirm": "Stage Semua & Commit",
+
+  "scm.diff_staged": "(Staged)",
+  "scm.diff_working": "(Working Tree)",
+  "scm.diff_close": "Tutup diff",
+  "scm.diff_empty": "Tidak ada perbedaan."
 }

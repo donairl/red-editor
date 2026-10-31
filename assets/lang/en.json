@@ -179,5 +179,10 @@
   "scm.discard_confirm": "Discard",
   "scm.commit_all_title": "Nothing Staged",
   "scm.commit_all_message": "There are no staged changes. Stage all changes and commit them?",
-  "scm.commit_all_confirm": "Stage All & Commit"
+  "scm.commit_all_confirm": "Stage All & Commit",
+
+  "scm.diff_staged": "(Staged)",
+  "scm.diff_working": "(Working Tree)",
+  "scm.diff_close": "Close diff",
+  "scm.diff_empty": "No differences."
 }

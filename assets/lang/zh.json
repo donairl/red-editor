@@ -179,5 +179,10 @@
   "scm.discard_confirm": "放弃",
   "scm.commit_all_title": "没有暂存的更改",
   "scm.commit_all_message": "没有暂存的更改。是否暂存所有更改并提交？",
-  "scm.commit_all_confirm": "全部暂存并提交"
+  "scm.commit_all_confirm": "全部暂存并提交",
+
+  "scm.diff_staged": "（已暂存）",
+  "scm.diff_working": "（工作区）",
+  "scm.diff_close": "关闭差异",
+  "scm.diff_empty": "没有差异。"
 }

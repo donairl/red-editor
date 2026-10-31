@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 use eframe::egui;
 
-use crate::git::{Branch, FileChange, GitError, Kind, Repo, RepoStatus};
+use crate::git::{Branch, DiffLine, FileChange, GitError, Kind, Repo, RepoStatus};
 
 /// A command that changes the repository. One runs at a time.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +71,22 @@ enum Message {
         head: Option<String>,
         text: Option<String>,
     },
+    Diff {
+        path: PathBuf,
+        staged: bool,
+        lines: Result<Vec<DiffLine>, GitError>,
+    },
+}
+
+/// The changes of one file, shown beside the editor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileDiff {
+    pub path: PathBuf,
+    /// Staged changes against HEAD, else work-tree changes against the
+    /// index.
+    pub staged: bool,
+    /// `None` until git first answers.
+    pub lines: Option<Result<Vec<DiffLine>, GitError>>,
 }
 
 /// HEAD's copy of a file, for the gutter's change markers.
@@ -160,6 +176,8 @@ pub struct GitState {
     /// Bases asked for and not delivered yet.
     base_requests: HashSet<PathBuf>,
     bases: Vec<Base>,
+    /// The diff shown beside the editor; read again after each refresh.
+    diff: Option<FileDiff>,
 }
 
 impl Default for GitState {
@@ -182,6 +200,7 @@ impl Default for GitState {
             stamps: Vec::new(),
             base_requests: HashSet::new(),
             bases: Vec::new(),
+            diff: None,
         }
     }
 }
@@ -308,6 +327,45 @@ impl GitState {
         });
     }
 
+    pub fn diff(&self) -> Option<&FileDiff> {
+        self.diff.as_ref()
+    }
+
+    /// Shows the staged or unstaged changes of `path` beside the editor.
+    pub fn show_diff(&mut self, ctx: &egui::Context, path: PathBuf, staged: bool) {
+        self.diff = Some(FileDiff {
+            path,
+            staged,
+            lines: None,
+        });
+        self.load_diff(ctx);
+    }
+
+    pub fn close_diff(&mut self) {
+        self.diff = None;
+    }
+
+    /// Reads the shown diff again, keeping the old lines until it arrives.
+    fn load_diff(&mut self, ctx: &egui::Context) {
+        let (Some(repo), Some(diff)) = (self.repo.clone(), &self.diff) else { return };
+        let (path, staged) = (diff.path.clone(), diff.staged);
+        let untracked = !staged
+            && self
+                .change(&path)
+                .is_some_and(|c| c.unstaged == Some(Kind::Untracked));
+        let sender = self.sender.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let lines = if untracked {
+                repo.diff_new_file(&path)
+            } else {
+                repo.diff(&path, staged)
+            };
+            let _ = sender.send(Message::Diff { path, staged, lines });
+            ctx.request_repaint();
+        });
+    }
+
     pub fn take_bases(&mut self) -> Vec<Base> {
         std::mem::take(&mut self.bases)
     }
@@ -342,6 +400,7 @@ impl GitState {
                             }
                             self.status = Some(status);
                             self.branches = branches;
+                            self.load_diff(ctx);
                         }
                         // A repository deleted under the editor, most likely.
                         Err(_) => {
@@ -367,6 +426,14 @@ impl GitState {
                 Message::Base { path, head, text } => {
                     self.base_requests.remove(&path);
                     self.bases.push(Base { path, head, text });
+                }
+                Message::Diff { path, staged, lines } => {
+                    if let Some(diff) = &mut self.diff
+                        && diff.path == path
+                        && diff.staged == staged
+                    {
+                        diff.lines = Some(lines);
+                    }
                 }
             }
         }

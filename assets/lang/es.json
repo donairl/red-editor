@@ -179,5 +179,10 @@
   "scm.discard_confirm": "Descartar",
   "scm.commit_all_title": "Nada preparado",
   "scm.commit_all_message": "No hay cambios preparados. ¿Preparar todos los cambios y hacer commit?",
-  "scm.commit_all_confirm": "Preparar todo y hacer commit"
+  "scm.commit_all_confirm": "Preparar todo y hacer commit",
+
+  "scm.diff_staged": "(Preparado)",
+  "scm.diff_working": "(Árbol de trabajo)",
+  "scm.diff_close": "Cerrar diff",
+  "scm.diff_empty": "Sin diferencias."
 }

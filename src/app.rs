@@ -22,7 +22,7 @@ use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
 use crate::prettify;
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
-use crate::source_control::{self, ScmAction, ScmUi};
+use crate::source_control::{self, DiffAction, ScmAction, ScmUi};
 use crate::symbols::{self, PickerAction, SymbolPicker};
 use crate::tab_bar;
 use crate::terminal::{self, Terminal};
@@ -1205,8 +1205,12 @@ impl TextEditorApp {
         }
     }
 
+    /// Whether the Markdown preview is shown; a git diff takes its place.
     fn previewing(&self) -> bool {
-        self.show_markdown_preview && self.preview_available() && !self.zen_mode
+        self.show_markdown_preview
+            && self.preview_available()
+            && !self.zen_mode
+            && self.git.diff().is_none()
     }
 
     /// Moves the preview, and the editor with it, to the next or previous
@@ -2024,10 +2028,11 @@ impl TextEditorApp {
             ScmAction::Discard(changes) => self.git_confirm = Some(GitConfirm::Discard(changes)),
             ScmAction::CommitAll(message) => self.git_confirm = Some(GitConfirm::CommitAll(message)),
             ScmAction::Open(path) => self.trigger_open_specific_file(path),
-            ScmAction::Diff { path, .. } => {
+            ScmAction::Diff { path, staged } => {
                 if path.is_file() {
-                    self.trigger_open_specific_file(path);
+                    self.trigger_open_specific_file(path.clone());
                 }
+                self.git.show_diff(ctx, path, staged);
             }
             ScmAction::Refresh => self.git.refresh(ctx),
         }
@@ -2790,6 +2795,33 @@ impl eframe::App for TextEditorApp {
         // after the side panels so it does not run under them.
         if self.show_console && !self.zen_mode {
             self.show_console_panel(ui);
+        }
+
+        // A file's git diff, right of the editor, in place of the Markdown
+        // preview.
+        let mut diff_action = None;
+        if !self.zen_mode
+            && let Some(diff) = self.git.diff()
+        {
+            let half = ui.available_width() / 2.0;
+            egui::Panel::right("git_diff")
+                .resizable(true)
+                .default_size(half)
+                .min_size(200.0)
+                .show(ui, |ui| {
+                    diff_action = source_control::show_diff(ui, diff, &self.i18n);
+                });
+        }
+        match diff_action {
+            Some(DiffAction::Close) => self.git.close_diff(),
+            Some(DiffAction::Goto(line)) => {
+                let path = self.git.diff().map(|d| d.path.clone());
+                if let Some(path) = path.filter(|p| self.active_tab().current_path.as_ref() != Some(p)) {
+                    self.trigger_open_specific_file(path);
+                }
+                self.goto_line(line);
+            }
+            None => {}
         }
 
         // Markdown preview, right of the editor. Declared before the central
@@ -4522,6 +4554,37 @@ mod tests {
             app.git.status.as_ref().map(|s| (&s.head, &s.branch)),
             app.active_tab().git_base
         );
+    }
+
+    #[test]
+    fn test_clicking_a_change_opens_the_file_and_its_diff() {
+        let Some(repo) = crate::git::temp_repo("app_diff") else { return };
+        let file = repo.root().join("a.txt");
+        fs::write(&file, "one\n").unwrap();
+        repo.stage(std::slice::from_ref(&file)).unwrap();
+        repo.commit("first").unwrap();
+        fs::write(&file, "one\ntwo\n").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp {
+            explorer: Some(Explorer::new(repo.root().to_path_buf())),
+            ..Default::default()
+        };
+        poll_git_until(&mut app, &ctx, |app| app.git.change_count() == 1);
+        app.apply_scm_action(&ctx, ScmAction::Diff { path: file.clone(), staged: false });
+        assert_eq!(app.active_tab().current_path.as_ref(), Some(&file));
+        assert!(!app.previewing());
+        poll_git_until(&mut app, &ctx, |app| app.git.diff().is_some_and(|d| d.lines.is_some()));
+        let diff = app.git.diff().unwrap();
+        let lines = diff.lines.as_ref().unwrap().as_ref().unwrap();
+        assert!(lines.iter().any(|l| l.kind == crate::git::DiffKind::Added && l.text == "two"));
+
+        // Staging it from the panel moves it to Staged Changes.
+        app.apply_scm_action(&ctx, ScmAction::Run(Op::Stage(vec![file.clone()])));
+        poll_git_until(&mut app, &ctx, |app| {
+            app.git.busy().is_none() && app.git.change(&file).is_some_and(|c| c.staged.is_some())
+        });
+        let _ = fs::remove_dir_all(repo.root());
     }
 
     #[test]

@@ -3,6 +3,8 @@
 //!
 //! Like the Explorer it only reports what was asked: `app.rs` runs the git
 //! commands and asks before anything that cannot be undone.
+//!
+//! Also draws the diff panel a click on a file opens beside the editor.
 
 use std::path::{Path, PathBuf};
 
@@ -12,8 +14,8 @@ use crate::file_browser::{
     self, ACTION_SIZE, BADGE_GAP, CHEVRON_WIDTH, ROW_HEIGHT, ROW_PADDING_X, SidebarPalette,
     TITLE_HEIGHT, TITLE_PADDING_X,
 };
-use crate::git::{FileChange, GitError, Kind};
-use crate::git_worker::{GitState, Op};
+use crate::git::{DiffKind, FileChange, GitError, Kind};
+use crate::git_worker::{FileDiff, GitState, Op};
 use crate::i18n::I18n;
 use crate::theme;
 
@@ -534,6 +536,144 @@ fn paint_file_row(
     }
 }
 
+/// What the user asked of the diff panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffAction {
+    Close,
+    /// Go to this 1-based line of the file.
+    Goto(usize),
+}
+
+/// The changes of one file as a unified diff: old and new line numbers,
+/// then the line on a green (added) or red (removed) ground. A click on a
+/// line asks to go to it in the editor.
+pub fn show_diff(ui: &mut egui::Ui, diff: &FileDiff, i18n: &I18n) -> Option<DiffAction> {
+    let theme = theme::active(ui.ctx());
+    let palette = theme.sidebar;
+    let mut action = None;
+
+    ui.horizontal(|ui| {
+        let name = diff
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let side = i18n.t(if diff.staged { "scm.diff_staged" } else { "scm.diff_working" });
+        ui.label(egui::RichText::new(name).strong());
+        ui.label(egui::RichText::new(side).weak());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add(egui::Button::new("×").frame(false))
+                .on_hover_text(i18n.t("scm.diff_close"))
+                .clicked()
+            {
+                action = Some(DiffAction::Close);
+            }
+        });
+    });
+    ui.separator();
+
+    let lines = match &diff.lines {
+        None => {
+            ui.spinner();
+            return action;
+        }
+        Some(Err(e)) => {
+            ui.colored_label(palette.git_deleted, e.to_string());
+            return action;
+        }
+        Some(Ok(lines)) if lines.is_empty() => {
+            ui.weak(i18n.t("scm.diff_empty"));
+            return action;
+        }
+        Some(Ok(lines)) => lines,
+    };
+
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let row_height = ui.fonts_mut(|f| f.row_height(&font)) + 2.0;
+    let digit = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
+    let widest = lines.iter().filter_map(|l| l.old.max(l.new)).max().unwrap_or(1);
+    let number_width = (widest.ilog10() as f32 + 1.0) * digit + 8.0;
+    let added_bg = theme.gutter.added.gamma_multiply(0.18);
+    let removed_bg = theme.gutter.deleted.gamma_multiply(0.18);
+    let dim = palette.icon_inactive;
+    let fg = palette.foreground;
+
+    egui::ScrollArea::both()
+        .id_salt("git_diff_lines")
+        .auto_shrink([false, false])
+        .show_rows(ui, row_height, lines.len(), |ui, range| {
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            let start = range.start;
+            for (index, line) in lines[range].iter().enumerate() {
+                let text_x = 2.0 * number_width + 16.0;
+                let text_width = ui.fonts_mut(|f| {
+                    f.layout_no_wrap(line.text.clone(), font.clone(), fg).size().x
+                });
+                let width = ui.available_width().max(text_x + text_width + 8.0);
+                let (rect, response) = ui.allocate_exact_size(vec2(width, row_height), Sense::click());
+                let painter = ui.painter();
+                let (bg, sign) = match line.kind {
+                    DiffKind::Added => (Some(added_bg), "+"),
+                    DiffKind::Removed => (Some(removed_bg), "-"),
+                    DiffKind::Hunk => (Some(palette.row_hover), ""),
+                    DiffKind::Context => (None, ""),
+                };
+                if let Some(bg) = bg {
+                    painter.rect_filled(rect, CornerRadius::ZERO, bg);
+                }
+                if response.hovered() && line.kind != DiffKind::Hunk {
+                    painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, palette.border), egui::StrokeKind::Inside);
+                }
+                let y = rect.center().y;
+                let number = |n: Option<usize>, right: f32| {
+                    if let Some(n) = n {
+                        painter.text(pos2(right, y), Align2::RIGHT_CENTER, n.to_string(), font.clone(), dim);
+                    }
+                };
+                number(line.old, rect.left() + number_width);
+                number(line.new, rect.left() + 2.0 * number_width);
+                painter.text(
+                    pos2(rect.left() + 2.0 * number_width + 6.0, y),
+                    Align2::LEFT_CENTER,
+                    sign,
+                    font.clone(),
+                    dim,
+                );
+                let color = if line.kind == DiffKind::Hunk { dim } else { fg };
+                painter.text(
+                    pos2(rect.left() + text_x, y),
+                    Align2::LEFT_CENTER,
+                    &line.text,
+                    font.clone(),
+                    color,
+                );
+                if response.clicked()
+                    && let Some(target) = goto_target(lines, start + index)
+                {
+                    action = Some(DiffAction::Goto(target));
+                }
+            }
+        });
+    action
+}
+
+/// The line of the new file a click on `lines[index]` goes to: its own,
+/// or for a removed line the one now in its place.
+fn goto_target(lines: &[crate::git::DiffLine], index: usize) -> Option<usize> {
+    let line = &lines[index];
+    match line.kind {
+        DiffKind::Hunk => None,
+        DiffKind::Removed => lines[index..]
+            .iter()
+            .take_while(|l| l.kind != DiffKind::Hunk)
+            .find_map(|l| l.new)
+            .or_else(|| lines[..index].iter().rev().find_map(|l| l.new).map(|n| n + 1))
+            .or(Some(1)),
+        _ => line.new,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,6 +787,16 @@ mod tests {
         let (action, _) = frame(&ctx, &git, &mut scm, click(commit.center()));
         assert_eq!(action, Some(ScmAction::CommitAll("fix things".into())));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_removed_lines_go_to_the_line_now_in_their_place() {
+        let lines = crate::git::parse_diff("@@ -1,4 +1,3 @@\n a\n-b\n-c\n d\n+e\n@@ -9,1 +8,0 @@\n-z\n");
+        let targets: Vec<_> = (0..lines.len()).map(|i| goto_target(&lines, i)).collect();
+        assert_eq!(
+            targets,
+            [None, Some(1), Some(2), Some(2), Some(2), Some(3), None, Some(4)]
+        );
     }
 
     #[test]

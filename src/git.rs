@@ -356,6 +356,26 @@ impl Repo {
         let out = self.git_paths(&args, &[path.to_path_buf()])?;
         Ok(parse_diff(&out))
     }
+
+    /// A file git does not track yet, as a diff adding all of it.
+    pub fn diff_new_file(&self, path: &Path) -> Result<Vec<DiffLine>, GitError> {
+        let text = std::fs::read(path)
+            .map_err(|e| GitError::Failed(format!("{}: {e}", path.display())))?;
+        let text = String::from_utf8_lossy(&text);
+        let mut lines = vec![DiffLine {
+            kind: DiffKind::Hunk,
+            old: None,
+            new: None,
+            text: format!("@@ -0,0 +1,{} @@", text.lines().count()),
+        }];
+        lines.extend(text.lines().enumerate().map(|(i, line)| DiffLine {
+            kind: DiffKind::Added,
+            old: None,
+            new: Some(i + 1),
+            text: line.to_owned(),
+        }));
+        Ok(lines)
+    }
 }
 
 /// `top`, git's spelling of the work tree holding `dir`, spelled as an
@@ -764,11 +784,22 @@ mod tests {
         assert_eq!(change.unstaged, Some(Kind::Modified));
         let diff = repo.diff(&file, false).unwrap();
         assert!(diff.iter().any(|l| l.kind == DiffKind::Added && l.text == "two"));
+        assert!(repo.diff(&file, true).unwrap().is_empty(), "nothing staged");
         repo.discard(&[change]).unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "one\n");
 
         let stray = root.join("stray.txt");
-        fs::write(&stray, "x").unwrap();
+        fs::write(&stray, "x\ny").unwrap();
+        let added = repo.diff_new_file(&stray).unwrap();
+        let added: Vec<_> = added.iter().map(|l| (l.kind, l.new, l.text.as_str())).collect();
+        assert_eq!(
+            added,
+            [
+                (DiffKind::Hunk, None, "@@ -0,0 +1,2 @@"),
+                (DiffKind::Added, Some(1), "x"),
+                (DiffKind::Added, Some(2), "y"),
+            ]
+        );
         let untracked = repo.status().unwrap().files;
         repo.discard(&untracked).unwrap();
         assert!(!stray.exists());
