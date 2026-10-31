@@ -239,6 +239,10 @@ pub enum GitConfirm {
     Discard(Vec<FileChange>),
     /// Nothing is staged: stage everything, then commit this message.
     CommitAll(String),
+    /// Check a commit out, detaching HEAD.
+    Checkout(String),
+    /// Make a file what it was in a commit.
+    RestoreFile { hash: String, path: PathBuf },
 }
 
 pub struct TextEditorApp {
@@ -1776,6 +1780,10 @@ impl TextEditorApp {
                     Op::Switch(b) => self.i18n.tf("git.switched", &[("branch", b)]),
                     Op::CreateBranch(b) => self.i18n.tf("git.branch_created", &[("branch", b)]),
                     Op::Init(_) => self.i18n.t("git.initialized").to_owned(),
+                    Op::RestoreFile { .. } => self.i18n.t("history.restored").to_owned(),
+                    Op::Checkout(hash) => {
+                        self.i18n.tf("history.checked_out", &[("hash", &hash[..hash.len().min(7)])])
+                    }
                 };
                 (text, false)
             }
@@ -2035,13 +2043,17 @@ impl TextEditorApp {
             ScmAction::Discard(changes) => self.git_confirm = Some(GitConfirm::Discard(changes)),
             ScmAction::CommitAll(message) => self.git_confirm = Some(GitConfirm::CommitAll(message)),
             ScmAction::Open(path) => self.trigger_open_specific_file(path),
-            ScmAction::Diff { path, staged } => {
+            ScmAction::Diff { path, source } => {
                 if path.is_file() {
                     self.trigger_open_specific_file(path.clone());
                 }
-                self.git.show_diff(ctx, path, staged);
+                self.git.show_diff(ctx, path, source);
             }
             ScmAction::Refresh => self.git.refresh(ctx),
+            ScmAction::LoadMoreLog => self.git.load_more_log(ctx),
+            ScmAction::ExpandCommit(hash) => self.git.log.expanded = hash,
+            ScmAction::ClearHistoryFilter => self.git.load_log(ctx, None),
+            ScmAction::Checkout(hash) => self.git_confirm = Some(GitConfirm::Checkout(hash)),
             ScmAction::OpenConsole => {
                 self.scm.auth_failed = false;
                 if !self.show_console {
@@ -2070,6 +2082,22 @@ impl TextEditorApp {
                 self.i18n.t("scm.commit_all_message").to_owned(),
                 self.i18n.t("scm.commit_all_confirm"),
             ),
+            GitConfirm::Checkout(hash) => (
+                self.i18n.t("history.checkout"),
+                self.i18n.tf("history.checkout_message", &[("hash", &hash[..hash.len().min(7)])]),
+                self.i18n.t("history.checkout_confirm"),
+            ),
+            GitConfirm::RestoreFile { hash, path } => {
+                let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                (
+                    self.i18n.t("history.restore"),
+                    self.i18n.tf(
+                        "history.restore_message",
+                        &[("name", &name), ("hash", &hash[..hash.len().min(7)])],
+                    ),
+                    self.i18n.t("history.restore_confirm"),
+                )
+            }
         };
         let answer = modals::show_confirm_modal(ctx, title, &message, yes, self.i18n.t("unsaved.cancel"));
         match answer {
@@ -2077,6 +2105,8 @@ impl TextEditorApp {
                 let op = match self.git_confirm.take() {
                     Some(GitConfirm::Discard(changes)) => Op::Discard(changes),
                     Some(GitConfirm::CommitAll(message)) => Op::CommitAll(message),
+                    Some(GitConfirm::Checkout(hash)) => Op::Checkout(hash),
+                    Some(GitConfirm::RestoreFile { hash, path }) => Op::RestoreFile { hash, path },
                     None => return,
                 };
                 self.run_git(ctx, op);
@@ -2765,8 +2795,13 @@ impl eframe::App for TextEditorApp {
                 .show_separator_line(false)
                 .frame(side_frame)
                 .show(ui, |ui| {
-                    scm_action =
-                        source_control::show(ui, &self.git, &mut self.scm, folder.as_deref(), &self.i18n);
+                    scm_action = source_control::show(
+                        ui,
+                        &mut self.git,
+                        &mut self.scm,
+                        folder.as_deref(),
+                        &self.i18n,
+                    );
                 });
         }
         if let Some(action) = scm_action {
@@ -2827,6 +2862,9 @@ impl eframe::App for TextEditorApp {
         }
         match diff_action {
             Some(DiffAction::Close) => self.git.close_diff(),
+            Some(DiffAction::Restore { hash, path }) => {
+                self.git_confirm = Some(GitConfirm::RestoreFile { hash, path });
+            }
             Some(DiffAction::Goto(line)) => {
                 let path = self.git.diff().map(|d| d.path.clone());
                 if let Some(path) = path.filter(|p| self.active_tab().current_path.as_ref() != Some(p)) {
@@ -4584,7 +4622,10 @@ mod tests {
             ..Default::default()
         };
         poll_git_until(&mut app, &ctx, |app| app.git.change_count() == 1);
-        app.apply_scm_action(&ctx, ScmAction::Diff { path: file.clone(), staged: false });
+        app.apply_scm_action(
+            &ctx,
+            ScmAction::Diff { path: file.clone(), source: crate::git_worker::DiffSource::WorkTree },
+        );
         assert_eq!(app.active_tab().current_path.as_ref(), Some(&file));
         assert!(!app.previewing());
         poll_git_until(&mut app, &ctx, |app| app.git.diff().is_some_and(|d| d.lines.is_some()));

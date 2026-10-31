@@ -187,5 +187,19 @@
   "scm.diff_empty": "Sin diferencias.",
 
   "scm.open_console": "Abrir consola",
-  "git.pull_diverged": "La rama se ha separado de su upstream. Haz merge o rebase en la Consola."
+  "git.pull_diverged": "La rama se ha separado de su upstream. Haz merge o rebase en la Consola.",
+
+  "history.commits": "Commits",
+  "history.no_commits": "Aún no hay commits.",
+  "history.load_more": "Cargar 100 más…",
+  "history.clear_filter": "Mostrar todos los commits",
+  "history.checkout": "Hacer checkout del commit",
+  "history.checkout_message": "¿Hacer checkout del commit {hash}? HEAD quedará separado; vuelve con el menú de ramas de la barra de estado.",
+  "history.checkout_confirm": "Checkout",
+  "history.checked_out": "Checkout de {hash} (HEAD separado).",
+  "history.restore": "Restaurar esta versión",
+  "history.restore_tooltip": "Dejar el archivo del árbol de trabajo como en este commit",
+  "history.restore_message": "¿Restaurar {name} a su versión del commit {hash}? Los cambios sin commit del archivo se pierden.",
+  "history.restore_confirm": "Restaurar",
+  "history.restored": "Archivo restaurado."
 }

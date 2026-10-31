@@ -187,5 +187,19 @@
   "scm.diff_empty": "No differences.",
 
   "scm.open_console": "Open Console",
-  "git.pull_diverged": "The branch has diverged from its upstream. Merge or rebase in the Console."
+  "git.pull_diverged": "The branch has diverged from its upstream. Merge or rebase in the Console.",
+
+  "history.commits": "Commits",
+  "history.no_commits": "No commits yet.",
+  "history.load_more": "Load 100 more…",
+  "history.clear_filter": "Show all commits",
+  "history.checkout": "Checkout Commit",
+  "history.checkout_message": "Check out commit {hash}? HEAD becomes detached; return through the branch menu in the status bar.",
+  "history.checkout_confirm": "Checkout",
+  "history.checked_out": "Checked out {hash} (detached HEAD).",
+  "history.restore": "Restore This Version",
+  "history.restore_tooltip": "Make the work-tree file what it was in this commit",
+  "history.restore_message": "Restore {name} to its version in commit {hash}? Uncommitted changes to the file are lost.",
+  "history.restore_confirm": "Restore",
+  "history.restored": "File restored."
 }

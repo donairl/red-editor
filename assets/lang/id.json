@@ -187,5 +187,19 @@
   "scm.diff_empty": "Tidak ada perbedaan.",
 
   "scm.open_console": "Buka Console",
-  "git.pull_diverged": "Branch sudah bercabang dari upstream-nya. Lakukan merge atau rebase di Console."
+  "git.pull_diverged": "Branch sudah bercabang dari upstream-nya. Lakukan merge atau rebase di Console.",
+
+  "history.commits": "Commit",
+  "history.no_commits": "Belum ada commit.",
+  "history.load_more": "Muat 100 lagi…",
+  "history.clear_filter": "Tampilkan semua commit",
+  "history.checkout": "Checkout Commit",
+  "history.checkout_message": "Checkout commit {hash}? HEAD akan terlepas (detached). Kembali lewat menu branch di status bar.",
+  "history.checkout_confirm": "Checkout",
+  "history.checked_out": "Checkout {hash} (HEAD terlepas).",
+  "history.restore": "Pulihkan Versi Ini",
+  "history.restore_tooltip": "Jadikan file di work tree seperti di commit ini",
+  "history.restore_message": "Pulihkan {name} ke versi commit {hash}? Perubahan yang belum di-commit pada file ini hilang.",
+  "history.restore_confirm": "Pulihkan",
+  "history.restored": "File dipulihkan."
 }

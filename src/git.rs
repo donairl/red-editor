@@ -151,6 +151,29 @@ pub enum DiffKind {
     Removed,
 }
 
+/// One commit of the log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Commit {
+    pub hash: String,
+    pub short: String,
+    pub author: String,
+    /// Author time, seconds since the Unix epoch.
+    pub time: i64,
+    pub subject: String,
+    /// Branch and tag names pointing here, as `%D` lists them.
+    pub refs: Vec<String>,
+    /// The commit HEAD points at.
+    pub head: bool,
+}
+
+/// One file a commit changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitFile {
+    pub kind: Kind,
+    /// Absolute.
+    pub path: PathBuf,
+}
+
 /// A work tree, by its top folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Repo {
@@ -357,6 +380,56 @@ impl Repo {
         Ok(parse_diff(&out))
     }
 
+    /// Up to `count` commits of HEAD's history, newest first, skipping the
+    /// first `skip`; only those touching `path` when given.
+    pub fn log(&self, skip: usize, count: usize, path: Option<&Path>) -> Result<Vec<Commit>, GitError> {
+        let skip = format!("--skip={skip}");
+        let count = format!("-n{count}");
+        let mut args = vec![
+            "log",
+            "--format=%H%x00%h%x00%an%x00%at%x00%s%x00%D",
+            "-z",
+            &count,
+            &skip,
+        ];
+        let rel;
+        if let Some(path) = path {
+            rel = self.relative(path).ok_or(GitError::NotRepo)?;
+            args.extend(["--follow", "--", &rel]);
+        }
+        match self.git(&args) {
+            Ok(out) => Ok(parse_log(&out)),
+            // No commit yet.
+            Err(GitError::Failed(e)) if e.contains("does not have any commits") => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The files `hash` changed.
+    pub fn commit_files(&self, hash: &str) -> Result<Vec<CommitFile>, GitError> {
+        let out = self.git(&["show", "--name-status", "--format=", "-z", "-M", hash])?;
+        Ok(parse_name_status(&self.root, &out))
+    }
+
+    /// What `hash` changed in `path`.
+    pub fn commit_diff(&self, hash: &str, path: &Path) -> Result<Vec<DiffLine>, GitError> {
+        let rel = self.relative(path).ok_or(GitError::NotRepo)?;
+        let out = self.git(&["show", "--format=", "--no-ext-diff", "--no-color", "-M", hash, "--", &rel])?;
+        Ok(parse_diff(&out))
+    }
+
+    /// Makes the work tree's `path` what it was in `hash`.
+    pub fn restore_from(&self, hash: &str, path: &Path) -> Result<(), GitError> {
+        let source = format!("--source={hash}");
+        self.git_paths(&["restore", &source, "--worktree"], &[path.to_path_buf()])
+            .map(drop)
+    }
+
+    /// Checks out `hash`, leaving HEAD detached.
+    pub fn checkout_detached(&self, hash: &str) -> Result<(), GitError> {
+        self.git(&["switch", "--detach", hash]).map(drop)
+    }
+
     /// A file git does not track yet, as a diff adding all of it.
     pub fn diff_new_file(&self, path: &Path) -> Result<Vec<DiffLine>, GitError> {
         let text = std::fs::read(path)
@@ -539,6 +612,76 @@ pub fn parse_branches(out: &str) -> Vec<Branch> {
             })
         })
         .collect()
+}
+
+/// Parses `git log --format=%H%x00%h%x00%an%x00%at%x00%s%x00%D -z`. The
+/// first commit is HEAD when the log was not filtered or skipped into.
+pub fn parse_log(out: &str) -> Vec<Commit> {
+    out
+        .split('\0')
+        .collect::<Vec<_>>()
+        .chunks(6)
+        .filter(|fields| fields.len() == 6 && !fields[0].is_empty())
+        .map(|f| Commit {
+            hash: f[0].to_owned(),
+            short: f[1].to_owned(),
+            author: f[2].to_owned(),
+            time: f[3].parse().unwrap_or(0),
+            subject: f[4].to_owned(),
+            refs: f[5]
+                .split(", ")
+                .filter(|r| !r.is_empty())
+                .map(|r| r.strip_prefix("HEAD -> ").unwrap_or(r).to_owned())
+                .collect(),
+            head: f[5].starts_with("HEAD"),
+        })
+        .collect()
+}
+
+/// Parses `git show --name-status --format= -z`: `X\0path\0`, or
+/// `Rnnn\0old\0new\0` for a rename.
+pub fn parse_name_status(root: &Path, out: &str) -> Vec<CommitFile> {
+    let mut files = Vec::new();
+    let mut fields = out.split('\0');
+    while let Some(status) = fields.next() {
+        let Some(code) = status.bytes().next() else { continue };
+        let Some(path) = fields.next() else { break };
+        let path = if matches!(code, b'R' | b'C') {
+            // The old name first; the new one is the file that exists.
+            match fields.next() {
+                Some(new) => new,
+                None => break,
+            }
+        } else {
+            path
+        };
+        let kind = match code {
+            b'A' => Kind::Added,
+            b'D' => Kind::Deleted,
+            b'R' => Kind::Renamed,
+            _ => Kind::Modified,
+        };
+        files.push(CommitFile {
+            kind,
+            path: root.join(path),
+        });
+    }
+    files
+}
+
+/// `seconds` ago, in the shortest unit that fits: `5m`, `3h`, `2d`, `3w`,
+/// `4mo`, `1y`.
+pub fn age(seconds: i64) -> String {
+    let s = seconds.max(0);
+    match s {
+        _ if s < 60 => "now".to_owned(),
+        _ if s < 3600 => format!("{}m", s / 60),
+        _ if s < 86_400 => format!("{}h", s / 3600),
+        _ if s < 7 * 86_400 => format!("{}d", s / 86_400),
+        _ if s < 30 * 86_400 => format!("{}w", s / (7 * 86_400)),
+        _ if s < 365 * 86_400 => format!("{}mo", s / (30 * 86_400)),
+        _ => format!("{}y", s / (365 * 86_400)),
+    }
 }
 
 /// Parses a unified diff of one file, dropping the `diff --git` and `---` /
@@ -724,6 +867,99 @@ mod tests {
                 (DiffKind::Context, Some(4), Some(4), "c"),
             ]
         );
+    }
+
+    #[test]
+    fn test_log_and_name_status_parsers() {
+        // With `-z` every field, the last of a commit included, ends in NUL.
+        let out = "aaaa1111\0aaaa111\0Ana\x001700000000\0Fix thing\0HEAD -> main, tag: v1, origin/main\0\
+                   bbbb2222\0bbbb222\0Bo Bö\x001699990000\0初めて\0\0";
+        let log = parse_log(out);
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].hash, "aaaa1111");
+        assert_eq!(log[0].short, "aaaa111");
+        assert_eq!(log[0].author, "Ana");
+        assert_eq!(log[0].time, 1_700_000_000);
+        assert_eq!(log[0].subject, "Fix thing");
+        assert_eq!(log[0].refs, ["main", "tag: v1", "origin/main"]);
+        assert!(log[0].head);
+        assert_eq!(log[1].hash, "bbbb2222");
+        assert_eq!(log[1].author, "Bo Bö");
+        assert_eq!(log[1].subject, "初めて");
+        assert!(log[1].refs.is_empty() && !log[1].head);
+        assert!(parse_log("").is_empty());
+
+        let files = parse_name_status(&root(), "M\0a.rs\0A\0dir/b.rs\0D\0c.rs\0R087\0old.rs\0new name.rs\0");
+        let r = root();
+        assert_eq!(
+            files,
+            vec![
+                CommitFile { kind: Kind::Modified, path: r.join("a.rs") },
+                CommitFile { kind: Kind::Added, path: r.join("dir/b.rs") },
+                CommitFile { kind: Kind::Deleted, path: r.join("c.rs") },
+                CommitFile { kind: Kind::Renamed, path: r.join("new name.rs") },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_age_units() {
+        assert_eq!(age(-5), "now");
+        assert_eq!(age(59), "now");
+        assert_eq!(age(5 * 60), "5m");
+        assert_eq!(age(3 * 3600 + 10), "3h");
+        assert_eq!(age(2 * 86_400), "2d");
+        assert_eq!(age(20 * 86_400), "2w");
+        assert_eq!(age(100 * 86_400), "3mo");
+        assert_eq!(age(800 * 86_400), "2y");
+    }
+
+    #[test]
+    fn test_log_history_restore_and_checkout() {
+        let Some(repo) = temp_repo("history") else { return };
+        let root = repo.root().to_path_buf();
+        assert_eq!(repo.log(0, 10, None).unwrap(), Vec::new(), "no commits yet");
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        fs::write(&a, "one\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("first").unwrap();
+        fs::write(&b, "bee\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("second").unwrap();
+        fs::write(&a, "two\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("third").unwrap();
+
+        let log = repo.log(0, 10, None).unwrap();
+        let subjects: Vec<&str> = log.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, ["third", "second", "first"]);
+        assert!(log[0].head && !log[1].head);
+        assert!(log[0].refs.contains(&"main".to_owned()));
+        assert_eq!(repo.log(1, 1, None).unwrap()[0].subject, "second");
+
+        let only_a = repo.log(0, 10, Some(&a)).unwrap();
+        let only_a: Vec<&str> = only_a.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(only_a, ["third", "first"]);
+
+        let files = repo.commit_files(&log[1].hash).unwrap();
+        assert_eq!(files, vec![CommitFile { kind: Kind::Added, path: b.clone() }]);
+        let diff = repo.commit_diff(&log[0].hash, &a).unwrap();
+        assert!(diff.iter().any(|l| l.kind == DiffKind::Removed && l.text == "one"));
+        assert!(diff.iter().any(|l| l.kind == DiffKind::Added && l.text == "two"));
+
+        repo.restore_from(&log[2].hash, &a).unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(), "one\n");
+        assert_eq!(repo.status().unwrap().files[0].unstaged, Some(Kind::Modified));
+        repo.discard(&repo.status().unwrap().files).unwrap();
+
+        repo.checkout_detached(&log[1].hash).unwrap();
+        let status = repo.status().unwrap();
+        assert_eq!(status.branch, None);
+        assert_eq!(status.detached_at.as_deref(), Some(&log[1].short[..7]));
+        assert_eq!(fs::read_to_string(&a).unwrap(), "one\n");
+        repo.switch("main").unwrap();
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

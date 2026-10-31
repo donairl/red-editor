@@ -14,8 +14,8 @@ use crate::file_browser::{
     self, ACTION_SIZE, BADGE_GAP, CHEVRON_WIDTH, ROW_HEIGHT, ROW_PADDING_X, SidebarPalette,
     TITLE_HEIGHT, TITLE_PADDING_X,
 };
-use crate::git::{DiffKind, FileChange, GitError, Kind};
-use crate::git_worker::{FileDiff, GitState, Op};
+use crate::git::{self, Commit, DiffKind, FileChange, GitError, Kind};
+use crate::git_worker::{DiffSource, FileDiff, GitState, Log, Op};
 use crate::i18n::I18n;
 use crate::theme;
 
@@ -32,6 +32,7 @@ pub struct ScmUi {
     staged_open: bool,
     changes_open: bool,
     conflicts_open: bool,
+    pub commits_open: bool,
 }
 
 impl Default for ScmUi {
@@ -42,6 +43,7 @@ impl Default for ScmUi {
             staged_open: true,
             changes_open: true,
             conflicts_open: true,
+            commits_open: false,
         }
     }
 }
@@ -56,10 +58,18 @@ pub enum ScmAction {
     /// confirms.
     CommitAll(String),
     Open(PathBuf),
-    /// Show the file's staged or unstaged changes.
-    Diff { path: PathBuf, staged: bool },
+    /// Show the file's changes against `source`.
+    Diff { path: PathBuf, source: DiffSource },
     Refresh,
     OpenConsole,
+    /// Load the next page of the commit log.
+    LoadMoreLog,
+    /// Show this commit's files, or fold them with `None`.
+    ExpandCommit(Option<String>),
+    /// Stop showing one file's history.
+    ClearHistoryFilter,
+    /// Check this commit out, once the user confirms.
+    Checkout(String),
 }
 
 /// The three lists, by what the user can do with their files.
@@ -130,7 +140,7 @@ fn buttons(section: Section, header: bool) -> &'static [Button] {
 /// repository would be made when there is none.
 pub fn show(
     ui: &mut egui::Ui,
-    git: &GitState,
+    git: &mut GitState,
     scm: &mut ScmUi,
     folder: Option<&Path>,
     i18n: &I18n,
@@ -208,7 +218,8 @@ pub fn show(
             });
     }
 
-    let Some(status) = git.status.as_ref().filter(|_| git.repo().is_some()) else {
+    let status = git.status.clone().filter(|_| git.repo().is_some());
+    let Some(status) = status.as_ref() else {
         let note = |ui: &mut egui::Ui, text: &str| {
             egui::Frame::NONE
                 .inner_margin(egui::Margin::symmetric(TITLE_PADDING_X as i8, 8))
@@ -288,40 +299,301 @@ pub fn show(
             }
         });
 
-    if status.files.is_empty() {
-        let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-        ui.painter().text(
-            pos2(rect.left() + TITLE_PADDING_X, rect.center().y),
-            Align2::LEFT_CENTER,
-            i18n.t("scm.no_changes"),
-            FontId::proportional(13.0),
-            palette.icon_inactive,
-        );
-        return action;
-    }
-
     let root = git.repo().map(|r| r.root().to_path_buf()).unwrap_or_default();
+    // The log is read the first time the section is opened.
+    let log_untouched = git.log.commits.is_empty() && !git.log.loading && !git.log.complete && git.log.error.is_none();
+    if scm.commits_open && log_untouched {
+        action = Some(ScmAction::LoadMoreLog);
+    }
     egui::ScrollArea::vertical()
         .id_salt("scm_lists")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = Vec2::ZERO;
+            if status.files.is_empty() {
+                let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+                ui.painter().text(
+                    pos2(rect.left() + TITLE_PADDING_X, rect.center().y),
+                    Align2::LEFT_CENTER,
+                    i18n.t("scm.no_changes"),
+                    FontId::proportional(13.0),
+                    palette.icon_inactive,
+                );
+            }
             for (section, files, open) in [
                 (Section::Conflicts, &conflicts, &mut scm.conflicts_open),
                 (Section::Staged, &staged, &mut scm.staged_open),
                 (Section::Changes, &changes, &mut scm.changes_open),
             ] {
                 // Staged Changes only shows once something is staged, and
-                // Merge Changes during a merge, as in VS Code.
-                if files.is_empty() && section != Section::Changes {
+                // Merge Changes during a merge, as in VS Code. Changes
+                // hides when there is nothing at all.
+                if files.is_empty() {
                     continue;
                 }
                 if let Some(a) = show_section(ui, &palette, section, files, open, &root, i18n) {
                     action = Some(a);
                 }
             }
+            if let Some(a) = show_commits(ui, &palette, git, &mut scm.commits_open, &root, i18n) {
+                action = Some(a);
+            }
         });
     action
+}
+
+/// The COMMITS section: the log of the branch, or of one file, each
+/// commit unfolding into the files it changed.
+fn show_commits(
+    ui: &mut egui::Ui,
+    palette: &SidebarPalette,
+    git: &mut GitState,
+    open: &mut bool,
+    root: &Path,
+    i18n: &I18n,
+) -> Option<ScmAction> {
+    let width = ui.available_width();
+    let (rect, header) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+    let log: Log = git.log.clone();
+    let mut action = None;
+
+    // `name ×` while showing one file's history.
+    let mut right = rect.right() - ROW_PADDING_X;
+    if let Some(filter) = &log.filter {
+        let name = filter
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let galley = ui.fonts_mut(|f| {
+            f.layout_no_wrap(name, FontId::proportional(11.0), palette.foreground)
+        });
+        let chip_width = galley.size().x + 8.0 + ACTION_SIZE;
+        let chip = Rect::from_min_max(pos2(right - chip_width, rect.top() + 3.0), pos2(right, rect.bottom() - 3.0));
+        let clear = ui
+            .interact(chip, egui::Id::unique("scm_history_clear"), Sense::click())
+            .on_hover_text(i18n.t("history.clear_filter"));
+        let painter = ui.painter();
+        painter.rect_filled(chip, CornerRadius::same(8), palette.row_selected);
+        painter.galley(pos2(chip.left() + 6.0, chip.center().y - galley.size().y / 2.0), galley, palette.foreground);
+        painter.text(
+            pos2(chip.right() - ACTION_SIZE / 2.0, chip.center().y),
+            Align2::CENTER_CENTER,
+            "×",
+            FontId::proportional(13.0),
+            palette.foreground,
+        );
+        if clear.clicked() {
+            action = Some(ScmAction::ClearHistoryFilter);
+        }
+        right = chip.left() - BADGE_GAP;
+    }
+
+    if header.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, palette.row_hover);
+    }
+    file_browser::paint_chevron(
+        ui.painter(),
+        pos2(rect.left() + ROW_PADDING_X + CHEVRON_WIDTH / 2.0, rect.center().y),
+        *open,
+        palette.foreground,
+    );
+    let count = if log.complete {
+        log.commits.len().to_string()
+    } else {
+        format!("{}+", log.commits.len())
+    };
+    let title = format!("{} ({count})", i18n.t("history.commits")).to_uppercase();
+    let title = file_browser::elided(
+        ui,
+        title,
+        FontId::proportional(11.0),
+        palette.foreground,
+        right - (rect.left() + ROW_PADDING_X + CHEVRON_WIDTH),
+    );
+    ui.painter().galley(
+        pos2(rect.left() + ROW_PADDING_X + CHEVRON_WIDTH, rect.center().y - title.size().y / 2.0),
+        title,
+        palette.foreground,
+    );
+    if header.clicked() && action.is_none() {
+        *open = !*open;
+    }
+    if !*open {
+        return action;
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let note = |ui: &mut egui::Ui, text: &str| {
+        let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+        ui.painter().text(
+            pos2(rect.left() + ROW_PADDING_X + CHEVRON_WIDTH, rect.center().y),
+            Align2::LEFT_CENTER,
+            text,
+            FontId::proportional(13.0),
+            palette.icon_inactive,
+        );
+    };
+    if let Some(e) = &log.error {
+        note(ui, &e.to_string());
+        return action;
+    }
+    if log.commits.is_empty() && log.complete {
+        note(ui, i18n.t("history.no_commits"));
+        return action;
+    }
+
+    let expanded = log.expanded.clone();
+    let filter = log.filter.clone();
+    for commit in &log.commits {
+        let is_open = expanded.as_deref() == Some(commit.hash.as_str());
+        let (rect, row) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+        let checkout_rect = Rect::from_min_max(pos2(rect.right() - ROW_PADDING_X - ACTION_SIZE, rect.top()), pos2(rect.right() - ROW_PADDING_X, rect.bottom()));
+        let checkout = ui
+            .interact(checkout_rect, egui::Id::unique(("scm_checkout", &commit.hash)), Sense::click())
+            .on_hover_text(i18n.t("history.checkout"));
+        let hovered = row.hovered() || checkout.hovered();
+        paint_commit_row(ui, palette, rect, commit, now, hovered || is_open, hovered);
+        if checkout.clicked() {
+            action = Some(ScmAction::Checkout(commit.hash.clone()));
+        } else if row.clicked() {
+            action = Some(match &filter {
+                // One file's history: straight to that file in this commit.
+                Some(path) => ScmAction::Diff {
+                    path: path.clone(),
+                    source: DiffSource::Commit(commit.hash.clone()),
+                },
+                None => ScmAction::ExpandCommit((!is_open).then(|| commit.hash.clone())),
+            });
+        }
+        if !is_open || filter.is_some() {
+            continue;
+        }
+        match git.commit_files(ui.ctx(), &commit.hash) {
+            None => {
+                let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+                egui::Spinner::new().size(12.0).color(palette.icon_inactive).paint_at(
+                    ui,
+                    Rect::from_center_size(pos2(rect.left() + ROW_PADDING_X + CHEVRON_WIDTH + 12.0, rect.center().y), Vec2::splat(12.0)),
+                );
+            }
+            Some(Err(e)) => note(ui, &e.to_string()),
+            Some(Ok(files)) => {
+                for file in files.clone() {
+                    let (rect, row) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+                    let change = FileChange {
+                        path: file.path.clone(),
+                        orig_path: None,
+                        staged: Some(file.kind),
+                        unstaged: None,
+                    };
+                    paint_file_row(ui, palette, rect, &change, file.kind, root, row.hovered(), 0);
+                    if row.clicked() {
+                        action = Some(ScmAction::Diff {
+                            path: file.path,
+                            source: DiffSource::Commit(commit.hash.clone()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    if log.loading {
+        let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+        egui::Spinner::new().size(12.0).color(palette.icon_inactive).paint_at(
+            ui,
+            Rect::from_center_size(pos2(rect.center().x, rect.center().y), Vec2::splat(12.0)),
+        );
+    } else if !log.complete {
+        let (rect, more) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+        if more.hovered() {
+            ui.painter().rect_filled(rect, CornerRadius::ZERO, palette.row_hover);
+        }
+        ui.painter().text(
+            pos2(rect.left() + ROW_PADDING_X + CHEVRON_WIDTH, rect.center().y),
+            Align2::LEFT_CENTER,
+            i18n.t("history.load_more"),
+            FontId::proportional(13.0),
+            palette.accent,
+        );
+        if more.clicked() {
+            action = Some(ScmAction::LoadMoreLog);
+        }
+    }
+    action
+}
+
+/// `short  subject [refs]` over `author · age`; HEAD's row has a dot in
+/// the accent colour, a hovered row the checkout button.
+fn paint_commit_row(
+    ui: &egui::Ui,
+    palette: &SidebarPalette,
+    rect: Rect,
+    commit: &Commit,
+    now: i64,
+    lit: bool,
+    with_button: bool,
+) {
+    let painter = ui.painter();
+    if lit {
+        painter.rect_filled(rect, CornerRadius::ZERO, palette.row_hover);
+    }
+    let x = rect.left() + ROW_PADDING_X + CHEVRON_WIDTH;
+    if commit.head {
+        painter.circle_filled(pos2(rect.left() + ROW_PADDING_X + CHEVRON_WIDTH / 2.0, rect.center().y), 3.0, palette.accent);
+    }
+    let mut right = rect.right() - ROW_PADDING_X;
+    if with_button {
+        let center = pos2(right - ACTION_SIZE / 2.0, rect.center().y);
+        if ui.ctx().pointer_hover_pos().is_some_and(|p| {
+            Rect::from_center_size(center, Vec2::splat(ACTION_SIZE)).contains(p)
+        }) {
+            painter.rect_filled(
+                Rect::from_center_size(center, Vec2::splat(ACTION_SIZE - 4.0)),
+                CornerRadius::same(4),
+                palette.row_selected,
+            );
+        }
+        paint_checkout_icon(painter, center, palette.foreground);
+        right -= ACTION_SIZE + BADGE_GAP;
+    }
+    // Right side: `author · age`, dimmed.
+    let meta = format!("{} · {}", commit.author, git::age(now - commit.time));
+    let meta = file_browser::elided(ui, meta, FontId::proportional(11.0), palette.icon_inactive, (right - x) * 0.45);
+    let meta_width = meta.size().x;
+    painter.galley(pos2(right - meta_width, rect.center().y - meta.size().y / 2.0), meta, palette.icon_inactive);
+    right -= meta_width + BADGE_GAP;
+
+    let hash = file_browser::elided(ui, commit.short.clone(), FontId::monospace(11.0), palette.icon_inactive, right - x);
+    let hash_width = hash.size().x;
+    painter.galley(pos2(x, rect.center().y - hash.size().y / 2.0), hash, palette.icon_inactive);
+    let mut text = commit.subject.clone();
+    if !commit.refs.is_empty() {
+        text.push_str(&format!("  [{}]", commit.refs.join(", ")));
+    }
+    let subject_x = x + hash_width + BADGE_GAP;
+    let subject = file_browser::elided(ui, text, FontId::proportional(13.0), palette.foreground, right - subject_x);
+    painter.galley(pos2(subject_x, rect.center().y - subject.size().y / 2.0), subject, palette.foreground);
+}
+
+/// An arrow into a box: check the commit out.
+fn paint_checkout_icon(painter: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.3, color);
+    let frame = Rect::from_center_size(c + vec2(1.0, 0.0), vec2(9.0, 10.0));
+    painter.line(
+        vec![
+            pos2(frame.left() + 4.0, frame.top()),
+            frame.right_top(),
+            frame.right_bottom(),
+            pos2(frame.left() + 4.0, frame.bottom()),
+        ],
+        stroke,
+    );
+    let tip = pos2(frame.left() + 3.0, c.y);
+    painter.line_segment([pos2(frame.left() - 4.0, c.y), tip], stroke);
+    painter.line_segment([tip, tip + vec2(-3.0, -3.0)], stroke);
+    painter.line_segment([tip, tip + vec2(-3.0, 3.0)], stroke);
 }
 
 /// One list: its header and, while open, a row per file.
@@ -382,7 +654,11 @@ fn show_section(
         } else if row.clicked() {
             action = Some(ScmAction::Diff {
                 path: change.path.clone(),
-                staged: section == Section::Staged,
+                source: if section == Section::Staged {
+                    DiffSource::Staged
+                } else {
+                    DiffSource::WorkTree
+                },
             });
         }
     }
@@ -586,11 +862,13 @@ fn paint_file_row(
 }
 
 /// What the user asked of the diff panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiffAction {
     Close,
     /// Go to this 1-based line of the file.
     Goto(usize),
+    /// Make the file what it was in the shown commit, once confirmed.
+    Restore { hash: String, path: PathBuf },
 }
 
 /// The changes of one file as a unified diff: old and new line numbers,
@@ -607,7 +885,11 @@ pub fn show_diff(ui: &mut egui::Ui, diff: &FileDiff, i18n: &I18n) -> Option<Diff
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let side = i18n.t(if diff.staged { "scm.diff_staged" } else { "scm.diff_working" });
+        let side = match &diff.source {
+            DiffSource::Staged => i18n.t("scm.diff_staged").to_owned(),
+            DiffSource::WorkTree => i18n.t("scm.diff_working").to_owned(),
+            DiffSource::Commit(hash) => format!("({})", &hash[..hash.len().min(7)]),
+        };
         ui.label(egui::RichText::new(name).strong());
         ui.label(egui::RichText::new(side).weak());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -617,6 +899,17 @@ pub fn show_diff(ui: &mut egui::Ui, diff: &FileDiff, i18n: &I18n) -> Option<Diff
                 .clicked()
             {
                 action = Some(DiffAction::Close);
+            }
+            if let DiffSource::Commit(hash) = &diff.source
+                && ui
+                    .small_button(i18n.t("history.restore"))
+                    .on_hover_text(i18n.t("history.restore_tooltip"))
+                    .clicked()
+            {
+                action = Some(DiffAction::Restore {
+                    hash: hash.clone(),
+                    path: diff.path.clone(),
+                });
             }
         });
     });
@@ -752,7 +1045,7 @@ mod tests {
 
     fn frame(
         ctx: &egui::Context,
-        git: &GitState,
+        git: &mut GitState,
         scm: &mut ScmUi,
         events: Vec<egui::Event>,
     ) -> (Option<ScmAction>, Vec<egui::epaint::ClippedShape>) {
@@ -795,9 +1088,9 @@ mod tests {
     #[test]
     fn test_lists_changes_and_stages_a_row() {
         let ctx = egui::Context::default();
-        let Some((git, root)) = fixture("scm_rows", &ctx) else { return };
+        let Some((mut git, root)) = fixture("scm_rows", &ctx) else { return };
         let mut scm = ScmUi::default();
-        let (_, shapes) = frame(&ctx, &git, &mut scm, Vec::new());
+        let (_, shapes) = frame(&ctx, &mut git, &mut scm, Vec::new());
         let painted = texts(&shapes);
         let names: Vec<&str> = painted.iter().map(|(t, _)| t.as_str()).collect();
         assert!(names.contains(&"PERUBAHAN (2)"), "{names:?}");
@@ -807,16 +1100,16 @@ mod tests {
         // The rightmost hover button of a Changes row stages it.
         let (_, kept) = painted.iter().find(|(t, _)| t == "kept.txt").unwrap();
         let row_right = 300.0 - ROW_PADDING_X - LETTER_WIDTH - BADGE_GAP - ACTION_SIZE / 2.0;
-        let (action, _) = frame(&ctx, &git, &mut scm, click(pos2(row_right, kept.center().y)));
+        let (action, _) = frame(&ctx, &mut git, &mut scm, click(pos2(row_right, kept.center().y)));
         assert_eq!(action, Some(ScmAction::Run(Op::Stage(vec![root.join("kept.txt")]))));
 
         // A click on the row itself asks for its diff.
-        let (action, _) = frame(&ctx, &git, &mut scm, click(kept.center()));
+        let (action, _) = frame(&ctx, &mut git, &mut scm, click(kept.center()));
         assert_eq!(
             action,
             Some(ScmAction::Diff {
                 path: root.join("kept.txt"),
-                staged: false
+                source: DiffSource::WorkTree
             })
         );
         let _ = fs::remove_dir_all(&root);
@@ -825,31 +1118,93 @@ mod tests {
     #[test]
     fn test_auth_failure_points_to_the_console() {
         let ctx = egui::Context::default();
-        let Some((git, root)) = fixture("scm_auth", &ctx) else { return };
+        let Some((mut git, root)) = fixture("scm_auth", &ctx) else { return };
         let mut scm = ScmUi::default();
-        let (_, shapes) = frame(&ctx, &git, &mut scm, Vec::new());
+        let (_, shapes) = frame(&ctx, &mut git, &mut scm, Vec::new());
         assert!(!texts(&shapes).iter().any(|(t, _)| t == "Buka Console"));
         scm.auth_failed = true;
-        let (_, shapes) = frame(&ctx, &git, &mut scm, Vec::new());
+        let (_, shapes) = frame(&ctx, &mut git, &mut scm, Vec::new());
         let painted = texts(&shapes);
         let (_, button) = painted.iter().find(|(t, _)| t == "Buka Console").expect("console button");
-        let (action, _) = frame(&ctx, &git, &mut scm, click(button.center()));
+        let (action, _) = frame(&ctx, &mut git, &mut scm, click(button.center()));
         assert_eq!(action, Some(ScmAction::OpenConsole));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_commits_section_lists_the_log_and_unfolds_a_commit() {
+        let ctx = egui::Context::default();
+        let Some((mut git, root)) = fixture("scm_log", &ctx) else { return };
+        let mut scm = ScmUi::default();
+        let (_, shapes) = frame(&ctx, &mut git, &mut scm, Vec::new());
+        let painted = texts(&shapes);
+        let (_, header) = painted.iter().find(|(t, _)| t.starts_with("COMMIT")).expect("commits header");
+        assert!(!painted.iter().any(|(t, _)| t == "first"), "closed section lists nothing");
+
+        // Opening the section asks for the log on the next frame.
+        frame(&ctx, &mut git, &mut scm, click(header.center()));
+        assert!(scm.commits_open);
+        let (action, _) = frame(&ctx, &mut git, &mut scm, Vec::new());
+        assert_eq!(action, Some(ScmAction::LoadMoreLog));
+        git.load_more_log(&ctx);
+        for _ in 0..250 {
+            git.poll(&ctx);
+            if !git.log.loading {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(git.log.complete);
+        let (_, shapes) = frame(&ctx, &mut git, &mut scm, Vec::new());
+        let painted = texts(&shapes);
+        let (_, first) = painted.iter().find(|(t, _)| t.starts_with("first")).expect("commit row");
+        assert!(painted.iter().any(|(t, _)| t.starts_with("Test · ")), "author and age");
+
+        // Clicking the commit unfolds its files.
+        let (action, _) = frame(&ctx, &mut git, &mut scm, click(first.center()));
+        let hash = git.log.commits[0].hash.clone();
+        assert_eq!(action, Some(ScmAction::ExpandCommit(Some(hash.clone()))));
+        git.log.expanded = Some(hash.clone());
+        frame(&ctx, &mut git, &mut scm, Vec::new());
+        for _ in 0..250 {
+            git.poll(&ctx);
+            if git.commit_files(&ctx, &hash).is_some_and(|f| f.as_ref().is_ok_and(|f| !f.is_empty())) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (_, shapes) = frame(&ctx, &mut git, &mut scm, Vec::new());
+        let painted = texts(&shapes);
+        // `kept.txt` is also in the Changes list; the commit's copy is the
+        // lowest one painted.
+        let (_, file) = painted
+            .iter()
+            .filter(|(t, _)| t == "kept.txt")
+            .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
+            .expect("file of the commit");
+        let (action, _) = frame(&ctx, &mut git, &mut scm, click(file.center()));
+        assert_eq!(
+            action,
+            Some(ScmAction::Diff {
+                path: root.join("kept.txt"),
+                source: DiffSource::Commit(hash)
+            })
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn test_commit_with_nothing_staged_asks_to_stage_all() {
         let ctx = egui::Context::default();
-        let Some((git, root)) = fixture("scm_commit", &ctx) else { return };
+        let Some((mut git, root)) = fixture("scm_commit", &ctx) else { return };
         let mut scm = ScmUi {
             message: "  fix things \n".into(),
             ..ScmUi::default()
         };
-        let (_, shapes) = frame(&ctx, &git, &mut scm, Vec::new());
+        let (_, shapes) = frame(&ctx, &mut git, &mut scm, Vec::new());
         let painted = texts(&shapes);
         let (_, commit) = painted.iter().find(|(t, _)| t == "Commit").expect("commit button");
-        let (action, _) = frame(&ctx, &git, &mut scm, click(commit.center()));
+        let (action, _) = frame(&ctx, &mut git, &mut scm, click(commit.center()));
         assert_eq!(action, Some(ScmAction::CommitAll("fix things".into())));
         let _ = fs::remove_dir_all(&root);
     }
@@ -888,7 +1243,7 @@ mod tests {
             ..Default::default()
         };
         let mut output = ctx.run_ui(input, |ui| {
-            show(ui, &git, &mut scm, Some(&dir), &I18n::builtin());
+            show(ui, &mut git, &mut scm, Some(&dir), &I18n::builtin());
         });
         output.textures_delta.clear();
         let names: Vec<String> = texts(&output.shapes).into_iter().map(|(t, _)| t).collect();

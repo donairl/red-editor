@@ -187,5 +187,19 @@
   "scm.diff_empty": "Keine Unterschiede.",
 
   "scm.open_console": "Konsole öffnen",
-  "git.pull_diverged": "Der Branch ist von seinem Upstream abgewichen. Merge oder Rebase in der Konsole."
+  "git.pull_diverged": "Der Branch ist von seinem Upstream abgewichen. Merge oder Rebase in der Konsole.",
+
+  "history.commits": "Commits",
+  "history.no_commits": "Noch keine Commits.",
+  "history.load_more": "100 weitere laden…",
+  "history.clear_filter": "Alle Commits anzeigen",
+  "history.checkout": "Commit auschecken",
+  "history.checkout_message": "Commit {hash} auschecken? HEAD wird losgelöst; zurück geht es über das Branch-Menü in der Statusleiste.",
+  "history.checkout_confirm": "Auschecken",
+  "history.checked_out": "{hash} ausgecheckt (losgelöster HEAD).",
+  "history.restore": "Diese Version wiederherstellen",
+  "history.restore_tooltip": "Die Datei im Arbeitsverzeichnis auf den Stand dieses Commits setzen",
+  "history.restore_message": "{name} auf den Stand von Commit {hash} zurücksetzen? Nicht committete Änderungen an der Datei gehen verloren.",
+  "history.restore_confirm": "Wiederherstellen",
+  "history.restored": "Datei wiederhergestellt."
 }

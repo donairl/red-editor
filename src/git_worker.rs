@@ -9,7 +9,10 @@ use std::time::SystemTime;
 
 use eframe::egui;
 
-use crate::git::{Branch, DiffLine, FileChange, GitError, Kind, Repo, RepoStatus};
+use crate::git::{Branch, Commit, CommitFile, DiffLine, FileChange, GitError, Kind, Repo, RepoStatus};
+
+/// Commits the log loads at a time.
+pub const LOG_PAGE: usize = 100;
 
 /// A command that changes the repository. One runs at a time.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +29,10 @@ pub enum Op {
     Switch(String),
     CreateBranch(String),
     Init(PathBuf),
+    /// Make the work tree's file what it was in the commit.
+    RestoreFile { hash: String, path: PathBuf },
+    /// Check the commit out, detaching HEAD.
+    Checkout(String),
 }
 
 impl Op {
@@ -33,7 +40,12 @@ impl Op {
     pub fn touches_work_tree(&self) -> bool {
         matches!(
             self,
-            Op::Discard(_) | Op::Pull | Op::Switch(_) | Op::CreateBranch(_)
+            Op::Discard(_)
+                | Op::Pull
+                | Op::Switch(_)
+                | Op::CreateBranch(_)
+                | Op::RestoreFile { .. }
+                | Op::Checkout(_)
         )
     }
 
@@ -54,6 +66,8 @@ impl Op {
             Op::Push => repo.push(),
             Op::Switch(branch) => repo.switch(branch),
             Op::CreateBranch(branch) => repo.create_branch(branch),
+            Op::RestoreFile { hash, path } => repo.restore_from(hash, path),
+            Op::Checkout(hash) => repo.checkout_detached(hash),
             Op::Init(_) => unreachable!(),
         }
     }
@@ -73,20 +87,52 @@ enum Message {
     },
     Diff {
         path: PathBuf,
-        staged: bool,
+        source: DiffSource,
         lines: Result<Vec<DiffLine>, GitError>,
     },
+    Log {
+        filter: Option<PathBuf>,
+        skip: usize,
+        commits: Result<Vec<Commit>, GitError>,
+    },
+    CommitFiles {
+        hash: String,
+        files: Result<Vec<CommitFile>, GitError>,
+    },
+}
+
+/// What a file's diff is taken against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiffSource {
+    /// Work-tree changes against the index.
+    WorkTree,
+    /// Staged changes against HEAD.
+    Staged,
+    /// What this commit changed.
+    Commit(String),
 }
 
 /// The changes of one file, shown beside the editor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileDiff {
     pub path: PathBuf,
-    /// Staged changes against HEAD, else work-tree changes against the
-    /// index.
-    pub staged: bool,
+    pub source: DiffSource,
     /// `None` until git first answers.
     pub lines: Option<Result<Vec<DiffLine>, GitError>>,
+}
+
+/// The commit log as loaded so far.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Log {
+    /// Only commits touching this file.
+    pub filter: Option<PathBuf>,
+    pub commits: Vec<Commit>,
+    /// Every commit is loaded; no more to ask for.
+    pub complete: bool,
+    pub loading: bool,
+    pub error: Option<GitError>,
+    /// The commit whose files are shown.
+    pub expanded: Option<String>,
 }
 
 /// HEAD's copy of a file, for the gutter's change markers.
@@ -178,6 +224,11 @@ pub struct GitState {
     bases: Vec<Base>,
     /// The diff shown beside the editor; read again after each refresh.
     diff: Option<FileDiff>,
+    pub log: Log,
+    /// HEAD when the log was loaded; it reloads when HEAD moves.
+    log_head: Option<String>,
+    /// The files of commits already expanded.
+    commit_files: HashMap<String, Result<Vec<CommitFile>, GitError>>,
 }
 
 impl Default for GitState {
@@ -201,6 +252,9 @@ impl Default for GitState {
             base_requests: HashSet::new(),
             bases: Vec::new(),
             diff: None,
+            log: Log::default(),
+            log_head: None,
+            commit_files: HashMap::new(),
         }
     }
 }
@@ -331,14 +385,73 @@ impl GitState {
         self.diff.as_ref()
     }
 
-    /// Shows the staged or unstaged changes of `path` beside the editor.
-    pub fn show_diff(&mut self, ctx: &egui::Context, path: PathBuf, staged: bool) {
+    /// Shows the changes of `path` against `source` beside the editor.
+    pub fn show_diff(&mut self, ctx: &egui::Context, path: PathBuf, source: DiffSource) {
         self.diff = Some(FileDiff {
             path,
-            staged,
+            source,
             lines: None,
         });
         self.load_diff(ctx);
+    }
+
+    /// The files `hash` changed, once loaded; asks for them otherwise.
+    pub fn commit_files(&mut self, ctx: &egui::Context, hash: &str) -> Option<&Result<Vec<CommitFile>, GitError>> {
+        if !self.commit_files.contains_key(hash) {
+            let repo = self.repo.clone()?;
+            // Marked pending so one request goes out per commit.
+            self.commit_files.insert(hash.to_owned(), Ok(Vec::new()));
+            let hash = hash.to_owned();
+            let sender = self.sender.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let files = repo.commit_files(&hash);
+                let _ = sender.send(Message::CommitFiles { hash, files });
+                ctx.request_repaint();
+            });
+            return None;
+        }
+        self.commit_files.get(hash)
+    }
+
+    /// Starts the log over, for `filter`'s history or the whole branch's.
+    pub fn load_log(&mut self, ctx: &egui::Context, filter: Option<PathBuf>) {
+        self.log = Log {
+            filter,
+            ..Log::default()
+        };
+        self.log_head = self.status.as_ref().and_then(|s| s.head.clone());
+        self.load_more_log(ctx);
+    }
+
+    /// Asks for the next page of the log.
+    pub fn load_more_log(&mut self, ctx: &egui::Context) {
+        let Some(repo) = self.repo.clone() else { return };
+        if self.log.loading || self.log.complete {
+            return;
+        }
+        self.log.loading = true;
+        let filter = self.log.filter.clone();
+        let skip = self.log.commits.len();
+        let sender = self.sender.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let commits = repo.log(skip, LOG_PAGE, filter.as_deref());
+            let _ = sender.send(Message::Log { filter, skip, commits });
+            ctx.request_repaint();
+        });
+    }
+
+    /// Reloads the log when HEAD moved since it was loaded. Only a log
+    /// that was asked for once is kept up to date.
+    fn refresh_log(&mut self, ctx: &egui::Context) {
+        let head = self.status.as_ref().and_then(|s| s.head.clone());
+        let loaded = !self.log.commits.is_empty() || self.log.complete;
+        if loaded && head != self.log_head {
+            self.commit_files.clear();
+            let filter = self.log.filter.clone();
+            self.load_log(ctx, filter);
+        }
     }
 
     pub fn close_diff(&mut self) {
@@ -348,20 +461,21 @@ impl GitState {
     /// Reads the shown diff again, keeping the old lines until it arrives.
     fn load_diff(&mut self, ctx: &egui::Context) {
         let (Some(repo), Some(diff)) = (self.repo.clone(), &self.diff) else { return };
-        let (path, staged) = (diff.path.clone(), diff.staged);
-        let untracked = !staged
+        let (path, source) = (diff.path.clone(), diff.source.clone());
+        let untracked = source == DiffSource::WorkTree
             && self
                 .change(&path)
                 .is_some_and(|c| c.unstaged == Some(Kind::Untracked));
         let sender = self.sender.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let lines = if untracked {
-                repo.diff_new_file(&path)
-            } else {
-                repo.diff(&path, staged)
+            let lines = match &source {
+                _ if untracked => repo.diff_new_file(&path),
+                DiffSource::Commit(hash) => repo.commit_diff(hash, &path),
+                DiffSource::Staged => repo.diff(&path, true),
+                DiffSource::WorkTree => repo.diff(&path, false),
             };
-            let _ = sender.send(Message::Diff { path, staged, lines });
+            let _ = sender.send(Message::Diff { path, source, lines });
             ctx.request_repaint();
         });
     }
@@ -401,6 +515,7 @@ impl GitState {
                             self.status = Some(status);
                             self.branches = branches;
                             self.load_diff(ctx);
+                            self.refresh_log(ctx);
                         }
                         // A repository deleted under the editor, most likely.
                         Err(_) => {
@@ -427,13 +542,30 @@ impl GitState {
                     self.base_requests.remove(&path);
                     self.bases.push(Base { path, head, text });
                 }
-                Message::Diff { path, staged, lines } => {
+                Message::Diff { path, source, lines } => {
                     if let Some(diff) = &mut self.diff
                         && diff.path == path
-                        && diff.staged == staged
+                        && diff.source == source
                     {
                         diff.lines = Some(lines);
                     }
+                }
+                Message::Log { filter, skip, commits } => {
+                    // A stale page, from before the log was started over.
+                    if self.log.filter != filter || self.log.commits.len() != skip {
+                        continue;
+                    }
+                    self.log.loading = false;
+                    match commits {
+                        Ok(commits) => {
+                            self.log.complete = commits.len() < LOG_PAGE;
+                            self.log.commits.extend(commits);
+                        }
+                        Err(e) => self.log.error = Some(e),
+                    }
+                }
+                Message::CommitFiles { hash, files } => {
+                    self.commit_files.insert(hash, files);
                 }
             }
         }

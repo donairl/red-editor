@@ -187,5 +187,19 @@
   "scm.diff_empty": "没有差异。",
 
   "scm.open_console": "打开控制台",
-  "git.pull_diverged": "该分支已与上游分叉。请在控制台中合并或变基。"
+  "git.pull_diverged": "该分支已与上游分叉。请在控制台中合并或变基。",
+
+  "history.commits": "提交",
+  "history.no_commits": "尚无提交。",
+  "history.load_more": "再加载 100 条…",
+  "history.clear_filter": "显示所有提交",
+  "history.checkout": "检出提交",
+  "history.checkout_message": "检出提交 {hash}？HEAD 将处于分离状态；可通过状态栏的分支菜单返回。",
+  "history.checkout_confirm": "检出",
+  "history.checked_out": "已检出 {hash}（分离的 HEAD）。",
+  "history.restore": "恢复此版本",
+  "history.restore_tooltip": "将工作区文件恢复为此提交中的内容",
+  "history.restore_message": "将 {name} 恢复到提交 {hash} 中的版本？该文件未提交的更改将丢失。",
+  "history.restore_confirm": "恢复",
+  "history.restored": "文件已恢复。"
 }
