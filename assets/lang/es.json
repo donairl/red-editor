@@ -184,5 +184,8 @@
   "scm.diff_staged": "(Preparado)",
   "scm.diff_working": "(Árbol de trabajo)",
   "scm.diff_close": "Cerrar diff",
-  "scm.diff_empty": "Sin diferencias."
+  "scm.diff_empty": "Sin diferencias.",
+
+  "scm.open_console": "Abrir consola",
+  "git.pull_diverged": "La rama se ha separado de su upstream. Haz merge o rebase en la Consola."
 }

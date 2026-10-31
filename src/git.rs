@@ -741,6 +741,60 @@ mod tests {
     }
 
     #[test]
+    fn test_push_fetch_and_pull_through_a_remote() {
+        let Some(first) = temp_repo("remote_a") else { return };
+        let Some(second) = temp_repo("remote_b") else { return };
+        let bare = std::env::temp_dir().join(format!("red_git_remote_bare_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        run(&std::env::temp_dir(), &["init", "-q", "--bare", "-b", "main", &bare.to_string_lossy()], None, LOCAL_TIMEOUT)
+            .unwrap();
+        let url = bare.to_string_lossy().into_owned();
+        for repo in [&first, &second] {
+            repo.git(&["remote", "add", "origin", &url]).unwrap();
+        }
+
+        let file = first.root().join("a.txt");
+        fs::write(&file, "one\n").unwrap();
+        first.stage_all().unwrap();
+        first.commit("first").unwrap();
+        // No upstream yet: the push sets one on the only remote.
+        first.push().unwrap();
+        let status = first.status().unwrap();
+        assert_eq!(status.upstream.as_deref(), Some("origin/main"));
+        assert_eq!((status.ahead, status.behind), (0, 0));
+
+        second.fetch().unwrap();
+        second.git(&["switch", "-q", "main"]).unwrap();
+        fs::write(second.root().join("a.txt"), "two\n").unwrap();
+        second.stage_all().unwrap();
+        second.commit("second").unwrap();
+        second.push().unwrap();
+
+        first.fetch().unwrap();
+        assert_eq!(first.status().unwrap().behind, 1);
+        first.pull().unwrap();
+        assert_eq!(first.status().unwrap().behind, 0);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "two\n");
+
+        // Diverged: pull refuses to merge.
+        fs::write(first.root().join("b.txt"), "b\n").unwrap();
+        first.stage_all().unwrap();
+        first.commit("local").unwrap();
+        fs::write(second.root().join("c.txt"), "c\n").unwrap();
+        second.stage_all().unwrap();
+        second.commit("remote").unwrap();
+        second.push().unwrap();
+        match first.pull() {
+            Err(GitError::Failed(e)) => assert!(e.contains("fast-forward"), "{e}"),
+            other => panic!("{other:?}"),
+        }
+
+        for dir in [first.root(), second.root(), &bare] {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
     fn test_discover_outside_a_repo() {
         let dir = std::env::temp_dir().join(format!("red_git_none_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();

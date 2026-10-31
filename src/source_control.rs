@@ -26,6 +26,9 @@ const LETTER_WIDTH: f32 = 12.0;
 pub struct ScmUi {
     /// The commit message being typed.
     pub message: String,
+    /// The last fetch, pull or push needed a password git could not ask
+    /// for; the view points to the Console.
+    pub auth_failed: bool,
     staged_open: bool,
     changes_open: bool,
     conflicts_open: bool,
@@ -35,6 +38,7 @@ impl Default for ScmUi {
     fn default() -> Self {
         ScmUi {
             message: String::new(),
+            auth_failed: false,
             staged_open: true,
             changes_open: true,
             conflicts_open: true,
@@ -55,6 +59,7 @@ pub enum ScmAction {
     /// Show the file's staged or unstaged changes.
     Diff { path: PathBuf, staged: bool },
     Refresh,
+    OpenConsole,
 }
 
 /// The three lists, by what the user can do with their files.
@@ -150,28 +155,57 @@ pub fn show(
         palette.foreground,
     );
     if git.repo().is_some() {
-        let refresh_rect = Rect::from_center_size(
-            pos2(title_rect.right() - ROW_PADDING_X - ACTION_SIZE / 2.0, title_rect.center().y),
-            Vec2::splat(ACTION_SIZE),
-        );
-        let refresh = ui
-            .interact(refresh_rect, egui::Id::unique("scm_refresh"), Sense::click())
-            .on_hover_text(i18n.t("scm.refresh"));
-        if git.is_refreshing() || git.busy().is_some() {
-            egui::Spinner::new()
-                .size(12.0)
-                .color(palette.icon_inactive)
-                .paint_at(ui, Rect::from_center_size(refresh_rect.center(), Vec2::splat(12.0)));
-        } else {
-            if refresh.hovered() {
-                ui.painter()
-                    .rect_filled(refresh_rect.shrink(2.0), CornerRadius::same(4), palette.row_hover);
+        let busy = git.is_refreshing() || git.busy().is_some();
+        // Right to left: refresh, push, pull.
+        let tools = [
+            ("scm.refresh", None),
+            ("git.push", Some(Op::Push)),
+            ("git.pull", Some(Op::Pull)),
+        ];
+        for (i, (tooltip, op)) in tools.into_iter().enumerate() {
+            let right = title_rect.right() - ROW_PADDING_X - i as f32 * ACTION_SIZE;
+            let rect = Rect::from_center_size(
+                pos2(right - ACTION_SIZE / 2.0, title_rect.center().y),
+                Vec2::splat(ACTION_SIZE),
+            );
+            let response = ui
+                .interact(rect, egui::Id::unique(("scm_tool", i)), Sense::click())
+                .on_hover_text(i18n.t(tooltip));
+            if busy && op.is_none() {
+                egui::Spinner::new()
+                    .size(12.0)
+                    .color(palette.icon_inactive)
+                    .paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(12.0)));
+                continue;
             }
-            file_browser::paint_refresh_icon(ui.painter(), refresh_rect.center(), palette.foreground);
+            if response.hovered() {
+                ui.painter()
+                    .rect_filled(rect.shrink(2.0), CornerRadius::same(4), palette.row_hover);
+            }
+            let color = if busy { palette.icon_inactive } else { palette.foreground };
+            match &op {
+                None => file_browser::paint_refresh_icon(ui.painter(), rect.center(), color),
+                Some(op) => paint_sync_arrow(ui.painter(), rect.center(), *op == Op::Pull, color),
+            }
+            if response.clicked() && !busy {
+                action = Some(match op {
+                    None => ScmAction::Refresh,
+                    Some(op) => ScmAction::Run(op),
+                });
+            }
         }
-        if refresh.clicked() {
-            action = Some(ScmAction::Refresh);
-        }
+    }
+
+    if scm.auth_failed {
+        egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.label(egui::RichText::new(i18n.t("git.auth_required")).color(palette.git_modified));
+                if ui.button(i18n.t("scm.open_console")).clicked() {
+                    action = Some(ScmAction::OpenConsole);
+                }
+            });
     }
 
     let Some(status) = git.status.as_ref().filter(|_| git.repo().is_some()) else {
@@ -414,6 +448,21 @@ fn paint_buttons(ui: &egui::Ui, palette: &SidebarPalette, rect: Rect, list: &[Bu
         }
         paint_button_icon(painter, *button, r.center(), palette.foreground);
     }
+}
+
+/// An arrow down onto a line (pull) or up from one (push).
+fn paint_sync_arrow(painter: &egui::Painter, c: egui::Pos2, down: bool, color: Color32) {
+    let stroke = Stroke::new(1.3, color);
+    let (from, to, base) = if down {
+        (c + vec2(0.0, -6.0), c + vec2(0.0, 3.0), c.y + 6.0)
+    } else {
+        (c + vec2(0.0, 3.0), c + vec2(0.0, -6.0), c.y + 6.0)
+    };
+    painter.line_segment([from, to], stroke);
+    let head = if down { -3.5 } else { 3.5 };
+    painter.line_segment([to, to + vec2(-3.5, head)], stroke);
+    painter.line_segment([to, to + vec2(3.5, head)], stroke);
+    painter.hline(c.x - 5.0..=c.x + 5.0, base, stroke);
 }
 
 /// Plus, minus, a curved arrow back, or a page: drawn as lines, so they
@@ -770,6 +819,22 @@ mod tests {
                 staged: false
             })
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_auth_failure_points_to_the_console() {
+        let ctx = egui::Context::default();
+        let Some((git, root)) = fixture("scm_auth", &ctx) else { return };
+        let mut scm = ScmUi::default();
+        let (_, shapes) = frame(&ctx, &git, &mut scm, Vec::new());
+        assert!(!texts(&shapes).iter().any(|(t, _)| t == "Buka Console"));
+        scm.auth_failed = true;
+        let (_, shapes) = frame(&ctx, &git, &mut scm, Vec::new());
+        let painted = texts(&shapes);
+        let (_, button) = painted.iter().find(|(t, _)| t == "Buka Console").expect("console button");
+        let (action, _) = frame(&ctx, &git, &mut scm, click(button.center()));
+        assert_eq!(action, Some(ScmAction::OpenConsole));
         let _ = fs::remove_dir_all(&root);
     }
 

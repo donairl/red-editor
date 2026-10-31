@@ -184,5 +184,8 @@
   "scm.diff_staged": "(Staged)",
   "scm.diff_working": "(Working Tree)",
   "scm.diff_close": "Tutup diff",
-  "scm.diff_empty": "Tidak ada perbedaan."
+  "scm.diff_empty": "Tidak ada perbedaan.",
+
+  "scm.open_console": "Buka Console",
+  "git.pull_diverged": "Branch sudah bercabang dari upstream-nya. Lakukan merge atau rebase di Console."
 }

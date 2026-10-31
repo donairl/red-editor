@@ -1685,6 +1685,9 @@ impl TextEditorApp {
             if matches!(op, Op::Commit(_) | Op::CommitAll(_)) && result.is_ok() {
                 self.scm.message.clear();
             }
+            if matches!(op, Op::Fetch | Op::Pull | Op::Push) {
+                self.scm.auth_failed = result == Err(GitError::AuthRequired);
+            }
             self.status_message = self.git_outcome_message(&op, result);
         }
         for base in self.git.take_bases() {
@@ -1757,6 +1760,10 @@ impl TextEditorApp {
         let message = match result {
             Err(GitError::AuthRequired) => (self.i18n.t("git.auth_required").to_owned(), true),
             Err(GitError::NotInstalled) => (self.i18n.t("git.not_installed").to_owned(), true),
+            // `pull --ff-only` refuses to merge.
+            Err(GitError::Failed(e)) if *op == Op::Pull && e.contains("fast-forward") => {
+                (self.i18n.t("git.pull_diverged").to_owned(), true)
+            }
             Err(e) => (self.i18n.tf("git.failed", &[("error", &e.to_string())]), true),
             Ok(()) => {
                 let text = match op {
@@ -2035,6 +2042,12 @@ impl TextEditorApp {
                 self.git.show_diff(ctx, path, staged);
             }
             ScmAction::Refresh => self.git.refresh(ctx),
+            ScmAction::OpenConsole => {
+                self.scm.auth_failed = false;
+                if !self.show_console {
+                    self.toggle_console(ctx);
+                }
+            }
         }
     }
 

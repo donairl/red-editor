@@ -184,5 +184,8 @@
   "scm.diff_staged": "（已暂存）",
   "scm.diff_working": "（工作区）",
   "scm.diff_close": "关闭差异",
-  "scm.diff_empty": "没有差异。"
+  "scm.diff_empty": "没有差异。",
+
+  "scm.open_console": "打开控制台",
+  "git.pull_diverged": "该分支已与上游分叉。请在控制台中合并或变基。"
 }
