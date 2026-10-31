@@ -1,12 +1,11 @@
 //! Re-indents a document: JSON, HTML and CSS in-process, other languages through
 //! the formatter installed on the machine (`rustfmt`, `gofmt`, ...).
 
-use std::io::Write;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::process::Command;
 use std::time::Duration;
 
 use crate::highlighter::Language;
+use crate::process;
 
 /// How long an external formatter may run before it is given up on.
 const EXTERNAL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -72,48 +71,14 @@ enum RunError {
     Failed(String),
 }
 
-/// Keeps a console formatter from opening a console window of its own: on
-/// Windows the editor runs without a console for it to share.
-#[cfg(windows)]
-fn hide_console(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(windows))]
-fn hide_console(_command: &mut Command) {}
-
 fn run_formatter(argv: &[&str], text: &str) -> Result<String, RunError> {
     let mut command = Command::new(argv[0]);
-    command
-        .args(&argv[1..])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    hide_console(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => RunError::NotInstalled,
-            _ => RunError::Failed(format!("{}: {e}", argv[0])),
-        })?;
-    let mut stdin = child.stdin.take().expect("stdin was piped");
-    let input = text.to_owned();
-    // Feed stdin from a thread so a formatter that writes before it has read
-    // everything cannot deadlock on full pipes.
-    std::thread::spawn(move || {
-        let _ = stdin.write_all(input.as_bytes());
-    });
-    let (tx, rx) = mpsc::channel();
-    let pid = child.id();
-    std::thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
-    });
-    let output = match rx.recv_timeout(EXTERNAL_TIMEOUT) {
-        Ok(result) => result.map_err(|e| RunError::Failed(format!("{}: {e}", argv[0])))?,
-        Err(_) => {
-            let _ = Command::new("kill").arg(pid.to_string()).status();
+    command.args(&argv[1..]);
+    let output = match process::run(command, Some(text.as_bytes()), EXTERNAL_TIMEOUT) {
+        Ok(output) => output,
+        Err(process::RunError::NotInstalled) => return Err(RunError::NotInstalled),
+        Err(process::RunError::Io(e)) => return Err(RunError::Failed(format!("{}: {e}", argv[0]))),
+        Err(process::RunError::TimedOut) => {
             return Err(RunError::Failed(format!("{} timed out", argv[0])));
         }
     };
