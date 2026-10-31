@@ -219,5 +219,13 @@
   "about.link_release_notes": "Catatan Rilis",
   "about.link_report_issue": "Laporkan Masalah",
   "about.copy_info": "Salin Info",
-  "about.copied": "Tersalin"
+  "about.copied": "Tersalin",
+
+  "search.cancel": "Batal",
+  "search.close": "Tutup panel",
+  "search.collapse_all": "Lipat semua",
+  "search.expand_all": "Buka semua",
+  "search.found_so_far": "Mencari… {count} hasil",
+  "search.include_hint": "File yang disertakan (mis. *.rs, src/**)",
+  "search.include_tooltip": "Pola glob dipisah koma. Tanpa `/` cocok dengan nama file; dengan `/` cocok dengan path relatif folder. Kosong = semua file."
 }

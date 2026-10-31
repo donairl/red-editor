@@ -219,5 +219,13 @@
   "about.link_release_notes": "Notas de la versión",
   "about.link_report_issue": "Informar de un problema",
   "about.copy_info": "Copiar info",
-  "about.copied": "Copiado"
+  "about.copied": "Copiado",
+
+  "search.cancel": "Cancelar",
+  "search.close": "Cerrar panel",
+  "search.collapse_all": "Contraer todo",
+  "search.expand_all": "Expandir todo",
+  "search.found_so_far": "Buscando… {count} resultados",
+  "search.include_hint": "Archivos a incluir (p. ej. *.rs, src/**)",
+  "search.include_tooltip": "Globs separados por comas. Sin `/` el patrón coincide con el nombre del archivo; con `/` con la ruta relativa a la carpeta. Vacío = todos los archivos."
 }

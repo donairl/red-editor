@@ -219,5 +219,13 @@
   "about.link_release_notes": "Versionshinweise",
   "about.link_report_issue": "Problem melden",
   "about.copy_info": "Info kopieren",
-  "about.copied": "Kopiert"
+  "about.copied": "Kopiert",
+
+  "search.cancel": "Abbrechen",
+  "search.close": "Panel schließen",
+  "search.collapse_all": "Alle einklappen",
+  "search.expand_all": "Alle ausklappen",
+  "search.found_so_far": "Suche… {count} Treffer",
+  "search.include_hint": "Einzuschließende Dateien (z. B. *.rs, src/**)",
+  "search.include_tooltip": "Kommagetrennte Globs. Ohne `/` passt ein Muster auf den Dateinamen, mit `/` auf den Pfad relativ zum Ordner. Leer = alle Dateien."
 }

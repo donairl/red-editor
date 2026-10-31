@@ -219,5 +219,13 @@
   "about.link_release_notes": "Release Notes",
   "about.link_report_issue": "Report an Issue",
   "about.copy_info": "Copy Info",
-  "about.copied": "Copied"
+  "about.copied": "Copied",
+
+  "search.cancel": "Cancel",
+  "search.close": "Close panel",
+  "search.collapse_all": "Collapse all",
+  "search.expand_all": "Expand all",
+  "search.found_so_far": "Searching… {count} results",
+  "search.include_hint": "Files to include (e.g. *.rs, src/**)",
+  "search.include_tooltip": "Comma-separated globs. Without `/` a pattern matches the file name; with `/` the path relative to the folder. Empty means every file."
 }

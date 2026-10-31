@@ -878,7 +878,7 @@ pub(crate) fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, expande
 }
 
 /// A magnifying glass: a ring with its handle to the bottom right.
-fn paint_search_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+pub(crate) fn paint_search_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
     let stroke = Stroke::new(1.2, color);
     let radius = 4.0;
     let ring = center + vec2(-1.5, -1.5);
