@@ -144,10 +144,10 @@ impl Theme {
             TerminalPalette::LIGHT.ansi
         };
         // Git colours keep their meaning across themes.
-        let git = if dark {
-            SidebarPalette::DARK
+        let (git, git_gutter) = if dark {
+            (SidebarPalette::DARK, GutterPalette::DARK)
         } else {
-            SidebarPalette::LIGHT
+            (SidebarPalette::LIGHT, GutterPalette::LIGHT)
         };
         Theme {
             dark,
@@ -183,6 +183,9 @@ impl Theme {
                 number_active: base.fg_strong,
                 bookmark: base.accent,
                 background: base.bg,
+                added: git_gutter.added,
+                modified: git_gutter.modified,
+                deleted: git_gutter.deleted,
             },
             terminal: TerminalPalette {
                 background: base.bg,

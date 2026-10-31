@@ -579,6 +579,33 @@ pub fn parse_diff(out: &str) -> Vec<DiffLine> {
     lines
 }
 
+/// A fresh repository in the temp folder, on branch `main`, or `None`
+/// without git.
+#[cfg(test)]
+pub fn temp_repo(name: &str) -> Option<Repo> {
+    use std::fs;
+    let dir = std::env::temp_dir().join(format!("red_git_{name}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let repo = match Repo::init(&dir) {
+        Ok(repo) => repo,
+        Err(GitError::NotInstalled) => return None,
+        Err(e) => panic!("{e}"),
+    };
+    // Keep the user's global settings (signing, hooks) out of the tests.
+    for (key, value) in [
+        ("user.name", "Test"),
+        ("user.email", "test@example.com"),
+        ("commit.gpgsign", "false"),
+        ("core.hooksPath", "/dev/null"),
+        ("core.autocrlf", "false"),
+    ] {
+        repo.git(&["config", key, value]).unwrap();
+    }
+    repo.git(&["symbolic-ref", "HEAD", "refs/heads/main"]).unwrap();
+    Some(repo)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,30 +713,6 @@ mod tests {
             GitError::Failed("pathspec 'x' did not match".into())
         );
         assert_eq!(classify("weird\n"), GitError::Failed("weird".into()));
-    }
-
-    /// A fresh repository in the temp folder, or `None` without git.
-    fn temp_repo(name: &str) -> Option<Repo> {
-        let dir = std::env::temp_dir().join(format!("red_git_{name}_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let repo = match Repo::init(&dir) {
-            Ok(repo) => repo,
-            Err(GitError::NotInstalled) => return None,
-            Err(e) => panic!("{e}"),
-        };
-        // Keep the user's global settings (signing, hooks) out of the tests.
-        for (key, value) in [
-            ("user.name", "Test"),
-            ("user.email", "test@example.com"),
-            ("commit.gpgsign", "false"),
-            ("core.hooksPath", "/dev/null"),
-            ("core.autocrlf", "false"),
-        ] {
-            repo.git(&["config", key, value]).unwrap();
-        }
-        repo.git(&["symbolic-ref", "HEAD", "refs/heads/main"]).unwrap();
-        Some(repo)
     }
 
     #[test]

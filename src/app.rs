@@ -4,18 +4,19 @@ use eframe::egui;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::activity_bar;
 use crate::bookmarks::Bookmarks;
 use crate::file_browser::{self, Explorer};
 use crate::git::GitError;
-use crate::git_worker::{GitState, Op};
+use crate::git_worker::{Base, GitState, Op};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::history::{Entry, EntryKind, History};
 use crate::i18n::{self, I18n};
 use crate::layout_cache::{self, LayoutCache};
+use crate::line_diff::{self, LineMarks};
 use crate::markdown_preview::{MarkdownPreview, ScrollPos, ScrollSync};
 use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
 use crate::prettify;
@@ -41,6 +42,9 @@ const HOME_URL: &str = "https://github.com/donairl/red-editor/";
 
 /// Seconds between checks for open files changed by other programs.
 const DISK_CHECK_SECS: f64 = 2.0;
+
+/// Least time between two updates of the gutter's git change markers.
+const MARKS_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Largest file the editor opens. egui lays out the whole document, on every
 /// edit: past this size each keystroke takes well over a frame.
@@ -70,6 +74,12 @@ pub struct DocumentTab {
     pub disk_conflict: bool,
     /// Lines the user bookmarked; they follow edits.
     pub bookmarks: Bookmarks,
+    /// HEAD's copy of the file, once git delivered it.
+    pub git_base: Option<Base>,
+    /// The lines that differ from `git_base`, for the gutter.
+    pub line_marks: LineMarks,
+    /// The text `line_marks` were computed for.
+    marks_text: Option<String>,
 }
 
 /// Modified time and size of a file: when either moves, the file changed.
@@ -114,6 +124,9 @@ impl DocumentTab {
             disk_stamp: None,
             disk_conflict: false,
             bookmarks: Bookmarks::default(),
+            git_base: None,
+            line_marks: LineMarks::default(),
+            marks_text: None,
         }
     }
 
@@ -130,6 +143,9 @@ impl DocumentTab {
             disk_stamp,
             disk_conflict: false,
             bookmarks: Bookmarks::default(),
+            git_base: None,
+            line_marks: LineMarks::default(),
+            marks_text: None,
         })
     }
 
@@ -267,6 +283,8 @@ pub struct TextEditorApp {
     pub git: GitState,
     /// The name typed in the status bar's branch menu.
     pub new_branch_name: String,
+    /// When the gutter's change markers were last computed.
+    last_marks_at: Option<Instant>,
 }
 
 /// What the app wants done to the editor widget, which only `render_editor`
@@ -326,6 +344,7 @@ impl Default for TextEditorApp {
             theme: ThemeId::System,
             git: GitState::default(),
             new_branch_name: String::new(),
+            last_marks_at: None,
         }
     }
 }
@@ -1619,6 +1638,61 @@ impl TextEditorApp {
             }
             self.status_message = self.git_outcome_message(&op, result);
         }
+        for base in self.git.take_bases() {
+            for tab in &mut self.tabs {
+                if tab.current_path.as_ref() == Some(&base.path) {
+                    tab.git_base = Some(base.clone());
+                    tab.marks_text = None;
+                }
+            }
+        }
+        self.update_line_marks(ctx);
+    }
+
+    /// Keeps the active tab's gutter markers in step with its text, asking
+    /// git for HEAD's copy of the file when HEAD moved.
+    fn update_line_marks(&mut self, ctx: &egui::Context) {
+        let head = self.git.status.as_ref().map(|s| s.head.clone());
+        let tab = &self.tabs[self.active_tab_index];
+        let path = match (&tab.current_path, self.git.repo(), &head) {
+            (Some(path), Some(repo), Some(_)) if repo.contains(path) => path.clone(),
+            _ => {
+                let tab = &mut self.tabs[self.active_tab_index];
+                tab.git_base = None;
+                tab.line_marks = LineMarks::default();
+                tab.marks_text = None;
+                return;
+            }
+        };
+        if tab.git_base.as_ref().is_none_or(|b| Some(&b.head) != head.as_ref()) {
+            self.git.request_base(ctx, &path);
+        }
+        let Some(base) = &tab.git_base else { return };
+        if tab.marks_text.as_ref() == Some(&tab.text_content) {
+            return;
+        }
+        if text_content_exceeds_highlight_limit(&tab.text_content) {
+            let tab = &mut self.tabs[self.active_tab_index];
+            tab.line_marks = LineMarks::default();
+            return;
+        }
+        // While typing, at most a few diffs a second.
+        let since = self.last_marks_at.map(|at| at.elapsed());
+        if let Some(since) = since.filter(|s| tab.marks_text.is_some() && *s < MARKS_INTERVAL) {
+            ctx.request_repaint_after(MARKS_INTERVAL - since);
+            return;
+        }
+        self.last_marks_at = Some(Instant::now());
+        // HEAD lacks a new file: all of it is added. Without a change git
+        // ignores the file, and nothing is marked.
+        let marks = match (&base.text, self.git.change(&path)) {
+            (Some(text), _) => line_diff::marks(text, &tab.text_content),
+            (None, Some(_)) => line_diff::marks("", &tab.text_content),
+            (None, None) => LineMarks::default(),
+        };
+        let tab = &mut self.tabs[self.active_tab_index];
+        tab.line_marks = marks;
+        tab.marks_text = Some(tab.text_content.clone());
     }
 
     /// Starts a git command, unless one is running.
@@ -2082,6 +2156,7 @@ fn render_editor(
         EditorRequest::default(),
         None,
         &mut Bookmarks::default(),
+        &LineMarks::default(),
         &mut LayoutCache::default(),
     );
 }
@@ -2129,6 +2204,7 @@ fn render_editor_with(
     request: EditorRequest,
     scroll_to: Option<f32>,
     bookmarks: &mut Bookmarks,
+    changes: &LineMarks,
     layout_cache: &mut LayoutCache,
 ) -> (ScrollPos, egui::Response) {
     let scroll_area = if word_wrap {
@@ -2262,7 +2338,7 @@ fn render_editor_with(
 
         bookmarks.sync(text);
         if let Some(width) = gutter_width {
-            gutter::paint(ui, &output, &font_id, width, bookmarks);
+            gutter::paint(ui, &output, &font_id, width, bookmarks, changes);
         }
 
         // Where the right-click menu was opened, for its bookmark item: the
@@ -2661,6 +2737,7 @@ impl eframe::App for TextEditorApp {
                         request,
                         scroll_to,
                         &mut tab.bookmarks,
+                        &tab.line_marks,
                         &mut self.editor_layout,
                     )
                 } else {
@@ -2679,6 +2756,7 @@ impl eframe::App for TextEditorApp {
                         request,
                         scroll_to,
                         &mut tab.bookmarks,
+                        &tab.line_marks,
                         &mut self.editor_layout,
                     )
                 }
@@ -3222,6 +3300,7 @@ mod tests {
                     request.take().unwrap(),
                     None,
                     &mut Bookmarks::default(),
+                    &LineMarks::default(),
                     &mut LayoutCache::default(),
                 );
             });
@@ -3326,6 +3405,7 @@ mod tests {
                     request.take().unwrap(),
                     None,
                     &mut Bookmarks::default(),
+                    &LineMarks::default(),
                     &mut LayoutCache::default(),
                 );
             });
@@ -3368,6 +3448,7 @@ mod tests {
                     request.take().unwrap(),
                     None,
                     &mut Bookmarks::default(),
+                    &LineMarks::default(),
                     &mut LayoutCache::default(),
                 );
             });
@@ -3420,6 +3501,7 @@ mod tests {
                     request.take().unwrap(),
                     None,
                     &mut Bookmarks::default(),
+                    &LineMarks::default(),
                     &mut LayoutCache::default(),
                 );
                 response.context_menu(|ui| {
@@ -3796,6 +3878,7 @@ mod tests {
                             EditorRequest::default(),
                             None,
                             &mut Bookmarks::default(),
+                            &LineMarks::default(),
                             &mut cache,
                         );
                     });
@@ -4226,6 +4309,49 @@ mod tests {
         assert!(painted_text(&shapes, "main* ↓1 ↑2").is_some());
     }
 
+    /// Runs `poll_git` until `done` holds, for up to five seconds.
+    fn poll_git_until(app: &mut TextEditorApp, ctx: &egui::Context, done: impl Fn(&TextEditorApp) -> bool) {
+        for _ in 0..250 {
+            app.poll_git(ctx);
+            if done(app) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "git did not answer in time: repo {:?} missing {:?} status {:?} base {:?}",
+            app.git.repo(),
+            app.git.missing,
+            app.git.status.as_ref().map(|s| (&s.head, &s.branch)),
+            app.active_tab().git_base
+        );
+    }
+
+    #[test]
+    fn test_gutter_marks_lines_changed_since_head() {
+        let Some(repo) = crate::git::temp_repo("app_marks") else { return };
+        let file = repo.root().join("a.txt");
+        fs::write(&file, "one\ntwo\nthree\n").unwrap();
+        repo.stage(std::slice::from_ref(&file)).unwrap();
+        repo.commit("first").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(file.clone());
+        poll_git_until(&mut app, &ctx, |app| app.active_tab().git_base.is_some());
+        assert!(app.active_tab().line_marks.is_empty());
+
+        app.active_tab_mut().text_content = "one\nTWO\nthree\nfour\n".into();
+        poll_git_until(&mut app, &ctx, |app| !app.active_tab().line_marks.is_empty());
+        let marks = &app.active_tab().line_marks;
+        use crate::line_diff::Mark;
+        assert_eq!(marks.get(1), None);
+        assert_eq!(marks.get(2), Some(Mark::Modified));
+        assert_eq!(marks.get(4), Some(Mark::Added));
+        assert_eq!(app.git.status.as_ref().unwrap().branch.as_deref(), Some("main"));
+        let _ = fs::remove_dir_all(repo.root());
+    }
+
     #[test]
     fn test_status_bar_shows_the_caret_position_on_the_right() {
         let mut app = TextEditorApp::default();
@@ -4294,6 +4420,7 @@ mod tests {
                     request,
                     None,
                     &mut Bookmarks::default(),
+                    &LineMarks::default(),
                     &mut LayoutCache::default(),
                 );
             })
@@ -4344,6 +4471,7 @@ mod tests {
                     EditorRequest::default(),
                     None,
                     &mut tab.bookmarks,
+                    &LineMarks::default(),
                     &mut LayoutCache::default(),
                 );
                 app.show_editor_context_menu(ui.ctx(), &editor);
@@ -4398,6 +4526,7 @@ mod tests {
                     request,
                     None,
                     &mut bookmarks,
+                    &LineMarks::default(),
                     &mut LayoutCache::default(),
                 );
             });
@@ -4442,6 +4571,7 @@ mod tests {
                     request,
                     None,
                     &mut bookmarks,
+                    &LineMarks::default(),
                     &mut LayoutCache::default(),
                 );
             });

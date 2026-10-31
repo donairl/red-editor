@@ -726,6 +726,7 @@ fn git_kind(git: Option<&Decorations>, entry: &FsEntry) -> Option<Kind> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_row(
     ui: &egui::Ui,
     palette: &SidebarPalette,

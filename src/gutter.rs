@@ -1,13 +1,14 @@
 //! VS Code-style line-number gutter painted beside the editor.
 //!
 //! The editor reserves room for the gutter through its left margin; this
-//! module only measures that room and paints the numbers, and a marker on
-//! each bookmarked line, into it.
+//! module only measures that room and paints the numbers, a marker on each
+//! bookmarked line, and git's change markers, into it.
 
 use eframe::egui::{self, Align2, Color32, FontId, Galley, Rect, pos2};
 
 use crate::bookmarks::Bookmarks;
 use crate::find;
+use crate::line_diff::{LineMarks, Mark};
 use crate::tab_bar::TabPalette;
 use crate::theme;
 
@@ -22,6 +23,12 @@ const MIN_DIGITS: usize = 3;
 /// and this wide.
 const MARK_INSET: f32 = 2.0;
 const MARK_WIDTH: f32 = 4.0;
+/// The git change bar: in the space between the numbers and the text, this
+/// far right of the numbers and this wide, as in VS Code.
+const CHANGE_INSET: f32 = 5.0;
+const CHANGE_WIDTH: f32 = 3.0;
+/// Half the height of the triangle marking removed lines.
+const DELETED_SIZE: f32 = 4.0;
 
 /// Number colours. `DARK` and `LIGHT` are VS Code's "Dark Modern" and
 /// "Light Modern"; the other themes derive theirs in `theme.rs`.
@@ -34,6 +41,10 @@ pub struct GutterPalette {
     pub bookmark: Color32,
     /// Same as the editor, so the gutter reads as part of it.
     pub background: Color32,
+    /// Git change markers.
+    pub added: Color32,
+    pub modified: Color32,
+    pub deleted: Color32,
 }
 
 impl GutterPalette {
@@ -42,6 +53,9 @@ impl GutterPalette {
         number_active: Color32::from_rgb(0xCC, 0xCC, 0xCC),
         bookmark: Color32::from_rgb(0x37, 0x94, 0xFF),
         background: TabPalette::DARK.tab_active,
+        added: Color32::from_rgb(0x2E, 0xA0, 0x43),
+        modified: Color32::from_rgb(0x00, 0x78, 0xD4),
+        deleted: Color32::from_rgb(0xF8, 0x51, 0x49),
     };
 
     pub const LIGHT: GutterPalette = GutterPalette {
@@ -49,6 +63,9 @@ impl GutterPalette {
         number_active: Color32::from_rgb(0x17, 0x11, 0x84),
         bookmark: Color32::from_rgb(0x00, 0x5F, 0xB8),
         background: TabPalette::LIGHT.tab_active,
+        added: Color32::from_rgb(0x2E, 0xA0, 0x43),
+        modified: Color32::from_rgb(0x00, 0x5F, 0xB8),
+        deleted: Color32::from_rgb(0xF8, 0x51, 0x49),
     };
 }
 
@@ -96,6 +113,7 @@ struct Number {
     row: egui::Rangef,
     active: bool,
     bookmarked: bool,
+    change: Option<Mark>,
 }
 
 /// The numbers of the lines whose first row overlaps `visible`.
@@ -107,6 +125,7 @@ fn visible_numbers(
     visible: egui::Rangef,
     active_line: Option<usize>,
     bookmarks: &Bookmarks,
+    changes: &LineMarks,
 ) -> Vec<Number> {
     let mut numbers = Vec::new();
     let mut line = 1;
@@ -122,6 +141,7 @@ fn visible_numbers(
                 row: rect.y_range(),
                 active: active_line == Some(line),
                 bookmarked: bookmarks.contains(line),
+                change: changes.get(line),
             });
         }
         starts_line = row.ends_with_newline;
@@ -142,6 +162,7 @@ pub fn paint(
     font_id: &FontId,
     width: f32,
     bookmarks: &Bookmarks,
+    changes: &LineMarks,
 ) {
     let palette = theme::active(ui.ctx()).gutter;
     let clip = ui.clip_rect();
@@ -164,7 +185,11 @@ pub fn paint(
         clip.y_range(),
         active_line,
         bookmarks,
+        changes,
     ) {
+        if let Some(change) = number.change {
+            paint_change(&painter, rect.right() - PAD_RIGHT + CHANGE_INSET, number.row, change, &palette);
+        }
         if number.bookmarked {
             let mark_left = rect.left() + MARK_INSET;
             let mark = Rect::from_x_y_ranges(mark_left..=mark_left + MARK_WIDTH, number.row);
@@ -182,6 +207,30 @@ pub fn paint(
             font_id.clone(),
             color,
         );
+    }
+}
+
+/// A git change marker at `x`, beside the line spanning `row`: a bar for an
+/// added or modified line, a triangle on its top or bottom edge for removed
+/// lines.
+fn paint_change(painter: &egui::Painter, x: f32, row: egui::Rangef, change: Mark, palette: &GutterPalette) {
+    let bar = |color| {
+        let rect = Rect::from_x_y_ranges(x..=x + CHANGE_WIDTH, row);
+        painter.rect_filled(rect, 0.0, color);
+    };
+    let triangle = |y: f32| {
+        let points = vec![
+            pos2(x, y - DELETED_SIZE),
+            pos2(x + DELETED_SIZE, y),
+            pos2(x, y + DELETED_SIZE),
+        ];
+        painter.add(egui::Shape::convex_polygon(points, palette.deleted, egui::Stroke::NONE));
+    };
+    match change {
+        Mark::Added => bar(palette.added),
+        Mark::Modified => bar(palette.modified),
+        Mark::DeletedAbove => triangle(row.min),
+        Mark::DeletedBelow => triangle(row.max),
     }
 }
 
@@ -290,6 +339,7 @@ mod tests {
             egui::Rangef::new(0.0, 1e6),
             Some(2),
             &Bookmarks::default(),
+            &LineMarks::default(),
         );
         let lines: Vec<usize> = numbers.iter().map(|n| n.line).collect();
         assert_eq!(lines, vec![1, 2]);
@@ -305,7 +355,14 @@ mod tests {
         let row_h = galley.rows[0].rect().height();
         // Galley placed at y = 100; show only rows 2 and 3 (lines 2..=3).
         let visible = egui::Rangef::new(100.0 + row_h * 1.5, 100.0 + row_h * 2.5);
-        let numbers = visible_numbers(&galley, 100.0, visible, None, &Bookmarks::default());
+        let numbers = visible_numbers(
+            &galley,
+            100.0,
+            visible,
+            None,
+            &Bookmarks::default(),
+            &LineMarks::default(),
+        );
         let lines: Vec<usize> = numbers.iter().map(|n| n.line).collect();
         assert_eq!(lines, vec![2, 3]);
         assert_eq!(
@@ -320,8 +377,32 @@ mod tests {
         let galley = with_ui(|ui| layout(ui, text, f32::INFINITY));
         let mut bookmarks = Bookmarks::default();
         bookmarks.toggle(2, text);
-        let numbers = visible_numbers(&galley, 0.0, egui::Rangef::new(0.0, 1e6), None, &bookmarks);
+        let numbers = visible_numbers(
+            &galley,
+            0.0,
+            egui::Rangef::new(0.0, 1e6),
+            None,
+            &bookmarks,
+            &LineMarks::default(),
+        );
         let flagged: Vec<bool> = numbers.iter().map(|n| n.bookmarked).collect();
         assert_eq!(flagged, vec![false, true, false]);
+    }
+
+    #[test]
+    fn test_changed_lines_carry_their_git_mark() {
+        let text = "1\n2\n3";
+        let galley = with_ui(|ui| layout(ui, text, f32::INFINITY));
+        let changes = crate::line_diff::marks("1\n3", text);
+        let numbers = visible_numbers(
+            &galley,
+            0.0,
+            egui::Rangef::new(0.0, 1e6),
+            None,
+            &Bookmarks::default(),
+            &changes,
+        );
+        let marks: Vec<Option<Mark>> = numbers.iter().map(|n| n.change).collect();
+        assert_eq!(marks, vec![None, Some(Mark::Added), None]);
     }
 }

@@ -15,6 +15,7 @@ mod highlighter;
 mod history;
 mod i18n;
 mod layout_cache;
+mod line_diff;
 mod markdown_preview;
 mod modals;
 mod prettify;
