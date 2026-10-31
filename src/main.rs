@@ -4,6 +4,7 @@
 
 mod activity_bar;
 mod app;
+mod blame;
 mod bookmarks;
 mod embedded_sql;
 mod file_browser;

@@ -9,6 +9,7 @@ use std::time::SystemTime;
 
 use eframe::egui;
 
+use crate::blame::{self, Blame};
 use crate::git::{Branch, Commit, CommitFile, DiffLine, FileChange, GitError, Kind, Repo, RepoStatus};
 
 /// Commits the log loads at a time.
@@ -98,6 +99,11 @@ enum Message {
     CommitFiles {
         hash: String,
         files: Result<Vec<CommitFile>, GitError>,
+    },
+    Blame {
+        path: PathBuf,
+        head: String,
+        blame: Option<Blame>,
     },
 }
 
@@ -229,6 +235,9 @@ pub struct GitState {
     log_head: Option<String>,
     /// The files of commits already expanded.
     commit_files: HashMap<String, Result<Vec<CommitFile>, GitError>>,
+    /// Blame by file and the HEAD it was read at; `None` while loading or
+    /// when git has no blame for the file.
+    blames: HashMap<(PathBuf, String), Option<Blame>>,
 }
 
 impl Default for GitState {
@@ -255,6 +264,7 @@ impl Default for GitState {
             log: Log::default(),
             log_head: None,
             commit_files: HashMap::new(),
+            blames: HashMap::new(),
         }
     }
 }
@@ -379,6 +389,32 @@ impl GitState {
             let _ = sender.send(Message::Base { path, head, text });
             ctx.request_repaint();
         });
+    }
+
+    /// The blame of `path` at the current HEAD, asking git for it the first
+    /// time. `None` until it arrives, or when git has none (untracked).
+    pub fn blame(&mut self, ctx: &egui::Context, path: &Path) -> Option<&Blame> {
+        let repo = self.repo.clone()?;
+        let head = self.status.as_ref()?.head.clone()?;
+        let key = (path.to_path_buf(), head.clone());
+        if !self.blames.contains_key(&key) {
+            if !repo.contains(path) {
+                return None;
+            }
+            self.blames.insert(key.clone(), None);
+            let path = path.to_path_buf();
+            let sender = self.sender.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let blame = repo
+                    .blame(&path)
+                    .ok()
+                    .map(|out| Blame::new(blame::parse_porcelain(&out), blame::now()));
+                let _ = sender.send(Message::Blame { path, head, blame });
+                ctx.request_repaint();
+            });
+        }
+        self.blames.get(&key)?.as_ref()
     }
 
     pub fn diff(&self) -> Option<&FileDiff> {
@@ -566,6 +602,11 @@ impl GitState {
                 }
                 Message::CommitFiles { hash, files } => {
                     self.commit_files.insert(hash, files);
+                }
+                Message::Blame { path, head, blame } => {
+                    // Blames of older HEADs are not coming back.
+                    self.blames.retain(|(_, h), _| *h == head);
+                    self.blames.insert((path, head), blame);
                 }
             }
         }

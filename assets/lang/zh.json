@@ -203,5 +203,9 @@
   "history.restore_confirm": "恢复",
   "history.restored": "文件已恢复。",
 
-  "history.file_history": "文件历史"
+  "history.file_history": "文件历史",
+
+  "view.blame": "Git Blame",
+  "blame.save_first": "保存后查看 blame。",
+  "blame.loading": "正在加载 blame…"
 }

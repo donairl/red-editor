@@ -203,5 +203,9 @@
   "history.restore_confirm": "Restore",
   "history.restored": "File restored.",
 
-  "history.file_history": "File History"
+  "history.file_history": "File History",
+
+  "view.blame": "Git Blame",
+  "blame.save_first": "Save to see blame.",
+  "blame.loading": "Loading blame…"
 }

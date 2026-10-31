@@ -430,6 +430,12 @@ impl Repo {
         self.git(&["switch", "--detach", hash]).map(drop)
     }
 
+    /// `git blame` of `path` as committed in HEAD, in porcelain form.
+    pub fn blame(&self, path: &Path) -> Result<String, GitError> {
+        let rel = self.relative(path).ok_or(GitError::NotRepo)?;
+        self.git(&["blame", "--porcelain", "HEAD", "--", &rel])
+    }
+
     /// A file git does not track yet, as a diff adding all of it.
     pub fn diff_new_file(&self, path: &Path) -> Result<Vec<DiffLine>, GitError> {
         let text = std::fs::read(path)
@@ -952,6 +958,12 @@ mod tests {
         assert_eq!(fs::read_to_string(&a).unwrap(), "one\n");
         assert_eq!(repo.status().unwrap().files[0].unstaged, Some(Kind::Modified));
         repo.discard(&repo.status().unwrap().files).unwrap();
+
+        let blame = crate::blame::parse_porcelain(&repo.blame(&a).unwrap());
+        assert_eq!(blame.len(), 1);
+        assert_eq!(blame[0].hash, log[0].hash, "line one was last changed by 'third'");
+        assert_eq!(blame[0].author, "Test");
+        assert!(repo.blame(&root.join("missing.txt")).is_err());
 
         repo.checkout_detached(&log[1].hash).unwrap();
         let status = repo.status().unwrap();

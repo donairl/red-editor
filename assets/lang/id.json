@@ -203,5 +203,9 @@
   "history.restore_confirm": "Pulihkan",
   "history.restored": "File dipulihkan.",
 
-  "history.file_history": "Riwayat File"
+  "history.file_history": "Riwayat File",
+
+  "view.blame": "Git Blame",
+  "blame.save_first": "Simpan dulu untuk melihat blame.",
+  "blame.loading": "Memuat blame…"
 }

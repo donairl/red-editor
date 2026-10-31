@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::activity_bar;
+use crate::blame::{self, Blame};
 use crate::bookmarks::Bookmarks;
 use crate::file_browser::{self, Explorer};
 use crate::git::{FileChange, GitError};
@@ -276,6 +277,8 @@ pub struct TextEditorApp {
     /// Show the line-number gutter left of the text. On by default, as in
     /// VS Code.
     pub show_line_numbers: bool,
+    /// Show who last changed each line, in a column left of the gutter.
+    pub show_blame: bool,
     /// Distraction-free mode: fullscreen, with only the editor shown.
     pub zen_mode: bool,
     /// Show the rendered Markdown pane beside the editor. Only takes effect
@@ -356,6 +359,7 @@ impl Default for TextEditorApp {
             editor_layout: LayoutCache::default(),
             word_wrap: false,
             show_line_numbers: true,
+            show_blame: false,
             zen_mode: false,
             show_markdown_preview: false,
             markdown_preview: MarkdownPreview::default(),
@@ -436,6 +440,8 @@ pub mod shortcuts {
     pub const EXIT: KeyboardShortcut = cmd(Key::Q);
     pub const TOGGLE_SIDEBAR: KeyboardShortcut = cmd(Key::B);
     pub const SOURCE_CONTROL: KeyboardShortcut = cmd_shift(Key::G);
+    pub const BLAME: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::B);
     pub const NEXT_TAB: KeyboardShortcut = cmd(Key::Tab);
     pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
     pub const FIND_IN_FILES: KeyboardShortcut = cmd_shift(Key::F);
@@ -477,6 +483,7 @@ pub enum ShortcutAction {
     Exit,
     ToggleSidebar,
     SourceControl,
+    Blame,
     NextTab,
     PrevTab,
     GotoLine,
@@ -513,6 +520,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::NEW_WINDOW, NewWindow),
         (shortcuts::PREV_TAB, PrevTab),
         (shortcuts::SOURCE_CONTROL, SourceControl),
+        (shortcuts::BLAME, Blame),
         (shortcuts::SAVE, Save),
         (shortcuts::OPEN_FILE, OpenFile),
         (shortcuts::NEW_TAB, NewTab),
@@ -660,6 +668,13 @@ impl TextEditorApp {
         ui.checkbox(&mut self.word_wrap, self.i18n.t("view.word_wrap"));
         ui.checkbox(&mut self.show_line_numbers, self.i18n.t("view.line_numbers"));
         let ctx = ui.ctx().clone();
+        let blame = egui::Button::new(self.i18n.t("view.blame"))
+            .selected(self.show_blame)
+            .shortcut_text(ctx.format_shortcut(&shortcuts::BLAME));
+        if ui.add(blame).clicked() {
+            self.show_blame = !self.show_blame;
+            ui.close();
+        }
         if menu_item(ui, self.i18n.t("view.zen_mode"), &ctx.format_shortcut(&shortcuts::ZEN_MODE)) {
             self.toggle_zen_mode(&ctx);
         }
@@ -1443,6 +1458,7 @@ impl TextEditorApp {
             ShortcutAction::Exit => self.trigger_exit(ctx),
             ShortcutAction::ToggleSidebar => self.toggle_sidebar(),
             ShortcutAction::SourceControl => self.toggle_source_control(),
+            ShortcutAction::Blame => self.show_blame = !self.show_blame,
             ShortcutAction::NextTab => {
                 self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
             }
@@ -2343,6 +2359,7 @@ fn render_editor(
         None,
         &mut Bookmarks::default(),
         &LineMarks::default(),
+        None,
         &mut LayoutCache::default(),
     );
 }
@@ -2382,6 +2399,57 @@ fn selection_rects(galley: &egui::Galley, (start, end): find::Range) -> Vec<egui
 fn render_editor_with(
     ui: &mut egui::Ui,
     text: &mut String,
+    layouter: Option<&mut HighlighterLayouter<'_>>,
+    word_wrap: bool,
+    line_numbers: bool,
+    hint: &str,
+    id: Option<egui::Id>,
+    request: EditorRequest,
+    scroll_to: Option<f32>,
+    bookmarks: &mut Bookmarks,
+    changes: &LineMarks,
+    blame: Option<BlameColumn<'_>>,
+    layout_cache: &mut LayoutCache,
+) -> (ScrollPos, egui::Response) {
+    // The blame column is a strip left of the scroll area, painted after
+    // it, once the text's rows are known.
+    let Some(column) = blame else {
+        return render_editor_inner(
+            ui, text, layouter, word_wrap, line_numbers, hint, id, request, scroll_to, bookmarks,
+            changes, layout_cache, None,
+        );
+    };
+    let small = egui::FontId::monospace(11.0);
+    let width = column.blame.map_or(BLAME_NOTE_WIDTH, |b| b.width(ui, &small));
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let (strip, _) =
+            ui.allocate_exact_size(egui::vec2(width, ui.available_height()), egui::Sense::hover());
+        render_editor_inner(
+            ui, text, layouter, word_wrap, line_numbers, hint, id, request, scroll_to, bookmarks,
+            changes, layout_cache, Some((strip, &column, small)),
+        )
+    })
+    .inner
+}
+
+/// What the blame column shows for the active tab.
+#[derive(Clone, Copy)]
+pub struct BlameColumn<'a> {
+    /// `None` while loading, or for a note instead (unsaved edits).
+    pub blame: Option<&'a Blame>,
+    /// Shown instead of the blame, when there is none to show.
+    pub note: &'a str,
+    pub now: i64,
+}
+
+/// Width of the column while it only carries a note.
+const BLAME_NOTE_WIDTH: f32 = 140.0;
+
+#[allow(clippy::too_many_arguments)]
+fn render_editor_inner(
+    ui: &mut egui::Ui,
+    text: &mut String,
     mut layouter: Option<&mut HighlighterLayouter<'_>>,
     word_wrap: bool,
     line_numbers: bool,
@@ -2392,6 +2460,7 @@ fn render_editor_with(
     bookmarks: &mut Bookmarks,
     changes: &LineMarks,
     layout_cache: &mut LayoutCache,
+    blame: Option<(egui::Rect, &BlameColumn<'_>, egui::FontId)>,
 ) -> (ScrollPos, egui::Response) {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
@@ -2525,6 +2594,20 @@ fn render_editor_with(
         bookmarks.sync(text);
         if let Some(width) = gutter_width {
             gutter::paint(ui, &output, &font_id, width, bookmarks, changes);
+        }
+        if let Some((strip, column, small)) = &blame {
+            match column.blame {
+                Some(blame) => blame::paint_column(
+                    ui,
+                    *strip,
+                    blame,
+                    &output.galley,
+                    output.galley_pos,
+                    small,
+                    column.now,
+                ),
+                None => blame::paint_note(ui, *strip, column.note, small),
+            }
         }
 
         // Where the right-click menu was opened, for its bookmark item: the
@@ -2976,6 +3059,32 @@ impl eframe::App for TextEditorApp {
             let language = self.tabs[active_idx].effective_language();
 
             let scroll_to = if previewing { self.scroll_sync.take_editor_offset() } else { None };
+            // Blame only speaks for the committed text: with unsaved edits
+            // the lines would not line up, so a note takes its place.
+            let blame_now = blame::now();
+            let blame_loaded;
+            let blame_column = if self.show_blame {
+                let tab = &self.tabs[active_idx];
+                match &tab.current_path {
+                    Some(_) if tab.is_dirty() => Some(BlameColumn {
+                        blame: None,
+                        note: self.i18n.t("blame.save_first"),
+                        now: blame_now,
+                    }),
+                    Some(path) if self.git.repo().is_some_and(|r| r.contains(path)) => {
+                        let path = path.clone();
+                        blame_loaded = self.git.blame(&ctx, &path).cloned();
+                        Some(BlameColumn {
+                            blame: blame_loaded.as_ref(),
+                            note: self.i18n.t("blame.loading"),
+                            now: blame_now,
+                        })
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
             let (editor_pos, editor) = ui.push_id(self.active_tab_index, |ui| {
                 let tab = &mut self.tabs[active_idx];
                 if too_large {
@@ -2991,6 +3100,7 @@ impl eframe::App for TextEditorApp {
                         scroll_to,
                         &mut tab.bookmarks,
                         &tab.line_marks,
+                        blame_column,
                         &mut self.editor_layout,
                     )
                 } else {
@@ -3010,6 +3120,7 @@ impl eframe::App for TextEditorApp {
                         scroll_to,
                         &mut tab.bookmarks,
                         &tab.line_marks,
+                        blame_column,
                         &mut self.editor_layout,
                     )
                 }
@@ -3556,6 +3667,7 @@ mod tests {
                     None,
                     &mut Bookmarks::default(),
                     &LineMarks::default(),
+                    None,
                     &mut LayoutCache::default(),
                 );
             });
@@ -3661,6 +3773,7 @@ mod tests {
                     None,
                     &mut Bookmarks::default(),
                     &LineMarks::default(),
+                    None,
                     &mut LayoutCache::default(),
                 );
             });
@@ -3704,6 +3817,7 @@ mod tests {
                     None,
                     &mut Bookmarks::default(),
                     &LineMarks::default(),
+                    None,
                     &mut LayoutCache::default(),
                 );
             });
@@ -3757,6 +3871,7 @@ mod tests {
                     None,
                     &mut Bookmarks::default(),
                     &LineMarks::default(),
+                    None,
                     &mut LayoutCache::default(),
                 );
                 response.context_menu(|ui| {
@@ -4134,6 +4249,7 @@ mod tests {
                             None,
                             &mut Bookmarks::default(),
                             &LineMarks::default(),
+                            None,
                             &mut cache,
                         );
                     });
@@ -4586,6 +4702,60 @@ mod tests {
     }
 
     #[test]
+    fn test_blame_column_names_the_author_once_the_file_is_saved() {
+        let Some(repo) = crate::git::temp_repo("app_blame") else { return };
+        let file = repo.root().join("a.txt");
+        fs::write(&file, "one\ntwo\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("first").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp {
+            explorer: Some(Explorer::new(repo.root().to_path_buf())),
+            show_blame: true,
+            ..Default::default()
+        };
+        app.open_file_in_tab(file.clone());
+        poll_git_until(&mut app, &ctx, |app| app.git.status.is_some());
+        let frame = |app: &mut TextEditorApp| -> Vec<String> {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let mut frame = eframe::Frame::_new_kittest();
+                eframe::App::ui(app, ui, &mut frame);
+            });
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // The first frame asks git for the blame; it is painted once it arrives.
+        let mut texts = frame(&mut app);
+        for _ in 0..250 {
+            if texts.iter().any(|t| t.starts_with("Test · ")) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            texts = frame(&mut app);
+        }
+        assert_eq!(texts.iter().filter(|t| t.starts_with("Test · ")).count(), 2, "{texts:?}");
+
+        // Unsaved edits replace the column with a note.
+        app.active_tab_mut().text_content.push_str("three\n");
+        let texts = frame(&mut app);
+        assert!(texts.iter().any(|t| t.contains("Simpan dulu")), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.starts_with("Test · ")));
+        let _ = fs::remove_dir_all(repo.root());
+    }
+
+    #[test]
     fn test_file_history_opens_source_control_filtered_to_the_file() {
         let Some(repo) = crate::git::temp_repo("app_history") else { return };
         let a = repo.root().join("a.txt");
@@ -4789,6 +4959,7 @@ mod tests {
                     None,
                     &mut Bookmarks::default(),
                     &LineMarks::default(),
+                    None,
                     &mut LayoutCache::default(),
                 );
             })
@@ -4840,6 +5011,7 @@ mod tests {
                     None,
                     &mut tab.bookmarks,
                     &LineMarks::default(),
+                    None,
                     &mut LayoutCache::default(),
                 );
                 app.show_editor_context_menu(ui.ctx(), &editor);
@@ -4895,6 +5067,7 @@ mod tests {
                     None,
                     &mut bookmarks,
                     &LineMarks::default(),
+                    None,
                     &mut LayoutCache::default(),
                 );
             });
@@ -4940,6 +5113,7 @@ mod tests {
                     None,
                     &mut bookmarks,
                     &LineMarks::default(),
+                    None,
                     &mut LayoutCache::default(),
                 );
             });
