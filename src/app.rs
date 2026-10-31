@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::about::{self, AboutState, HOME_URL};
 use crate::activity_bar;
 use crate::blame::{self, Blame};
 use crate::bookmarks::Bookmarks;
@@ -38,9 +39,6 @@ const HISTORY_KEY: &str = "recent_paths";
 
 /// Storage key under which eframe remembers the chosen color theme.
 const THEME_KEY: &str = "theme";
-
-/// The project page, opened by Help > Home.
-const HOME_URL: &str = "https://github.com/donairl/red-editor/";
 
 /// Seconds between checks for open files changed by other programs.
 const DISK_CHECK_SECS: f64 = 2.0;
@@ -257,6 +255,7 @@ pub struct TextEditorApp {
     pub sidebar_view: SidebarView,
     pub pending_action: Option<PendingAction>,
     pub show_about_modal: bool,
+    pub about: AboutState,
     pub status_message: Option<(String, bool)>, // (message, is_error)
     /// The caret's line and column as the status bar last showed them.
     status_position: Option<(usize, usize)>,
@@ -350,6 +349,7 @@ impl Default for TextEditorApp {
             sidebar_view: SidebarView::Explorer,
             pending_action: None,
             show_about_modal: false,
+            about: AboutState::default(),
             status_message: None,
             status_position: None,
             status_bookmarks: 0,
@@ -3137,7 +3137,7 @@ impl eframe::App for TextEditorApp {
         });
 
         // 5. Modals & Dialogs
-        modals::show_about_modal(&ctx, &mut self.show_about_modal, &self.i18n);
+        about::show(&ctx, &mut self.show_about_modal, &mut self.about, &self.i18n);
 
         self.show_bookmarks_window(&ctx);
 

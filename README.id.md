@@ -217,8 +217,16 @@ Struktur kode:
 | `src/embedded_sql.rs` | Pewarnaan SQL di dalam string |
 | `src/file_browser.rs` | Explorer: tree folder dan sidebar |
 | `src/activity_bar.rs` | Activity Bar |
-| `src/modals.rs` | Dialog About, konfirmasi simpan, daftar bookmark |
+| `src/modals.rs` | Konfirmasi simpan, konflik disk, daftar bookmark |
+| `src/about.rs` | Dialog About: versi, tautan, shortcut |
+| `src/git.rs`, `src/git_worker.rs` | Git lewat CLI `git`, dijalankan di luar thread UI |
+| `src/source_control.rs` | View Source Control, log commit, panel diff |
+| `src/blame.rs`, `src/line_diff.rs` | Kolom blame dan penanda perubahan di gutter |
 | `src/i18n.rs` | Terjemahan antarmuka dari `assets/lang/*.json` |
 | `assets/lang/` | File bahasa antarmuka |
 
 Desain dan rencana tiap fitur ada di `docs/superpowers/specs/` dan `docs/superpowers/plans/`.
+
+## Lisensi
+
+[MIT](LICENSE) © 2026 Donny Airlangga.

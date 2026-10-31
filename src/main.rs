@@ -2,6 +2,7 @@
 // beside the editor. Debug builds keep the console for their output.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod activity_bar;
 mod app;
 mod blame;

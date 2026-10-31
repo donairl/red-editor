@@ -218,8 +218,16 @@ Source structure:
 | `src/embedded_sql.rs` | SQL colouring inside string literals |
 | `src/file_browser.rs` | Explorer: folder tree and sidebar |
 | `src/activity_bar.rs` | Activity Bar |
-| `src/modals.rs` | About dialog, unsaved changes confirmation, bookmark list |
+| `src/modals.rs` | Unsaved changes confirmation, disk conflict, bookmark list |
+| `src/about.rs` | About dialog: version, links, shortcuts |
+| `src/git.rs`, `src/git_worker.rs` | Git through the `git` CLI, run off the UI thread |
+| `src/source_control.rs` | Source Control view, commit log, diff panel |
+| `src/blame.rs`, `src/line_diff.rs` | Blame column and the gutter's change markers |
 | `src/i18n.rs` | UI localization loaded from `assets/lang/*.json` |
 | `assets/lang/` | Interface language files |
 
 Feature design specifications and implementation plans are located in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+
+## License
+
+[MIT](LICENSE) © 2026 Donny Airlangga.

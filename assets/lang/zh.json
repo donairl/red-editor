@@ -105,7 +105,7 @@
 
   "about.title": "关于 Red Text Editor",
   "about.version": "版本 {version}",
-  "about.description": "基于 Rust 和 egui 的简单快速的文本编辑器。",
+  "about.description": "一款轻量的 VS Code 风格文本编辑器，使用 Rust 和 egui 构建。",
   "about.close": "关闭",
 
   "unsaved.title": "有未保存的更改",
@@ -207,5 +207,17 @@
 
   "view.blame": "Git Blame",
   "blame.save_first": "保存后查看 blame。",
-  "blame.loading": "正在加载 blame…"
+  "blame.loading": "正在加载 blame…",
+
+  "about.tab_about": "关于",
+  "about.tab_shortcuts": "快捷键",
+  "about.fact_version": "版本",
+  "about.fact_built_with": "构建工具",
+  "about.fact_platform": "平台",
+  "about.fact_license": "许可证",
+  "about.link_home": "主页",
+  "about.link_release_notes": "发行说明",
+  "about.link_report_issue": "报告问题",
+  "about.copy_info": "复制信息",
+  "about.copied": "已复制"
 }

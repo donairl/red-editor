@@ -2,6 +2,10 @@
 name = "red_text_editor"
 version = "0.7.0"
 edition = "2024"
+authors = ["Donny Airlangga"]
+description = "A light VS Code-style text editor built with Rust and egui"
+license = "MIT"
+repository = "https://github.com/donairl/red-editor"
 
 [dependencies]
 eframe = { version = "0.37", features = ["persistence"] } # Gunakan versi terbaru yang stabil

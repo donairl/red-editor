@@ -105,7 +105,7 @@
 
   "about.title": "About Red Text Editor",
   "about.version": "Version {version}",
-  "about.description": "A simple, fast text editor built with Rust & egui.",
+  "about.description": "A light VS Code-style text editor, built with Rust and egui.",
   "about.close": "Close",
 
   "unsaved.title": "Unsaved Changes",
@@ -207,5 +207,17 @@
 
   "view.blame": "Git Blame",
   "blame.save_first": "Save to see blame.",
-  "blame.loading": "Loading blame…"
+  "blame.loading": "Loading blame…",
+
+  "about.tab_about": "About",
+  "about.tab_shortcuts": "Shortcuts",
+  "about.fact_version": "Version",
+  "about.fact_built_with": "Built with",
+  "about.fact_platform": "Platform",
+  "about.fact_license": "License",
+  "about.link_home": "Home",
+  "about.link_release_notes": "Release Notes",
+  "about.link_report_issue": "Report an Issue",
+  "about.copy_info": "Copy Info",
+  "about.copied": "Copied"
 }

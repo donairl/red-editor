@@ -17,29 +17,6 @@ pub enum ModalResponse {
     Cancel,
 }
 
-pub fn show_about_modal(ctx: &egui::Context, open: &mut bool, i18n: &I18n) {
-    if !*open {
-        return;
-    }
-
-    egui::Window::new(i18n.t("about.title"))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.heading("Red Text Editor");
-                ui.label(i18n.tf("about.version", &[("version", env!("CARGO_PKG_VERSION"))]));
-                ui.add_space(8.0);
-                ui.label(i18n.t("about.description"));
-                ui.add_space(12.0);
-                if ui.button(i18n.t("about.close")).clicked() {
-                    *open = false;
-                }
-            });
-        });
-}
-
 pub fn show_unsaved_changes_modal(
     ctx: &egui::Context,
     file_name: &str,
@@ -209,21 +186,6 @@ mod tests {
         assert_eq!(resp1, resp2);
         assert_ne!(resp1, resp3);
         assert_ne!(resp3, resp4);
-    }
-
-    #[test]
-    fn test_show_about_modal() {
-        let ctx = egui::Context::default();
-        let mut open = false;
-        show_about_modal(&ctx, &mut open, &I18n::builtin());
-        assert!(!open);
-
-        let mut open = true;
-        let mut output = ctx.run_ui(Default::default(), |ctx| {
-            show_about_modal(ctx, &mut open, &I18n::builtin());
-        });
-        output.textures_delta.clear();
-        assert!(open);
     }
 
     #[test]
