@@ -132,5 +132,24 @@
   "activity.console": "Konsole",
   "console.title": "KONSOLE",
   "console.hide": "Ausblenden",
-  "console.kill": "Beenden"
+  "console.kill": "Beenden",
+
+  "git.branches": "Branches",
+  "git.branch_tooltip": "Git-Branch: wechseln, erstellen, Fetch, Pull, Push",
+  "git.new_branch_hint": "Neuer Branch… (Enter)",
+  "git.fetch": "Fetch",
+  "git.pull": "Pull",
+  "git.push": "Push",
+  "git.busy": "Ein anderer Git-Befehl läuft noch.",
+  "git.failed": "Git: {error}",
+  "git.auth_required": "Git braucht ein Passwort oder einen Schlüssel. Führe den Befehl einmal in der Konsole aus.",
+  "git.not_installed": "git ist nicht installiert.",
+  "git.discarded": "Änderungen verworfen.",
+  "git.committed": "Commit erstellt.",
+  "git.fetched": "Fetch abgeschlossen.",
+  "git.pulled": "Pull abgeschlossen.",
+  "git.pushed": "Push abgeschlossen.",
+  "git.switched": "Zu {branch} gewechselt.",
+  "git.branch_created": "Branch {branch} erstellt.",
+  "git.initialized": "Git-Repository angelegt."
 }

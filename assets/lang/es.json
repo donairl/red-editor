@@ -132,5 +132,24 @@
   "activity.console": "Consola",
   "console.title": "CONSOLA",
   "console.hide": "Ocultar",
-  "console.kill": "Terminar"
+  "console.kill": "Terminar",
+
+  "git.branches": "Ramas",
+  "git.branch_tooltip": "Rama de git: cambiar, crear, fetch, pull, push",
+  "git.new_branch_hint": "Nueva rama… (Enter)",
+  "git.fetch": "Fetch",
+  "git.pull": "Pull",
+  "git.push": "Push",
+  "git.busy": "Otro comando de git sigue en ejecución.",
+  "git.failed": "Git: {error}",
+  "git.auth_required": "Git necesita una contraseña o clave. Ejecuta el comando una vez en la Consola.",
+  "git.not_installed": "git no está instalado.",
+  "git.discarded": "Cambios descartados.",
+  "git.committed": "Commit realizado.",
+  "git.fetched": "Fetch completado.",
+  "git.pulled": "Pull completado.",
+  "git.pushed": "Push completado.",
+  "git.switched": "Cambiado a {branch}.",
+  "git.branch_created": "Rama {branch} creada.",
+  "git.initialized": "Repositorio git inicializado."
 }

@@ -132,5 +132,24 @@
   "activity.console": "控制台",
   "console.title": "控制台",
   "console.hide": "隐藏",
-  "console.kill": "终止"
+  "console.kill": "终止",
+
+  "git.branches": "分支",
+  "git.branch_tooltip": "Git 分支：切换、新建、拉取、推送",
+  "git.new_branch_hint": "新分支…（回车）",
+  "git.fetch": "获取 (Fetch)",
+  "git.pull": "拉取 (Pull)",
+  "git.push": "推送 (Push)",
+  "git.busy": "另一个 git 命令仍在运行。",
+  "git.failed": "Git：{error}",
+  "git.auth_required": "Git 需要密码或密钥。请先在控制台中运行一次该命令。",
+  "git.not_installed": "未安装 git。",
+  "git.discarded": "已放弃更改。",
+  "git.committed": "已提交。",
+  "git.fetched": "获取完成。",
+  "git.pulled": "拉取完成。",
+  "git.pushed": "推送完成。",
+  "git.switched": "已切换到 {branch}。",
+  "git.branch_created": "已创建分支 {branch}。",
+  "git.initialized": "已初始化 git 仓库。"
 }

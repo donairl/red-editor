@@ -132,5 +132,24 @@
   "activity.console": "Konsol",
   "console.title": "KONSOL",
   "console.hide": "Sembunyikan",
-  "console.kill": "Hentikan"
+  "console.kill": "Hentikan",
+
+  "git.branches": "Branch",
+  "git.branch_tooltip": "Branch git: ganti, buat, fetch, pull, push",
+  "git.new_branch_hint": "Branch baru… (Enter)",
+  "git.fetch": "Fetch",
+  "git.pull": "Pull",
+  "git.push": "Push",
+  "git.busy": "Perintah git lain masih berjalan.",
+  "git.failed": "Git: {error}",
+  "git.auth_required": "Git butuh password atau key. Jalankan perintahnya sekali di Console.",
+  "git.not_installed": "git tidak terpasang.",
+  "git.discarded": "Perubahan dibuang.",
+  "git.committed": "Commit dibuat.",
+  "git.fetched": "Fetch selesai.",
+  "git.pulled": "Pull selesai.",
+  "git.pushed": "Push selesai.",
+  "git.switched": "Pindah ke branch {branch}.",
+  "git.branch_created": "Branch {branch} dibuat.",
+  "git.initialized": "Repository git dibuat."
 }

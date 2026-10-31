@@ -9,6 +9,8 @@ use std::time::{Duration, SystemTime};
 use crate::activity_bar;
 use crate::bookmarks::Bookmarks;
 use crate::file_browser::{self, Explorer};
+use crate::git::GitError;
+use crate::git_worker::{GitState, Op};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::history::{Entry, EntryKind, History};
@@ -261,6 +263,10 @@ pub struct TextEditorApp {
     pub history: History,
     /// The color theme picked in View > Theme; `System` follows the OS.
     pub theme: ThemeId,
+    /// Git status of the open folder, or of the active file's folder.
+    pub git: GitState,
+    /// The name typed in the status bar's branch menu.
+    pub new_branch_name: String,
 }
 
 /// What the app wants done to the editor widget, which only `render_editor`
@@ -318,6 +324,8 @@ impl Default for TextEditorApp {
             console: None,
             history: History::default(),
             theme: ThemeId::System,
+            git: GitState::default(),
+            new_branch_name: String::new(),
         }
     }
 }
@@ -687,6 +695,10 @@ impl TextEditorApp {
         self.active_tab_mut().sync_bookmarks();
         self.status_bookmarks = self.active_tab().bookmarks.len();
         ui.horizontal(|ui| {
+            if self.git.status.is_some() {
+                self.show_branch_menu(ui);
+                ui.separator();
+            }
             let modified = if self.is_dirty() {
                 self.i18n.t("status.modified")
             } else {
@@ -740,6 +752,61 @@ impl TextEditorApp {
                 });
             }
         });
+    }
+
+    /// The status bar's branch button, `main* ↓1 ↑2`, and the menu it opens:
+    /// switch to or create a branch, fetch, pull and push.
+    fn show_branch_menu(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let Some(status) = &self.git.status else { return };
+        let mut label = status.head_label();
+        if !status.files.is_empty() {
+            label.push('*');
+        }
+        if status.behind > 0 {
+            label.push_str(&format!(" ↓{}", status.behind));
+        }
+        if status.ahead > 0 {
+            label.push_str(&format!(" ↑{}", status.ahead));
+        }
+        let busy = self.git.busy().is_some();
+        if busy {
+            ui.spinner();
+        }
+        let mut op = None;
+        ui.menu_button(label, |ui| {
+            ui.set_min_width(200.0);
+            ui.label(egui::RichText::new(self.i18n.t("git.branches")).small().weak());
+            for branch in &self.git.branches {
+                if ui.add_enabled(!branch.current, egui::Button::selectable(branch.current, &branch.name)).clicked() {
+                    op = Some(Op::Switch(branch.name.clone()));
+                    ui.close();
+                }
+            }
+            ui.separator();
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut self.new_branch_name)
+                    .hint_text(self.i18n.t("git.new_branch_hint")),
+            );
+            let name = self.new_branch_name.trim().to_owned();
+            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !name.is_empty() {
+                op = Some(Op::CreateBranch(name));
+                self.new_branch_name.clear();
+                ui.close();
+            }
+            ui.separator();
+            for (key, action) in [("git.fetch", Op::Fetch), ("git.pull", Op::Pull), ("git.push", Op::Push)] {
+                if ui.add_enabled(!busy, egui::Button::new(self.i18n.t(key))).clicked() {
+                    op = Some(action);
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(self.i18n.t("git.branch_tooltip"));
+        if let Some(op) = op {
+            self.run_git(&ctx, op);
+        }
     }
 
     /// 1-based line and column of the editor's caret, once it has one.
@@ -1503,6 +1570,7 @@ impl TextEditorApp {
         }
         if let Some(name) = reloaded {
             self.status_message = Some((self.i18n.tf("msg.reloaded", &[("name", &name)]), false));
+            self.git.request_refresh();
         }
     }
 
@@ -1519,8 +1587,70 @@ impl TextEditorApp {
         if refocused || now - self.last_disk_check >= DISK_CHECK_SECS {
             self.last_disk_check = now;
             self.check_files_on_disk();
+            // Back from another program: files may have changed under git
+            // without touching its index.
+            if refocused {
+                self.git.refresh(ctx);
+            } else {
+                self.git.refresh_if_changed(ctx);
+            }
         }
         ctx.request_repaint_after(Duration::from_secs_f64(DISK_CHECK_SECS));
+    }
+
+    /// The folder whose repository git features act on: the open folder,
+    /// else the active file's.
+    fn git_dir(&self) -> Option<PathBuf> {
+        match &self.explorer {
+            Some(explorer) => Some(explorer.root().to_path_buf()),
+            None => self.active_tab().current_path.as_deref()?.parent().map(Path::to_path_buf),
+        }
+    }
+
+    /// Takes in what git reported and tells the user how commands ended.
+    pub fn poll_git(&mut self, ctx: &egui::Context) {
+        if let Some(dir) = self.git_dir() {
+            self.git.open(ctx, dir);
+        }
+        self.git.poll(ctx);
+        for (op, result) in self.git.take_finished() {
+            if op.touches_work_tree() {
+                self.check_files_on_disk();
+            }
+            self.status_message = self.git_outcome_message(&op, result);
+        }
+    }
+
+    /// Starts a git command, unless one is running.
+    pub fn run_git(&mut self, ctx: &egui::Context, op: Op) {
+        if !self.git.run(ctx, op) {
+            self.status_message = Some((self.i18n.t("git.busy").to_owned(), true));
+        }
+    }
+
+    /// The status bar message for a finished git command; staging is
+    /// silent, the lists show it.
+    fn git_outcome_message(&self, op: &Op, result: Result<(), GitError>) -> Option<(String, bool)> {
+        let message = match result {
+            Err(GitError::AuthRequired) => (self.i18n.t("git.auth_required").to_owned(), true),
+            Err(GitError::NotInstalled) => (self.i18n.t("git.not_installed").to_owned(), true),
+            Err(e) => (self.i18n.tf("git.failed", &[("error", &e.to_string())]), true),
+            Ok(()) => {
+                let text = match op {
+                    Op::Stage(_) | Op::Unstage(_) => return self.status_message.clone(),
+                    Op::Discard(_) => self.i18n.t("git.discarded").to_owned(),
+                    Op::Commit(_) => self.i18n.t("git.committed").to_owned(),
+                    Op::Fetch => self.i18n.t("git.fetched").to_owned(),
+                    Op::Pull => self.i18n.t("git.pulled").to_owned(),
+                    Op::Push => self.i18n.t("git.pushed").to_owned(),
+                    Op::Switch(b) => self.i18n.tf("git.switched", &[("branch", b)]),
+                    Op::CreateBranch(b) => self.i18n.tf("git.branch_created", &[("branch", b)]),
+                    Op::Init(_) => self.i18n.t("git.initialized").to_owned(),
+                };
+                (text, false)
+            }
+        };
+        Some(message)
     }
 
     /// Applies the conflict dialog's choice to the active tab.
@@ -1567,6 +1697,7 @@ impl TextEditorApp {
             match self.tabs[index].save() {
                 Ok(_) => {
                     self.status_message = Some((self.i18n.t("msg.saved").to_owned(), false));
+                    self.git.request_refresh();
                     true
                 }
                 Err(err) => {
@@ -2242,6 +2373,7 @@ impl eframe::App for TextEditorApp {
         self.highlighter.set_theme(theme.syntax);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         self.poll_disk(&ctx);
+        self.poll_git(&ctx);
 
         // While the Console has focus the shell gets every key, Escape
         // included, but the shortcut that hides it.
@@ -2407,7 +2539,13 @@ impl eframe::App for TextEditorApp {
                     .frame(side_frame)
                     .show(ui, |ui| {
                         let tree =
-                            file_browser::show(ui, explorer, active_file.as_deref(), &self.i18n);
+                            file_browser::show(
+                            ui,
+                            explorer,
+                            active_file.as_deref(),
+                            Some(&self.git.decorations),
+                            &self.i18n,
+                        );
                         file_to_open = tree.open_file;
                         find_in_files = tree.find_in_files;
                     });
@@ -4025,7 +4163,7 @@ mod tests {
         let mut tree = |events| {
             let mut response = None;
             run_frame_with_events(&ctx, events, |ui| {
-                response = Some(file_browser::show(ui, &mut explorer, None, &I18n::builtin()));
+                response = Some(file_browser::show(ui, &mut explorer, None, None, &I18n::builtin()));
             });
             response.expect("show ran")
         };
@@ -4065,6 +4203,29 @@ mod tests {
 
     /// The caret's line and column sit at the right end of the status bar,
     /// once the editor has a caret; the document name stays on the left.
+    #[test]
+    fn test_status_bar_shows_the_git_branch() {
+        let mut app = TextEditorApp::default();
+        let ctx = egui::Context::default();
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_status_bar(ui));
+        assert!(painted_text(&shapes, "main").is_none(), "no repository, no branch");
+
+        app.git.status = Some(crate::git::RepoStatus {
+            branch: Some("main".into()),
+            ahead: 2,
+            behind: 1,
+            files: vec![crate::git::FileChange {
+                path: PathBuf::from("/r/a"),
+                orig_path: None,
+                staged: None,
+                unstaged: Some(crate::git::Kind::Modified),
+            }],
+            ..Default::default()
+        });
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_status_bar(ui));
+        assert!(painted_text(&shapes, "main* ↓1 ↑2").is_some());
+    }
+
     #[test]
     fn test_status_bar_shows_the_caret_position_on_the_right() {
         let mut app = TextEditorApp::default();

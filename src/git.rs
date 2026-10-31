@@ -99,6 +99,8 @@ impl FileChange {
 /// `git status` of the whole work tree.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RepoStatus {
+    /// The commit HEAD points at; `None` before the first commit.
+    pub head: Option<String>,
     /// The checked-out branch; `None` on a detached HEAD.
     pub branch: Option<String>,
     /// Short commit id of a detached HEAD.
@@ -153,24 +155,36 @@ pub enum DiffKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Repo {
     root: PathBuf,
+    /// The `.git` folder (elsewhere for linked work trees).
+    git_dir: PathBuf,
 }
 
 impl Repo {
-    /// The work tree holding `dir`.
+    /// The work tree holding `dir`. Its root is spelled the way `dir` is,
+    /// so paths built from it match the editor's, symlinks and all.
     pub fn discover(dir: &Path) -> Result<Repo, GitError> {
-        let out = run(dir, &["rev-parse", "--show-toplevel"], None, LOCAL_TIMEOUT).map_err(
-            |e| match e {
-                GitError::Failed(_) => GitError::NotRepo,
-                other => other,
-            },
-        )?;
-        let top = out.trim_end_matches(['\n', '\r']);
+        let out = run(
+            dir,
+            &["rev-parse", "--show-toplevel", "--absolute-git-dir"],
+            None,
+            LOCAL_TIMEOUT,
+        )
+        .map_err(|e| match e {
+            GitError::Failed(_) => GitError::NotRepo,
+            other => other,
+        })?;
+        let mut lines = out.lines().map(|l| l.trim_end_matches('\r'));
+        let (Some(top), Some(git_dir)) = (lines.next(), lines.next()) else {
+            return Err(GitError::NotRepo);
+        };
         if top.is_empty() {
             return Err(GitError::NotRepo);
         }
         // git prints forward slashes on Windows too; Path accepts both.
+        let top = PathBuf::from(top);
         Ok(Repo {
-            root: PathBuf::from(top),
+            root: respell_root(dir, &top).unwrap_or(top),
+            git_dir: PathBuf::from(git_dir),
         })
     }
 
@@ -182,6 +196,11 @@ impl Repo {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Files whose change means HEAD, the branch or the index moved.
+    pub fn watched_files(&self) -> [PathBuf; 2] {
+        [self.git_dir.join("HEAD"), self.git_dir.join("index")]
     }
 
     /// Whether `path` lies inside this work tree.
@@ -334,6 +353,27 @@ impl Repo {
     }
 }
 
+/// `top`, git's spelling of the work tree holding `dir`, spelled as an
+/// ancestor of `dir` instead: `/home/me/link/src` in a work tree git calls
+/// `/data/repo` gives `/home/me/link`.
+fn respell_root(dir: &Path, top: &Path) -> Option<PathBuf> {
+    if dir.starts_with(top) {
+        return None;
+    }
+    let depth = dir
+        .canonicalize()
+        .ok()?
+        .strip_prefix(top.canonicalize().ok()?)
+        .ok()?
+        .components()
+        .count();
+    let mut root = dir.to_path_buf();
+    for _ in 0..depth {
+        root.pop();
+    }
+    Some(root)
+}
+
 /// Runs git in `dir` and returns its stdout.
 fn run(dir: &Path, args: &[&str], stdin: Option<&str>, timeout: Duration) -> Result<String, GitError> {
     let mut command = Command::new("git");
@@ -450,12 +490,15 @@ pub fn parse_status(root: &Path, out: &str) -> RepoStatus {
         };
         status.files.push(change);
     }
-    match oid.as_deref() {
-        Some("(initial)") => status.unborn = true,
-        Some(oid) if status.branch.is_none() => {
-            status.detached_at = Some(oid.chars().take(7).collect());
+    match oid {
+        Some(oid) if oid == "(initial)" => status.unborn = true,
+        Some(oid) => {
+            if status.branch.is_none() {
+                status.detached_at = Some(oid.chars().take(7).collect());
+            }
+            status.head = Some(oid);
         }
-        _ => {}
+        None => {}
     }
     status
 }
@@ -550,6 +593,7 @@ mod tests {
         let out = "# branch.oid 0123456789abcdef\0# branch.head main\0\
                    # branch.upstream origin/main\0# branch.ab +2 -3\0";
         let status = parse_status(&root(), out);
+        assert_eq!(status.head.as_deref(), Some("0123456789abcdef"));
         assert_eq!(status.branch.as_deref(), Some("main"));
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
         assert_eq!((status.ahead, status.behind), (2, 3));

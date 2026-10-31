@@ -132,5 +132,24 @@
   "activity.console": "Console",
   "console.title": "CONSOLE",
   "console.hide": "Hide",
-  "console.kill": "Kill"
+  "console.kill": "Kill",
+
+  "git.branches": "Branches",
+  "git.branch_tooltip": "Git branch: switch, create, fetch, pull, push",
+  "git.new_branch_hint": "New branch… (Enter)",
+  "git.fetch": "Fetch",
+  "git.pull": "Pull",
+  "git.push": "Push",
+  "git.busy": "Another git command is still running.",
+  "git.failed": "Git: {error}",
+  "git.auth_required": "Git needs a password or key. Run the command once in the Console.",
+  "git.not_installed": "git is not installed.",
+  "git.discarded": "Changes discarded.",
+  "git.committed": "Committed.",
+  "git.fetched": "Fetched.",
+  "git.pulled": "Pulled.",
+  "git.pushed": "Pushed.",
+  "git.switched": "Switched to {branch}.",
+  "git.branch_created": "Created branch {branch}.",
+  "git.initialized": "Git repository initialized."
 }

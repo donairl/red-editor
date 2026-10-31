@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
+use crate::git::Kind;
+use crate::git_worker::Decorations;
 use crate::highlighter::Language;
 use crate::i18n::I18n;
 use crate::{find, search, tab_bar, theme};
@@ -74,6 +76,11 @@ pub struct SidebarPalette {
     /// The row of the file in the active tab.
     pub row_selected: Color32,
     pub indent_guide: Color32,
+    /// Names of files git sees as new (staged or untracked).
+    pub git_added: Color32,
+    pub git_modified: Color32,
+    pub git_deleted: Color32,
+    pub git_conflict: Color32,
 }
 
 impl SidebarPalette {
@@ -87,6 +94,10 @@ impl SidebarPalette {
         row_hover: Color32::from_rgb(0x2A, 0x2D, 0x2E),
         row_selected: Color32::from_rgb(0x37, 0x37, 0x3D),
         indent_guide: Color32::from_rgb(0x40, 0x40, 0x40),
+        git_added: Color32::from_rgb(0x73, 0xC9, 0x91),
+        git_modified: Color32::from_rgb(0xE2, 0xC0, 0x8D),
+        git_deleted: Color32::from_rgb(0xC7, 0x4E, 0x39),
+        git_conflict: Color32::from_rgb(0xE4, 0x67, 0x6B),
     };
 
     pub const LIGHT: SidebarPalette = SidebarPalette {
@@ -99,7 +110,21 @@ impl SidebarPalette {
         row_hover: Color32::from_rgb(0xF2, 0xF2, 0xF2),
         row_selected: Color32::from_rgb(0xE4, 0xE6, 0xF1),
         indent_guide: Color32::from_rgb(0xD3, 0xD3, 0xD3),
+        git_added: Color32::from_rgb(0x58, 0x7C, 0x0C),
+        git_modified: Color32::from_rgb(0x89, 0x55, 0x03),
+        git_deleted: Color32::from_rgb(0xAD, 0x07, 0x07),
+        git_conflict: Color32::from_rgb(0xAD, 0x07, 0x07),
     };
+
+    /// The colour of a file with `kind` of change.
+    pub fn git(&self, kind: Kind) -> Color32 {
+        match kind {
+            Kind::Added | Kind::Untracked => self.git_added,
+            Kind::Modified | Kind::Renamed => self.git_modified,
+            Kind::Deleted => self.git_deleted,
+            Kind::Conflicted => self.git_conflict,
+        }
+    }
 }
 
 /// One visible line of the tree.
@@ -391,6 +416,8 @@ const ROW_PADDING_X: f32 = 8.0;
 const INDENT: f32 = 8.0;
 const CHEVRON_WIDTH: f32 = 16.0;
 const BADGE_GAP: f32 = 6.0;
+/// Room for a git status letter at the end of a row.
+const GIT_MARK_WIDTH: f32 = 10.0;
 /// Side of the Search, Refresh and Collapse All buttons.
 const ACTION_SIZE: f32 = 22.0;
 
@@ -425,6 +452,7 @@ pub fn show(
     ui: &mut egui::Ui,
     explorer: &mut Explorer,
     active_file: Option<&Path>,
+    git: Option<&Decorations>,
     i18n: &I18n,
 ) -> ExplorerResponse {
     let palette = theme::active(ui.ctx()).sidebar;
@@ -516,7 +544,7 @@ pub fn show(
         rows: Vec::new(),
     };
     if explorer.is_section_open() && explorer.is_filtering() {
-        show_matches(ui, &palette, explorer, active_file, i18n, &mut response);
+        show_matches(ui, &palette, explorer, active_file, git, i18n, &mut response);
         return response;
     }
 
@@ -537,6 +565,7 @@ pub fn show(
                     &palette,
                     row,
                     None,
+                    git_kind(git, &row.entry),
                     rect,
                     row_response.hovered(),
                     selected,
@@ -565,6 +594,7 @@ fn show_matches(
     palette: &SidebarPalette,
     explorer: &mut Explorer,
     active_file: Option<&Path>,
+    git: Option<&Decorations>,
     i18n: &I18n,
     response: &mut ExplorerResponse,
 ) {
@@ -613,6 +643,7 @@ fn show_matches(
                     palette,
                     &row,
                     folder.as_deref(),
+                    git_kind(git, entry),
                     rect,
                     row_response.hovered(),
                     selected,
@@ -685,11 +716,22 @@ fn paint_section_header(
 
 /// Background, indent guides, chevron or badge, and the name of one row,
 /// followed by `detail` in a dimmer colour.
+/// The git change an Explorer entry is marked with.
+fn git_kind(git: Option<&Decorations>, entry: &FsEntry) -> Option<Kind> {
+    let git = git?;
+    if entry.is_dir {
+        git.dir(&entry.path)
+    } else {
+        git.file(&entry.path)
+    }
+}
+
 fn paint_row(
     ui: &egui::Ui,
     palette: &SidebarPalette,
     row: &TreeRow,
     detail: Option<&str>,
+    git: Option<Kind>,
     rect: Rect,
     hovered: bool,
     selected: bool,
@@ -734,23 +776,45 @@ fn paint_row(
         x += badge_width + BADGE_GAP;
     }
 
+    // A changed file ends with its status letter, a folder holding one
+    // with a dot, both in the change's colour, as is the name.
+    let mut right = rect.right() - ROW_PADDING_X;
+    let mut name_color = palette.foreground;
+    if let Some(kind) = git {
+        let color = palette.git(kind);
+        name_color = color;
+        let center = pos2(right - GIT_MARK_WIDTH / 2.0, rect.center().y);
+        if row.entry.is_dir {
+            painter.circle_filled(center, 3.0, color);
+        } else {
+            painter.text(
+                center,
+                Align2::CENTER_CENTER,
+                kind.letter(),
+                FontId::proportional(12.0),
+                color,
+            );
+        }
+        right -= GIT_MARK_WIDTH + BADGE_GAP;
+    }
+
     let name = elided(
         ui,
         row.entry.name.clone(),
         FontId::proportional(13.0),
-        palette.foreground,
-        rect.right() - ROW_PADDING_X - x,
+        name_color,
+        right - x,
     );
     let name_width = name.size().x;
     painter.galley(
         pos2(x, rect.center().y - name.size().y / 2.0),
         name,
-        palette.foreground,
+        name_color,
     );
 
     if let Some(detail) = detail {
         let x = x + name_width + BADGE_GAP;
-        let width = rect.right() - ROW_PADDING_X - x;
+        let width = right - x;
         // Narrower than this, only the `…` would show.
         if width > 16.0 {
             let detail = elided(
@@ -1118,7 +1182,7 @@ mod tests {
         };
         let mut response = None;
         let mut output = ctx.run_ui(input, |ui| {
-            response = Some(show(ui, explorer, active_file, &I18n::builtin()));
+            response = Some(show(ui, explorer, active_file, None, &I18n::builtin()));
         });
         output.textures_delta.clear();
         (response.expect("show ran"), output.shapes)
@@ -1454,6 +1518,60 @@ mod tests {
             match_names(&mut explorer, "sender"),
             ["MailSender.php", "SMSSender.php"]
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_git_changes_mark_files_and_folders() {
+        use crate::git::{FileChange, RepoStatus};
+        let root = std::env::temp_dir().join(format!("red_fb_git_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "").unwrap();
+        fs::write(root.join("README.md"), "").unwrap();
+        fs::write(root.join("notes.txt"), "").unwrap();
+        let status = RepoStatus {
+            files: vec![
+                FileChange {
+                    path: root.join("src/main.rs"),
+                    orig_path: None,
+                    staged: None,
+                    unstaged: Some(Kind::Modified),
+                },
+                FileChange {
+                    path: root.join("notes.txt"),
+                    orig_path: None,
+                    staged: None,
+                    unstaged: Some(Kind::Untracked),
+                },
+            ],
+            ..RepoStatus::default()
+        };
+        let decorations = Decorations::new(&root, &status);
+        let ctx = egui::Context::default();
+        let mut explorer = Explorer::new(root.clone());
+        explorer.toggle(&root.join("src"));
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(240.0, 600.0))),
+            ..Default::default()
+        };
+        let mut shapes = Vec::new();
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(input(), |ui| {
+                show(ui, &mut explorer, None, Some(&decorations), &I18n::builtin());
+            });
+            output.textures_delta.clear();
+            shapes = output.shapes;
+        }
+        let texts = painted_texts(&shapes);
+        assert!(texts.iter().any(|t| t == "M"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "U"), "{texts:?}");
+        let palette = SidebarPalette::DARK;
+        let dot = shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Circle(c) if c.fill == palette.git_modified
+                || c.fill == SidebarPalette::LIGHT.git_modified)
+        });
+        assert!(dot, "the src folder holding a change gets a dot");
         let _ = fs::remove_dir_all(&root);
     }
 

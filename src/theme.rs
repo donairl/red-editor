@@ -143,6 +143,12 @@ impl Theme {
         } else {
             TerminalPalette::LIGHT.ansi
         };
+        // Git colours keep their meaning across themes.
+        let git = if dark {
+            SidebarPalette::DARK
+        } else {
+            SidebarPalette::LIGHT
+        };
         Theme {
             dark,
             syntax,
@@ -167,6 +173,10 @@ impl Theme {
                 row_hover: base.hover,
                 row_selected: base.selection,
                 indent_guide: base.border,
+                git_added: git.git_added,
+                git_modified: git.git_modified,
+                git_deleted: git.git_deleted,
+                git_conflict: git.git_conflict,
             },
             gutter: GutterPalette {
                 number: base.fg_dim,
