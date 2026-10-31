@@ -25,6 +25,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Zen mode** (`F11`): mode layar penuh tanpa gangguan, sembunyikan semua panel selain editor; tekan `Esc` untuk keluar.
 - **Prettify** (**Edit → Rapikan**, `Ctrl+Shift+I`): merapikan JSON, HTML, dan CSS langsung di editor, serta Rust, Go, C/C++, Python, JS/TS lewat formatter yang terpasang (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Pratinjau Markdown** (`Ctrl+Shift+V`): hasil render file `.md` dalam tampilan terbelah langsung di samping editor.
+- **Integrasi git** (butuh `git` di `PATH`): branch dan jumlah ahead/behind di status bar, file yang berubah diwarnai di Explorer, penanda perubahan di gutter, dan view **Source Control** untuk stage, unstage, buang perubahan, commit, pull, dan push. Lihat [Git](#git).
 - Tema terang/gelap mengikuti pengaturan sistem.
 
 ## Kebutuhan
@@ -129,6 +130,7 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | `Ctrl+Shift+S` | Simpan sebagai |
 | `Ctrl+Q` | Keluar |
 | `Ctrl+B` | Tampilkan/sembunyikan sidebar |
+| `Ctrl+Shift+G` | View Source Control |
 | `F11` | Zen mode (layar penuh, hanya editor); `Esc` untuk keluar |
 | `Ctrl+Shift+V` | Tampilkan/sembunyikan pratinjau Markdown (file `.md`) |
 | `Ctrl+Shift+I` | Rapikan dokumen |
@@ -150,6 +152,17 @@ Shortcut juga tampil di sebelah item menu yang bersangkutan.
 - Klik ikon **Explorer** di Activity Bar (kolom paling kiri) untuk membuka folder. Setelah folder terbuka, ikon yang sama menyembunyikan atau menampilkan sidebar.
 - Klik folder di tree untuk membuka atau menutupnya, klik file untuk membukanya. File yang sudah terbuka tidak dibuka dua kali; tab-nya yang difokuskan.
 - Isi folder dibaca sekali lalu disimpan. Klik **Refresh** di header folder kalau ada file baru dari luar editor.
+
+### Git
+
+Editor menjalankan `git` yang terpasang di komputer, jadi credential helper, ssh-agent, dan config git kamu tetap berlaku. Tanpa git, atau di luar repository, fitur git tidak muncul.
+
+- **Status bar**: nama branch, `*` kalau ada file berubah, dan `↓behind ↑ahead` terhadap upstream. Klik untuk pindah ke branch lokal lain, membuat branch baru (ketik nama, tekan `Enter`), atau fetch, pull, dan push.
+- **Explorer**: file yang berubah diwarnai dan diakhiri huruf statusnya: `M` diubah, `A` ditambah, `U` belum dilacak, `D` dihapus, `R` diganti nama, `C` konflik. Folder yang berisi perubahan diberi titik.
+- **Gutter**: baris yang berbeda dari commit terakhir diberi bar di antara nomor baris dan teks, hijau untuk baris baru dan biru untuk baris yang diubah; segitiga merah menandai baris yang dihapus. Penanda ikut saat mengetik.
+- **Source Control** (Activity Bar, `Ctrl+Shift+G`): ketik pesan lalu tekan **Commit** (atau `Ctrl+Enter`). File tampil di **Perubahan Staged** dan **Perubahan** (serta **Konflik Merge** saat ada konflik); arahkan mouse ke baris atau header daftar untuk **Buka File**, **Stage** (`+`), **Batalkan Stage** (`−`), dan **Buang Perubahan**. Membuang perubahan selalu ditanya dulu dan tidak bisa dibatalkan. Commit tanpa file yang di-stage menawarkan untuk men-stage semuanya. Di judul view ada **Pull**, **Push**, dan **Refresh**; badge di Activity Bar menghitung file yang berubah.
+- **Diff**: klik file di Source Control untuk membukanya beserta perubahannya di panel samping editor. Klik baris di diff untuk melompat ke sana.
+- Pull hanya fast-forward; kalau branch sudah bercabang, lakukan merge atau rebase di Console. Git tidak pernah meminta password di dalam editor: pull atau push yang butuh password atau key memberi tahu untuk menjalankannya sekali di Console, dengan tombol untuk membukanya.
 
 ## Menambah bahasa antarmuka
 

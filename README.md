@@ -25,6 +25,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Zen Mode** (`F11`): Distraction-free full-screen mode showing only the editor; press `Esc` to exit.
 - **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON, HTML and CSS in place, and Rust, Go, C/C++, Python and JS/TS through the installed formatter (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Markdown preview** (`Ctrl+Shift+V`): rendered preview of `.md` files in a live split view beside the editor.
+- **Git integration** (needs `git` on the `PATH`): branch and ahead/behind counts in the status bar, changed files coloured in the Explorer, change markers in the gutter, and a **Source Control** view to stage, unstage, discard, commit, pull and push. See [Git](#git).
 - System light/dark theme detection.
 
 ## Requirements
@@ -129,6 +130,7 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+Shift+S` | Save as |
 | `Ctrl+Q` | Exit |
 | `Ctrl+B` | Toggle sidebar |
+| `Ctrl+Shift+G` | Source Control view |
 | `F11` | Zen mode (full screen, editor only); `Esc` to exit |
 | `Ctrl+Shift+V` | Toggle Markdown preview (`.md` files) |
 | `Ctrl+Shift+I` | Prettify the document |
@@ -150,6 +152,17 @@ Shortcuts are also displayed alongside their corresponding menu items.
 - Click the **Explorer** icon in the Activity Bar (leftmost strip) to open a folder. Once open, the same icon toggles the sidebar visibility.
 - Click a folder in the tree to expand or collapse it; click a file to open it in a tab. Already opened files will not open duplicated tabs—their existing tab is focused instead.
 - Folder contents are loaded once and cached. Click **Refresh** in the folder header if files are added or modified externally.
+
+### Git
+
+The editor runs the `git` installed on the machine, so your credential helper, ssh-agent and git config apply. Without git, or outside a repository, the git features stay out of the way.
+
+- **Status bar**: the branch, `*` when files changed, and `↓behind ↑ahead` against the upstream. Click it to switch to another local branch, create one (type a name, press `Enter`), or fetch, pull and push.
+- **Explorer**: changed files are coloured and end with their status letter: `M` modified, `A` added, `U` untracked, `D` deleted, `R` renamed, `C` conflicted. A folder holding changes gets a dot.
+- **Gutter**: lines that differ from the last commit get a bar between the line numbers and the text, green for added and blue for modified; a red triangle marks removed lines. Markers follow your typing.
+- **Source Control** (Activity Bar, `Ctrl+Shift+G`): type a message and press **Commit** (or `Ctrl+Enter`). Files are listed under **Staged Changes** and **Changes** (and **Merge Changes** during a conflict); hover a row or a list header for **Open File**, **Stage** (`+`), **Unstage** (`−`) and **Discard**. Discarding asks first and cannot be undone. Committing with nothing staged offers to stage everything. The title bar has **Pull**, **Push** and **Refresh**; the badge on the Activity Bar counts changed files.
+- **Diff**: click a file in Source Control to open it with its changes in a panel beside the editor. Click a line in the diff to jump there.
+- Pull only fast-forwards; if the branch has diverged, merge or rebase in the Console. Git never prompts inside the editor: a pull or push that needs a password or key tells you to run it once in the Console, with a button to open it.
 
 ## Adding Interface Languages
 
