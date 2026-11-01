@@ -25,7 +25,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Zen Mode** (`F11`): Distraction-free full-screen mode showing only the editor; press `Esc` to exit.
 - **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON, HTML and CSS in place, and Rust, Go, C/C++, Python and JS/TS through the installed formatter (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Markdown preview** (`Ctrl+Shift+V`): rendered preview of `.md` files in a live split view beside the editor.
-- **Git integration** (needs `git` on the `PATH`): branch and ahead/behind counts in the status bar, changed files coloured in the Explorer, change markers in the gutter, and a **Source Control** view to stage, unstage, discard, commit, pull and push. See [Git](#git).
+- **Git integration** (needs `git` on the `PATH`): branch and ahead/behind counts in the status bar, changed files coloured in the Explorer, change markers in the gutter, a **Source Control** view to stage, unstage, discard, commit, pull and push, commit history with file history and blame, and a **Git Graph** of every branch and tag with lanes, a detail pane and branch actions. See [Git](#git).
 - System light/dark theme detection.
 
 ## Requirements

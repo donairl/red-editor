@@ -25,7 +25,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Zen mode** (`F11`): mode layar penuh tanpa gangguan, sembunyikan semua panel selain editor; tekan `Esc` untuk keluar.
 - **Prettify** (**Edit → Rapikan**, `Ctrl+Shift+I`): merapikan JSON, HTML, dan CSS langsung di editor, serta Rust, Go, C/C++, Python, JS/TS lewat formatter yang terpasang (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Pratinjau Markdown** (`Ctrl+Shift+V`): hasil render file `.md` dalam tampilan terbelah langsung di samping editor.
-- **Integrasi git** (butuh `git` di `PATH`): branch dan jumlah ahead/behind di status bar, file yang berubah diwarnai di Explorer, penanda perubahan di gutter, dan view **Source Control** untuk stage, unstage, buang perubahan, commit, pull, dan push. Lihat [Git](#git).
+- **Integrasi git** (butuh `git` di `PATH`): branch dan jumlah ahead/behind di status bar, file yang berubah diwarnai di Explorer, penanda perubahan di gutter, view **Source Control** untuk stage, unstage, buang perubahan, commit, pull, dan push, riwayat commit dengan riwayat file dan blame, serta **Git Graph** semua branch dan tag dengan jalur, panel detail, dan aksi branch. Lihat [Git](#git).
 - Tema terang/gelap mengikuti pengaturan sistem.
 
 ## Kebutuhan
