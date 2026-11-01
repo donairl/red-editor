@@ -34,7 +34,7 @@ pub fn show(ui: &mut egui::Ui, history: &History, i18n: &I18n) -> Option<Welcome
     ui.painter().rect_filled(area, CornerRadius::ZERO, theme.tab.tab_active);
     let mut action = None;
 
-    let column_width = (area.width() - 2.0 * PADDING).clamp(240.0, COLUMN_WIDTH);
+    let column_width = (area.width() - 2.0 * PADDING).clamp(240.0, COLUMN_WIDTH).min(area.width());
     let side_by_side = column_width >= SIDE_BY_SIDE_MIN;
     let folders: Vec<&Entry> = history.entries().iter().filter(|e| e.kind == EntryKind::Folder).take(MAX_RECENT).collect();
     let files: Vec<&Entry> = history.entries().iter().filter(|e| e.kind == EntryKind::File).take(MAX_RECENT).collect();
@@ -87,6 +87,7 @@ pub fn show(ui: &mut egui::Ui, history: &History, i18n: &I18n) -> Option<Welcome
                 let files_heading = i18n.t("welcome.recent_files");
                 if side_by_side {
                     ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
                         ui.allocate_ui_with_layout(vec2(list_width, lists_height), egui::Layout::top_down(egui::Align::Min), |ui| {
                             if let Some(a) = show_list(ui, &palette, folders_heading, &folders, list_width, i18n) {
                                 action = Some(a);
@@ -122,49 +123,53 @@ fn show_list(
     width: f32,
     i18n: &I18n,
 ) -> Option<WelcomeAction> {
-    let mut action = None;
-    ui.spacing_mut().item_spacing = Vec2::ZERO;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-    ui.painter().text(
-        pos2(rect.left(), rect.center().y),
-        Align2::LEFT_CENTER,
-        heading.to_uppercase(),
-        FontId::proportional(11.0),
-        palette.icon_inactive,
-    );
-    if entries.is_empty() {
+    ui.scope(|ui| {
+        let mut action = None;
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
         let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
         ui.painter().text(
             pos2(rect.left(), rect.center().y),
             Align2::LEFT_CENTER,
-            i18n.t("file.no_recent"),
-            FontId::proportional(13.0),
+            heading.to_uppercase(),
+            FontId::proportional(11.0),
             palette.icon_inactive,
         );
-        return None;
-    }
-    for entry in entries {
-        let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-        let row = ui
-            .interact(rect, egui::Id::unique(("welcome_recent", &entry.path)), Sense::click())
-            .on_hover_text(entry.path.display().to_string());
-        if row.hovered() {
-            ui.painter().rect_filled(rect, CornerRadius::same(4), palette.row_hover);
+        if entries.is_empty() {
+            let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+            ui.painter().text(
+                pos2(rect.left(), rect.center().y),
+                Align2::LEFT_CENTER,
+                i18n.t("file.no_recent"),
+                FontId::proportional(13.0),
+                palette.icon_inactive,
+            );
+            return None;
         }
-        let (name, folder) = entry.label();
-        let name = file_browser::elided(ui, name, FontId::proportional(13.0), palette.accent, width * 0.6);
-        let name_width = name.size().x;
-        ui.painter().galley(pos2(rect.left() + 4.0, rect.center().y - name.size().y / 2.0), name, palette.accent);
-        let room = width - name_width - 16.0;
-        if room > 40.0 {
-            let folder = file_browser::elided(ui, folder, FontId::proportional(11.0), palette.icon_inactive, room);
-            ui.painter().galley(pos2(rect.left() + 4.0 + name_width + 8.0, rect.center().y - folder.size().y / 2.0), folder, palette.icon_inactive);
+        for entry in entries {
+            let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+            let row = ui
+                .interact(rect, egui::Id::unique(("welcome_recent", &entry.path)), Sense::click())
+                .on_hover_text(entry.path.display().to_string())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if row.hovered() {
+                ui.painter().rect_filled(rect, CornerRadius::same(4), palette.row_hover);
+            }
+            let (name, folder) = entry.label();
+            let name = file_browser::elided(ui, name, FontId::proportional(13.0), palette.accent, width * 0.6);
+            let name_width = name.size().x;
+            ui.painter().galley(pos2(rect.left() + 4.0, rect.center().y - name.size().y / 2.0), name, palette.accent);
+            let room = width - name_width - 16.0;
+            if room > 40.0 {
+                let folder = file_browser::elided(ui, folder, FontId::proportional(11.0), palette.icon_inactive, room);
+                ui.painter().galley(pos2(rect.left() + 4.0 + name_width + 8.0, rect.center().y - folder.size().y / 2.0), folder, palette.icon_inactive);
+            }
+            if row.clicked() {
+                action = Some(WelcomeAction::Open((*entry).clone()));
+            }
         }
-        if row.clicked() {
-            action = Some(WelcomeAction::Open((*entry).clone()));
-        }
-    }
-    action
+        action
+    })
+    .inner
 }
 
 #[cfg(test)]
