@@ -135,7 +135,36 @@ const fn hex(rgb: u32) -> Color32 {
     Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
+/// Lane colours of the Git Graph on a dark editor, cycled by lane.
+pub const GRAPH_LANES_DARK: [Color32; 8] = [
+    hex(0x4FC1FF),
+    hex(0xF28B82),
+    hex(0x81C995),
+    hex(0xFDD663),
+    hex(0xC58AF9),
+    hex(0xFF8BCB),
+    hex(0x78D9EC),
+    hex(0xFFA657),
+];
+
+/// Lane colours of the Git Graph on a light editor.
+pub const GRAPH_LANES_LIGHT: [Color32; 8] = [
+    hex(0x0969DA),
+    hex(0xCF222E),
+    hex(0x1A7F37),
+    hex(0x9A6700),
+    hex(0x8250DF),
+    hex(0xBF3989),
+    hex(0x1B7C83),
+    hex(0xBC4C00),
+];
+
 impl Theme {
+    /// Lane colours of the Git Graph for this theme's brightness.
+    pub fn graph_lanes(&self) -> &'static [Color32; 8] {
+        if self.dark { &GRAPH_LANES_DARK } else { &GRAPH_LANES_LIGHT }
+    }
+
     /// A theme whose palettes all come from `base`.
     const fn from_base(base: Base, dark: bool, syntax: &'static str) -> Theme {
         let ansi = if dark {
@@ -458,5 +487,13 @@ mod tests {
         assert_eq!(visuals.panel_fill, hex(0x00212B));
         assert_eq!(visuals.extreme_bg_color, hex(0x002B36));
         assert_eq!(visuals.widgets.inactive.fg_stroke.color, hex(0x839496));
+    }
+
+    #[test]
+    fn test_graph_lanes_follow_the_theme_brightness() {
+        let dark = ThemeId::DarkModern.theme();
+        let light = ThemeId::LightModern.theme();
+        assert_eq!(dark.graph_lanes().len(), crate::git_graph::PALETTE_LEN);
+        assert_ne!(dark.graph_lanes()[0], light.graph_lanes()[0]);
     }
 }
