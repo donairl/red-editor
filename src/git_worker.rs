@@ -258,8 +258,10 @@ pub struct GitState {
     /// HEAD and the branch names when the graph was loaded; it reloads
     /// when either changes.
     graph_key: Option<(Option<String>, Vec<String>)>,
-    /// Date and message of commits the detail pane showed.
-    commit_details: HashMap<String, Result<CommitDetails, GitError>>,
+    /// Date and message of commits the detail pane showed; None while loading.
+    commit_details: HashMap<String, Option<Result<CommitDetails, GitError>>>,
+    /// A command moved refs the graph key cannot see; reload on the next refresh.
+    graph_stale: bool,
     /// The files of commits already expanded.
     commit_files: HashMap<String, Result<Vec<CommitFile>, GitError>>,
     /// Blame by file and the HEAD it was read at; `None` while loading or
@@ -293,6 +295,7 @@ impl Default for GitState {
             graph: Log::default(),
             graph_key: None,
             commit_details: HashMap::new(),
+            graph_stale: false,
             commit_files: HashMap::new(),
             blames: HashMap::new(),
         }
@@ -543,11 +546,11 @@ impl GitState {
         )
     }
 
-    /// Reloads the graph when HEAD or a branch moved since it was loaded.
-    /// Only a graph that was asked for once is kept up to date.
+    /// Reloads the graph when HEAD, a branch or a remote ref moved since it
+    /// was loaded. Only a graph that was asked for once is kept up to date.
     fn refresh_graph(&mut self, ctx: &egui::Context) {
-        let asked = self.graph_key.is_some();
-        if asked && self.graph_key.as_ref() != Some(&self.graph_key_now()) {
+        let stale = std::mem::take(&mut self.graph_stale);
+        if self.graph_key.as_ref().is_some_and(|k| stale || *k != self.graph_key_now()) {
             self.load_graph(ctx);
         }
     }
@@ -556,20 +559,19 @@ impl GitState {
     pub fn commit_details(&mut self, ctx: &egui::Context, hash: &str) -> Option<&Result<CommitDetails, GitError>> {
         if !self.commit_details.contains_key(hash) {
             let repo = self.repo.clone()?;
+            // Marked pending so one request goes out per commit.
+            self.commit_details.insert(hash.to_owned(), None);
             let hash = hash.to_owned();
             let sender = self.sender.clone();
             let ctx = ctx.clone();
-            let pending = hash.clone();
             std::thread::spawn(move || {
                 let details = repo.commit_details(&hash);
                 let _ = sender.send(Message::CommitDetails { hash, details });
                 ctx.request_repaint();
             });
-            // Marked pending so one request goes out per commit.
-            self.commit_details.insert(pending, Err(GitError::NotRepo));
             return None;
         }
-        self.commit_details.get(hash).filter(|d| !matches!(d, Err(GitError::NotRepo)))
+        self.commit_details.get(hash)?.as_ref()
     }
 
     /// Reloads the log when HEAD moved since it was loaded. Only a log
@@ -579,7 +581,6 @@ impl GitState {
         let loaded = !self.log.commits.is_empty() || self.log.complete;
         if loaded && head != self.log_head {
             self.commit_files.clear();
-            self.commit_details.clear();
             let filter = self.log.filter.clone();
             self.load_log(ctx, filter);
         }
@@ -661,6 +662,9 @@ impl GitState {
                 }
                 Message::Done(op, result) => {
                     self.busy = None;
+                    if matches!(op, Op::Fetch | Op::Pull | Op::Push) && result.is_ok() {
+                        self.graph_stale = true;
+                    }
                     if let (Op::Init(dir), Ok(())) = (&op, &result) {
                         let dir = dir.clone();
                         self.dir = None;
@@ -699,7 +703,7 @@ impl GitState {
                     }
                 }
                 Message::CommitDetails { hash, details } => {
-                    self.commit_details.insert(hash, details);
+                    self.commit_details.insert(hash, Some(details));
                 }
                 Message::CommitFiles { hash, files } => {
                     self.commit_files.insert(hash, files);
@@ -797,7 +801,7 @@ mod tests {
         // Details are fetched once and cached.
         let hash = git.graph.commits[1].hash.clone();
         assert!(git.commit_details(&ctx, &hash).is_none());
-        wait(&ctx, &mut git, |g| g.commit_details.get(&hash).is_some_and(|d| d.is_ok()));
+        wait(&ctx, &mut git, |g| g.commit_details.get(&hash).is_some_and(|d| d.as_ref().is_some_and(|d| d.is_ok())));
         assert_eq!(git.commit_details(&ctx, &hash).unwrap().as_ref().unwrap().message, "first");
 
         // A branch made in the editor reloads the graph.
