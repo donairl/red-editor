@@ -1795,6 +1795,8 @@ impl TextEditorApp {
                     Op::Push => self.i18n.t("git.pushed").to_owned(),
                     Op::Switch(b) => self.i18n.tf("git.switched", &[("branch", b)]),
                     Op::CreateBranch(b) => self.i18n.tf("git.branch_created", &[("branch", b)]),
+                    Op::CreateBranchAt { name, .. } => self.i18n.tf("git.branch_created", &[("branch", name)]),
+                    Op::DeleteBranch(_) => return self.status_message.clone(),
                     Op::Init(_) => self.i18n.t("git.initialized").to_owned(),
                     Op::RestoreFile { .. } => self.i18n.t("history.restored").to_owned(),
                     Op::Checkout(hash) => {

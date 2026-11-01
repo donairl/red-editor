@@ -10,10 +10,13 @@ use std::time::SystemTime;
 use eframe::egui;
 
 use crate::blame::{self, Blame};
-use crate::git::{Branch, Commit, CommitFile, DiffLine, FileChange, GitError, Kind, Repo, RepoStatus};
+use crate::git::{Branch, Commit, CommitDetails, CommitFile, DiffLine, FileChange, GitError, Kind, Repo, RepoStatus};
 
 /// Commits the log loads at a time.
 pub const LOG_PAGE: usize = 100;
+
+/// Commits the Git Graph loads at a time.
+pub const GRAPH_PAGE: usize = 200;
 
 /// A command that changes the repository. One runs at a time.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +37,10 @@ pub enum Op {
     RestoreFile { hash: String, path: PathBuf },
     /// Check the commit out, detaching HEAD.
     Checkout(String),
+    /// Make a branch point at the commit, without switching to it.
+    CreateBranchAt { name: String, hash: String },
+    /// Delete a fully merged local branch.
+    DeleteBranch(String),
 }
 
 impl Op {
@@ -69,6 +76,8 @@ impl Op {
             Op::CreateBranch(branch) => repo.create_branch(branch),
             Op::RestoreFile { hash, path } => repo.restore_from(hash, path),
             Op::Checkout(hash) => repo.checkout_detached(hash),
+            Op::CreateBranchAt { name, hash } => repo.branch_at(name, hash),
+            Op::DeleteBranch(name) => repo.delete_branch(name),
             Op::Init(_) => unreachable!(),
         }
     }
@@ -92,9 +101,15 @@ enum Message {
         lines: Result<Vec<DiffLine>, GitError>,
     },
     Log {
+        all: bool,
+        generation: u64,
         filter: Option<PathBuf>,
         skip: usize,
         commits: Result<Vec<Commit>, GitError>,
+    },
+    CommitDetails {
+        hash: String,
+        details: Result<CommitDetails, GitError>,
     },
     CommitFiles {
         hash: String,
@@ -130,6 +145,11 @@ pub struct FileDiff {
 /// The commit log as loaded so far.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Log {
+    /// Every ref's history (the Git Graph) rather than HEAD's.
+    pub all: bool,
+    /// Bumped each time the log starts over, so a page of the old log is
+    /// dropped when it arrives late.
+    pub generation: u64,
     /// Only commits touching this file.
     pub filter: Option<PathBuf>,
     pub commits: Vec<Commit>,
@@ -233,6 +253,13 @@ pub struct GitState {
     pub log: Log,
     /// HEAD when the log was loaded; it reloads when HEAD moves.
     log_head: Option<String>,
+    /// The log of every ref, for the Git Graph.
+    pub graph: Log,
+    /// HEAD and the branch names when the graph was loaded; it reloads
+    /// when either changes.
+    graph_key: Option<(Option<String>, Vec<String>)>,
+    /// Date and message of commits the detail pane showed.
+    commit_details: HashMap<String, Result<CommitDetails, GitError>>,
     /// The files of commits already expanded.
     commit_files: HashMap<String, Result<Vec<CommitFile>, GitError>>,
     /// Blame by file and the HEAD it was read at; `None` while loading or
@@ -263,6 +290,9 @@ impl Default for GitState {
             diff: None,
             log: Log::default(),
             log_head: None,
+            graph: Log::default(),
+            graph_key: None,
+            commit_details: HashMap::new(),
             commit_files: HashMap::new(),
             blames: HashMap::new(),
         }
@@ -454,28 +484,92 @@ impl GitState {
     pub fn load_log(&mut self, ctx: &egui::Context, filter: Option<PathBuf>) {
         self.log = Log {
             filter,
+            generation: self.log.generation + 1,
             ..Log::default()
         };
         self.log_head = self.status.as_ref().and_then(|s| s.head.clone());
-        self.load_more_log(ctx);
+        self.load_more(ctx, false);
     }
 
     /// Asks for the next page of the log.
     pub fn load_more_log(&mut self, ctx: &egui::Context) {
+        self.load_more(ctx, false);
+    }
+
+    /// Starts the Git Graph's log over.
+    pub fn load_graph(&mut self, ctx: &egui::Context) {
+        self.graph = Log {
+            all: true,
+            generation: self.graph.generation + 1,
+            ..Log::default()
+        };
+        self.graph_key = Some(self.graph_key_now());
+        self.load_more(ctx, true);
+    }
+
+    /// Asks for the next page of the Git Graph's log.
+    pub fn load_more_graph(&mut self, ctx: &egui::Context) {
+        self.load_more(ctx, true);
+    }
+
+    fn load_more(&mut self, ctx: &egui::Context, all: bool) {
         let Some(repo) = self.repo.clone() else { return };
-        if self.log.loading || self.log.complete {
+        let log = if all { &mut self.graph } else { &mut self.log };
+        if log.loading || log.complete {
             return;
         }
-        self.log.loading = true;
-        let filter = self.log.filter.clone();
-        let skip = self.log.commits.len();
+        log.loading = true;
+        let generation = log.generation;
+        let filter = log.filter.clone();
+        let skip = log.commits.len();
         let sender = self.sender.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let commits = repo.log(skip, LOG_PAGE, filter.as_deref());
-            let _ = sender.send(Message::Log { filter, skip, commits });
+            let commits = if all {
+                repo.log_all(skip, GRAPH_PAGE)
+            } else {
+                repo.log(skip, LOG_PAGE, filter.as_deref())
+            };
+            let _ = sender.send(Message::Log { all, generation, filter, skip, commits });
             ctx.request_repaint();
         });
+    }
+
+    /// What the graph depends on: HEAD and the local branches.
+    fn graph_key_now(&self) -> (Option<String>, Vec<String>) {
+        (
+            self.status.as_ref().and_then(|s| s.head.clone()),
+            self.branches.iter().map(|b| b.name.clone()).collect(),
+        )
+    }
+
+    /// Reloads the graph when HEAD or a branch moved since it was loaded.
+    /// Only a graph that was asked for once is kept up to date.
+    fn refresh_graph(&mut self, ctx: &egui::Context) {
+        let asked = self.graph_key.is_some();
+        if asked && self.graph_key.as_ref() != Some(&self.graph_key_now()) {
+            self.load_graph(ctx);
+        }
+    }
+
+    /// The date and message of `hash`, once loaded; asks for them otherwise.
+    pub fn commit_details(&mut self, ctx: &egui::Context, hash: &str) -> Option<&Result<CommitDetails, GitError>> {
+        if !self.commit_details.contains_key(hash) {
+            let repo = self.repo.clone()?;
+            let hash = hash.to_owned();
+            let sender = self.sender.clone();
+            let ctx = ctx.clone();
+            let pending = hash.clone();
+            std::thread::spawn(move || {
+                let details = repo.commit_details(&hash);
+                let _ = sender.send(Message::CommitDetails { hash, details });
+                ctx.request_repaint();
+            });
+            // Marked pending so one request goes out per commit.
+            self.commit_details.insert(pending, Err(GitError::NotRepo));
+            return None;
+        }
+        self.commit_details.get(hash).filter(|d| !matches!(d, Err(GitError::NotRepo)))
     }
 
     /// Reloads the log when HEAD moved since it was loaded. Only a log
@@ -485,6 +579,7 @@ impl GitState {
         let loaded = !self.log.commits.is_empty() || self.log.complete;
         if loaded && head != self.log_head {
             self.commit_files.clear();
+            self.commit_details.clear();
             let filter = self.log.filter.clone();
             self.load_log(ctx, filter);
         }
@@ -552,6 +647,7 @@ impl GitState {
                             self.branches = branches;
                             self.load_diff(ctx);
                             self.refresh_log(ctx);
+                            self.refresh_graph(ctx);
                         }
                         // A repository deleted under the editor, most likely.
                         Err(_) => {
@@ -586,19 +682,24 @@ impl GitState {
                         diff.lines = Some(lines);
                     }
                 }
-                Message::Log { filter, skip, commits } => {
+                Message::Log { all, generation, filter, skip, commits } => {
+                    let page = if all { GRAPH_PAGE } else { LOG_PAGE };
+                    let log = if all { &mut self.graph } else { &mut self.log };
                     // A stale page, from before the log was started over.
-                    if self.log.filter != filter || self.log.commits.len() != skip {
+                    if log.generation != generation || log.filter != filter || log.commits.len() != skip {
                         continue;
                     }
-                    self.log.loading = false;
+                    log.loading = false;
                     match commits {
                         Ok(commits) => {
-                            self.log.complete = commits.len() < LOG_PAGE;
-                            self.log.commits.extend(commits);
+                            log.complete = commits.len() < page;
+                            log.commits.extend(commits);
                         }
-                        Err(e) => self.log.error = Some(e),
+                        Err(e) => log.error = Some(e),
                     }
+                }
+                Message::CommitDetails { hash, details } => {
+                    self.commit_details.insert(hash, details);
                 }
                 Message::CommitFiles { hash, files } => {
                     self.commit_files.insert(hash, files);
@@ -652,5 +753,65 @@ mod tests {
         assert_eq!(d.dir(&root.join("src")), Some(Kind::Deleted));
         assert_eq!(d.dir(&root), None);
         assert_eq!(d.file(&root.join("README.md")), None);
+    }
+
+    /// Polls until `done` holds or 5 s pass.
+    fn wait(ctx: &egui::Context, git: &mut GitState, done: impl Fn(&GitState) -> bool) {
+        for _ in 0..250 {
+            git.poll(ctx);
+            if done(git) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("timed out");
+    }
+
+    #[test]
+    fn test_graph_log_loads_all_branches_and_reloads_when_refs_move() {
+        let Some(repo) = crate::git::temp_repo("worker_graph") else { return };
+        let root = repo.root().to_path_buf();
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("first").unwrap();
+        repo.create_branch("feature").unwrap();
+        std::fs::write(root.join("b.txt"), "bee\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("second").unwrap();
+        repo.switch("main").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut git = GitState::default();
+        git.open(&ctx, root.clone());
+        wait(&ctx, &mut git, |g| g.status.is_some());
+        assert!(git.graph.commits.is_empty() && !git.graph.complete, "nothing asked for yet");
+
+        git.load_graph(&ctx);
+        assert!(git.graph.loading && git.graph.all);
+        wait(&ctx, &mut git, |g| !g.graph.loading);
+        let subjects: Vec<&str> = git.graph.commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, ["second", "first"]);
+        assert!(git.graph.complete);
+        assert!(git.log.commits.is_empty(), "the sidebar log is untouched");
+
+        // Details are fetched once and cached.
+        let hash = git.graph.commits[1].hash.clone();
+        assert!(git.commit_details(&ctx, &hash).is_none());
+        wait(&ctx, &mut git, |g| g.commit_details.get(&hash).is_some_and(|d| d.is_ok()));
+        assert_eq!(git.commit_details(&ctx, &hash).unwrap().as_ref().unwrap().message, "first");
+
+        // A branch made in the editor reloads the graph.
+        let first = hash.clone();
+        assert!(git.run(&ctx, Op::CreateBranchAt { name: "old".into(), hash: first.clone() }));
+        wait(&ctx, &mut git, |g| g.busy().is_none());
+        wait(&ctx, &mut git, |g| !g.is_refreshing() && !g.graph.loading);
+        assert!(git.graph.commits[1].refs.contains(&"old".to_owned()), "{:?}", git.graph.commits[1].refs);
+        assert_eq!(git.take_finished().len(), 1);
+
+        assert!(git.run(&ctx, Op::DeleteBranch("old".into())));
+        wait(&ctx, &mut git, |g| g.busy().is_none());
+        wait(&ctx, &mut git, |g| !g.is_refreshing() && !g.graph.loading);
+        assert!(!git.graph.commits[1].refs.contains(&"old".to_owned()));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
