@@ -793,7 +793,7 @@ fn paint_button_icon(painter: &egui::Painter, button: Button, c: egui::Pos2, col
 
 /// `name  folder` in the change's colour, ending with its status letter.
 #[allow(clippy::too_many_arguments)]
-fn paint_file_row(
+pub(crate) fn paint_file_row(
     ui: &egui::Ui,
     palette: &SidebarPalette,
     rect: Rect,
