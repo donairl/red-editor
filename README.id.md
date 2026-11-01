@@ -132,6 +132,7 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | `Ctrl+B` | Tampilkan/sembunyikan sidebar |
 | `Ctrl+Shift+G` | View Source Control |
 | `Ctrl+Alt+B` | Kolom Git Blame |
+| `Ctrl+Alt+G` | Git Graph |
 | `F11` | Zen mode (layar penuh, hanya editor); `Esc` untuk keluar |
 | `Ctrl+Shift+V` | Tampilkan/sembunyikan pratinjau Markdown (file `.md`) |
 | `Ctrl+Shift+I` | Rapikan dokumen |
@@ -166,6 +167,7 @@ Editor menjalankan `git` yang terpasang di komputer, jadi credential helper, ssh
 - **Commit**: seksi **COMMIT** di bawah daftar perubahan menampilkan riwayat branch, 100 commit sekali muat (hash pendek, pesan, nama branch dan tag, penulis, umur). Klik commit untuk melihat file yang diubahnya; klik file untuk melihat perubahan commit itu di panel diff, yang punya tombol **Pulihkan Versi Ini** untuk menjadikan file di work tree seperti di commit itu. Tiap baris commit punya tombol **Checkout** yang melepas HEAD ke commit itu; keduanya ditanya dulu, dan menu branch di status bar mengembalikanmu.
 - **Riwayat File**: klik kanan tab atau file di Explorer lalu pilih **Riwayat File** untuk membatasi seksi COMMIT ke commit yang menyentuh file itu; chip bernama file itu menghapus filternya. Klik commit lalu langsung menampilkan diff file itu di commit tersebut.
 - **Blame** (**Tampilan → Git Blame**, `Ctrl+Alt+B`): kolom di kiri nomor baris menampilkan siapa yang terakhir mengubah tiap baris dan berapa lama lalu, dari commit terakhir. Arahkan mouse ke baris untuk hash dan pesan commit-nya. Saat ada perubahan belum disimpan, kolom meminta simpan dulu karena barisnya tidak lagi cocok.
+- **Git Graph** (**Tampilan → Git Graph**, `Ctrl+Alt+G`, atau ikon graph di judul Source Control): semua branch dan tag sebagai graph commit menggantikan editor, 200 commit sekali muat, dengan jalur berwarna, chip branch dan tag (branch aktif diberi garis tepi), penulis, umur, dan hash pendek. Klik commit untuk pesan, induk (klik untuk melompat ke sana), dan daftar file; klik file membuka diff-nya di panel kanan. Klik kanan commit untuk **Checkout Commit**, **Buat Branch di Sini…**, dan **Salin Hash**; klik kanan chip branch untuk **Pindah ke Branch**, **Hapus Branch…** (hanya branch yang sudah di-merge penuh; selebihnya ditolak git), dan **Salin Nama**. `×` atau `Esc` kembali ke editor.
 - Pull hanya fast-forward; kalau branch sudah bercabang, lakukan merge atau rebase di Console. Git tidak pernah meminta password di dalam editor: pull atau push yang butuh password atau key memberi tahu untuk menjalankannya sekali di Console, dengan tombol untuk membukanya.
 
 ## Menambah bahasa antarmuka
@@ -220,6 +222,7 @@ Struktur kode:
 | `src/modals.rs` | Konfirmasi simpan, konflik disk, daftar bookmark |
 | `src/about.rs` | Dialog About: versi, tautan, shortcut |
 | `src/git.rs`, `src/git_worker.rs` | Git lewat CLI `git`, dijalankan di luar thread UI |
+| `src/git_graph.rs` | Git Graph: tata letak jalur dan tampilannya menggantikan editor |
 | `src/source_control.rs` | View Source Control, log commit, panel diff |
 | `src/blame.rs`, `src/line_diff.rs` | Kolom blame dan penanda perubahan di gutter |
 | `src/i18n.rs` | Terjemahan antarmuka dari `assets/lang/*.json` |

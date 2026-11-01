@@ -132,6 +132,7 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+Shift+G` | Source Control view |
 | `Ctrl+Alt+B` | Git Blame column |
+| `Ctrl+Alt+G` | Git Graph |
 | `F11` | Zen mode (full screen, editor only); `Esc` to exit |
 | `Ctrl+Shift+V` | Toggle Markdown preview (`.md` files) |
 | `Ctrl+Shift+I` | Prettify the document |
@@ -166,6 +167,7 @@ The editor runs the `git` installed on the machine, so your credential helper, s
 - **Commits**: the **COMMITS** section below the changes lists the branch's history, 100 commits at a time (short hash, subject, branch and tag names, author, age). Click a commit to see the files it changed; click a file to see what the commit did to it in the diff panel, where **Restore This Version** makes the work-tree file what it was in that commit. Each commit row has a **Checkout** button that detaches HEAD at it; both ask first, and the branch menu in the status bar takes you back.
 - **File History**: right-click a tab or an Explorer file and pick **File History** to limit the COMMITS section to the commits touching that file; a chip with the file name clears the filter. Clicking a commit then shows the file's diff in it directly.
 - **Blame** (**View → Git Blame**, `Ctrl+Alt+B`): a column left of the line numbers names who last changed each line and how long ago, from the last commit. Hover a line for the commit's hash and message. With unsaved edits the column asks you to save first, as the lines would no longer match.
+- **Git Graph** (**View → Git Graph**, `Ctrl+Alt+G`, or the graph icon in the Source Control title bar): every branch and tag as a commit graph in place of the editor, 200 commits at a time, with coloured lanes, branch and tag chips (the checked-out branch outlined), author, age and short hash. Click a commit for its message, parents (click one to jump to it) and files; a file opens its diff in the panel on the right. Right-click a commit for **Checkout Commit**, **Create Branch Here…** and **Copy Hash**; right-click a branch chip for **Switch to Branch**, **Delete Branch…** (fully merged branches only; git refuses the rest) and **Copy Name**. `×` or `Esc` returns to the editor.
 - Pull only fast-forwards; if the branch has diverged, merge or rebase in the Console. Git never prompts inside the editor: a pull or push that needs a password or key tells you to run it once in the Console, with a button to open it.
 
 ## Adding Interface Languages
@@ -221,6 +223,7 @@ Source structure:
 | `src/modals.rs` | Unsaved changes confirmation, disk conflict, bookmark list |
 | `src/about.rs` | About dialog: version, links, shortcuts |
 | `src/git.rs`, `src/git_worker.rs` | Git through the `git` CLI, run off the UI thread |
+| `src/git_graph.rs` | The Git Graph: lane layout and the view in place of the editor |
 | `src/source_control.rs` | Source Control view, commit log, diff panel |
 | `src/blame.rs`, `src/line_diff.rs` | Blame column and the gutter's change markers |
 | `src/i18n.rs` | UI localization loaded from `assets/lang/*.json` |
