@@ -127,10 +127,14 @@ pub fn now() -> i64 {
 
 /// Paints the column into `strip`, one label beside the first row of each
 /// visible line of `galley` (placed at `galley_pos`). Hovering a label
-/// shows the commit's hash and summary.
+/// shows the commit's hash and summary. `ui` is the editor's scroll area,
+/// whose clip rect ends where the strip begins; `clip` is the rect the
+/// strip is seen through.
+#[allow(clippy::too_many_arguments)]
 pub fn paint_column(
     ui: &mut egui::Ui,
     strip: Rect,
+    clip: Rect,
     blame: &Blame,
     galley: &egui::Galley,
     galley_pos: egui::Pos2,
@@ -138,8 +142,14 @@ pub fn paint_column(
     now: i64,
 ) {
     let palette = theme::active(ui.ctx()).gutter;
-    let clip = ui.clip_rect().intersect(strip);
-    let painter = ui.painter().with_clip_rect(clip);
+    let clip = clip.intersect(strip);
+    // A painter derived from `ui` would keep the scroll area's clip; this
+    // one is built on the layer with the strip's own.
+    let painter = egui::Painter::new(ui.ctx().clone(), ui.layer_id(), clip);
+    // Hover rects are hit-tested against the ui's clip rect, so they need
+    // one that holds the strip.
+    let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip));
+    strip_ui.set_clip_rect(clip);
     painter.rect_filled(strip, 0.0, palette.background);
     painter.vline(
         strip.right() - 0.5,
@@ -166,7 +176,8 @@ pub fn paint_column(
             );
             if !info.is_uncommitted() {
                 let hover = Rect::from_x_y_ranges(strip.x_range(), rect.y_range());
-                ui.interact(hover, egui::Id::unique(("blame", line)), Sense::hover())
+                strip_ui
+                    .interact(hover, egui::Id::unique(("blame", line)), Sense::hover())
                     .on_hover_text(format!("{}  {}", &info.hash[..7], info.summary));
             }
         }
@@ -178,10 +189,10 @@ pub fn paint_column(
 }
 
 /// Paints the column with only `note` at its top: the blame is loading or
-/// cannot be shown.
-pub fn paint_note(ui: &mut egui::Ui, strip: Rect, note: &str, font: &FontId) {
+/// cannot be shown. `clip` is the rect the strip is seen through.
+pub fn paint_note(ui: &mut egui::Ui, strip: Rect, clip: Rect, note: &str, font: &FontId) {
     let theme = theme::active(ui.ctx());
-    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(strip));
+    let painter = egui::Painter::new(ui.ctx().clone(), ui.layer_id(), clip.intersect(strip));
     painter.rect_filled(strip, 0.0, theme.gutter.background);
     painter.vline(strip.right() - 0.5, strip.y_range(), egui::Stroke::new(1.0, theme.sidebar.border));
     let mut job = egui::text::LayoutJob::simple(

@@ -2575,13 +2575,16 @@ fn render_editor_with(
     };
     let small = egui::FontId::monospace(11.0);
     let width = column.blame.map_or(BLAME_NOTE_WIDTH, |b| b.width(ui, &small));
+    // The strip lies outside the scroll area, so it is painted through this
+    // clip rect, not the scroll area's, which stops at the strip's edge.
+    let clip = ui.clip_rect();
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let (strip, _) =
             ui.allocate_exact_size(egui::vec2(width, ui.available_height()), egui::Sense::hover());
         render_editor_inner(
             ui, text, layouter, word_wrap, line_numbers, hint, id, request, scroll_to, bookmarks,
-            changes, layout_cache, Some((strip, &column, small)),
+            changes, layout_cache, Some((strip, clip, &column, small)),
         )
     })
     .inner
@@ -2614,7 +2617,7 @@ fn render_editor_inner(
     bookmarks: &mut Bookmarks,
     changes: &LineMarks,
     layout_cache: &mut LayoutCache,
-    blame: Option<(egui::Rect, &BlameColumn<'_>, egui::FontId)>,
+    blame: Option<(egui::Rect, egui::Rect, &BlameColumn<'_>, egui::FontId)>,
 ) -> (ScrollPos, egui::Response) {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
@@ -2749,18 +2752,19 @@ fn render_editor_inner(
         if let Some(width) = gutter_width {
             gutter::paint(ui, &output, &font_id, width, bookmarks, changes);
         }
-        if let Some((strip, column, small)) = &blame {
+        if let Some((strip, clip, column, small)) = &blame {
             match column.blame {
                 Some(blame) => blame::paint_column(
                     ui,
                     *strip,
+                    *clip,
                     blame,
                     &output.galley,
                     output.galley_pos,
                     small,
                     column.now,
                 ),
-                None => blame::paint_note(ui, *strip, column.note, small),
+                None => blame::paint_note(ui, *strip, *clip, column.note, small),
             }
         }
 
@@ -5050,7 +5054,8 @@ mod tests {
         };
         app.open_file_in_tab(file.clone());
         poll_git_until(&mut app, &ctx, |app| app.git.status.is_some());
-        let frame = |app: &mut TextEditorApp| -> Vec<String> {
+        // Every painted text with the clip rect it is shown through.
+        let frame = |app: &mut TextEditorApp| -> Vec<(String, egui::Rect, egui::Rect)> {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
                 ..Default::default()
@@ -5064,25 +5069,40 @@ mod tests {
                 .shapes
                 .iter()
                 .filter_map(|c| match &c.shape {
-                    egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    egui::Shape::Text(t) => Some((
+                        t.galley.text().to_owned(),
+                        egui::Rect::from_min_size(t.pos, t.galley.size()),
+                        c.clip_rect,
+                    )),
                     _ => None,
                 })
                 .collect()
         };
+        let names = |shapes: &[(String, egui::Rect, egui::Rect)]| -> Vec<String> {
+            shapes.iter().map(|(t, _, _)| t.clone()).collect()
+        };
         // The first frame asks git for the blame; it is painted once it arrives.
-        let mut texts = frame(&mut app);
+        let mut shapes = frame(&mut app);
         for _ in 0..250 {
-            if texts.iter().any(|t| t.starts_with("Test · ")) {
+            if shapes.iter().any(|(t, _, _)| t.starts_with("Test · ")) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
-            texts = frame(&mut app);
+            shapes = frame(&mut app);
         }
-        assert_eq!(texts.iter().filter(|t| t.starts_with("Test · ")).count(), 2, "{texts:?}");
-
+        let labels: Vec<_> = shapes.iter().filter(|(t, _, _)| t.starts_with("Test · ")).collect();
+        assert_eq!(labels.len(), 2, "{:?}", names(&shapes));
+        // The strip sits left of the editor's scroll area: the labels must be
+        // clipped to the strip, not to the scroll area, or nothing shows.
+        for (text, rect, clip) in &labels {
+            assert!(
+                clip.width() > 0.0 && clip.contains_rect(*rect),
+                "{text} at {rect:?} is cut off by clip {clip:?}"
+            );
+        }
         // Unsaved edits replace the column with a note.
         app.active_tab_mut().text_content.push_str("three\n");
-        let texts = frame(&mut app);
+        let texts = names(&frame(&mut app));
         assert!(texts.iter().any(|t| t.contains("Simpan dulu")), "{texts:?}");
         assert!(!texts.iter().any(|t| t.starts_with("Test · ")));
         let _ = fs::remove_dir_all(repo.root());
