@@ -159,7 +159,9 @@ pub fn show(
 
     let mut action = None;
     let (title_rect, _) = ui.allocate_exact_size(vec2(width, TITLE_HEIGHT), Sense::hover());
-    ui.painter().text(
+    // Clipped short of the four tools, for long translations.
+    let title_clip = title_rect.with_max_x(title_rect.right() - ROW_PADDING_X - 4.0 * ACTION_SIZE);
+    ui.painter().with_clip_rect(title_clip).text(
         pos2(title_rect.left() + TITLE_PADDING_X, title_rect.center().y),
         Align2::LEFT_CENTER,
         i18n.t("scm.title"),
@@ -593,7 +595,7 @@ fn paint_commit_row(
     painter.galley(pos2(subject_x, rect.center().y - subject.size().y / 2.0), subject, palette.foreground);
 }
 
-/// Two dots joined by a line with a branch curving off: the Git Graph.
+/// Three commits: a line with a branch curving off, for the Git Graph.
 fn paint_graph_icon(painter: &egui::Painter, c: egui::Pos2, color: Color32) {
     let stroke = Stroke::new(1.3, color);
     painter.line_segment([c + vec2(-3.0, -5.0), c + vec2(-3.0, 5.0)], stroke);

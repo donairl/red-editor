@@ -512,6 +512,26 @@ pub enum ShortcutAction {
     FindReferences,
 }
 
+impl ShortcutAction {
+    /// Acts on the editor, which the Git Graph hides.
+    fn needs_editor(self) -> bool {
+        use ShortcutAction::*;
+        matches!(
+            self,
+            Find | Replace
+                | FindNext
+                | FindPrev
+                | GotoLine
+                | GotoSymbol
+                | GotoDefinition
+                | FindReferences
+                | Prettify
+                | PrevHeading
+                | NextHeading
+        )
+    }
+}
+
 /// Takes at most one shortcut out of this frame's input. Shift variants are
 /// tried first: egui lets `Ctrl+S` match while Shift is also held.
 pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> {
@@ -1247,6 +1267,7 @@ impl TextEditorApp {
             && self.preview_available()
             && !self.zen_mode
             && self.git.diff().is_none()
+            && self.git_graph.is_none()
     }
 
     /// Moves the preview, and the editor with it, to the next or previous
@@ -1332,6 +1353,7 @@ impl TextEditorApp {
     }
 
     pub fn goto_line(&mut self, line: usize) {
+        self.git_graph = None;
         let index = find::line_start(&self.active_tab().text_content, line);
         self.goto.visible = false;
         self.editor_request.focus = true;
@@ -1460,6 +1482,9 @@ impl TextEditorApp {
         if self.pending_action.is_some() || self.show_about_modal || self.git_confirm.is_some() {
             return;
         }
+        if self.git_graph.is_some() && action.needs_editor() {
+            return;
+        }
         match action {
             ShortcutAction::NewTab => self.open_new_tab(),
             ShortcutAction::NewWindow => self.open_new_window(),
@@ -1525,6 +1550,7 @@ impl TextEditorApp {
     }
 
     pub fn open_file_in_tab(&mut self, path: PathBuf) {
+        self.git_graph = None;
         if let Some(index) = self
             .tabs
             .iter()
@@ -2085,17 +2111,27 @@ impl TextEditorApp {
     pub fn toggle_git_graph(&mut self, ctx: &egui::Context) {
         if self.git_graph.is_some() {
             self.git_graph = None;
-            self.editor_request.focus = true;
+            self.editor_request = EditorRequest { focus: true, ..Default::default() };
             return;
         }
         if self.git.repo().is_none() {
             return;
         }
+        if self.find.visible {
+            self.close_find();
+        }
+        self.goto.visible = false;
+        self.symbol_picker.visible = false;
+        self.ensure_graph_loaded(ctx);
+        self.git_graph = Some(GitGraphUi::default());
+    }
+
+    /// Loads the graph unless it is loaded, loading or failed.
+    fn ensure_graph_loaded(&mut self, ctx: &egui::Context) {
         let graph = &self.git.graph;
         if graph.commits.is_empty() && !graph.loading && !graph.complete && graph.error.is_none() {
             self.git.load_graph(ctx);
         }
-        self.git_graph = Some(GitGraphUi::default());
     }
 
     /// Does what the Git Graph asked.
@@ -2277,7 +2313,10 @@ impl TextEditorApp {
         };
         let response = tab_bar::show(ui, &views, self.active_tab_index, &labels);
         match response.action {
-            Some(tab_bar::TabBarAction::Select(index)) => self.active_tab_index = index,
+            Some(tab_bar::TabBarAction::Select(index)) => {
+                self.git_graph = None;
+                self.active_tab_index = index;
+            }
             Some(tab_bar::TabBarAction::Close(index)) => self.trigger_close_tab(index),
             Some(tab_bar::TabBarAction::CloseOthers(index)) => {
                 self.close_tabs_where(index, |i, _| i != index)
@@ -2783,6 +2822,15 @@ impl eframe::App for TextEditorApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         self.poll_disk(&ctx);
         self.poll_git(&ctx);
+        // A new repository replaces the graph: load it again, or close the
+        // graph when there is no repository left.
+        if self.git_graph.is_some() {
+            if self.git.repo().is_some() {
+                self.ensure_graph_loaded(&ctx);
+            } else if !self.git.is_discovering() {
+                self.toggle_git_graph(&ctx);
+            }
+        }
 
         // While the Console has focus the shell gets every key, Escape
         // included, but the shortcut that hides it.
@@ -2826,6 +2874,11 @@ impl eframe::App for TextEditorApp {
             && !self.goto.visible
             && !self.search.visible
             && self.git_confirm.is_none()
+            && !self.show_about_modal
+            && self.pending_action.is_none()
+            && !self.active_tab().disk_conflict
+            && !egui::Popup::is_any_open(&ctx)
+            && !ctx.egui_wants_keyboard_input()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.toggle_git_graph(&ctx);
@@ -3089,6 +3142,7 @@ impl eframe::App for TextEditorApp {
             if let Some(mut graph) = self.git_graph.take() {
                 graph_action = git_graph::show(ui, &mut graph, &mut self.git, &self.i18n);
                 self.git_graph = Some(graph);
+                self.scroll_sync.reset();
                 return;
             }
 
@@ -3740,6 +3794,41 @@ mod tests {
         app.apply_shortcut(&ctx, ShortcutAction::GitGraph);
         assert!(app.git_graph.is_none(), "the shortcut toggles");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_editor_shortcuts_are_ignored_while_the_graph_is_open() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        let Some(repo) = crate::git::temp_repo("app_graph_keys") else { return };
+        let root = repo.root().to_path_buf();
+        app.git.open(&ctx, root.clone());
+        for _ in 0..250 {
+            app.git.poll(&ctx);
+            if app.git.repo().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.apply_shortcut(&ctx, ShortcutAction::GitGraph);
+        assert!(app.git_graph.is_some());
+        app.apply_shortcut(&ctx, ShortcutAction::Find);
+        assert!(!app.find.visible, "Find waits for the editor");
+        app.apply_shortcut(&ctx, ShortcutAction::GitGraph);
+        app.apply_shortcut(&ctx, ShortcutAction::Find);
+        assert!(app.find.visible);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_closing_the_graph_drops_stale_editor_requests() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.git_graph = Some(GitGraphUi::default());
+        app.editor_request.goto = Some(5);
+        app.toggle_git_graph(&ctx);
+        assert!(app.git_graph.is_none());
+        assert!(app.editor_request.goto.is_none() && app.editor_request.focus);
     }
 
     #[test]
@@ -6143,6 +6232,15 @@ mod tests {
         assert_eq!(app.pending_action, None);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_no_markdown_preview_beside_the_graph() {
+        let mut app = markdown_app();
+        app.show_markdown_preview = true;
+        assert!(app.previewing());
+        app.git_graph = Some(GitGraphUi::default());
+        assert!(!app.previewing());
     }
 
     fn markdown_app() -> TextEditorApp {

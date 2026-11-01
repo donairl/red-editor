@@ -317,6 +317,11 @@ impl GitState {
         self.busy.as_ref()
     }
 
+    /// Whether the repository is still being looked up.
+    pub fn is_discovering(&self) -> bool {
+        self.discovering
+    }
+
     pub fn is_refreshing(&self) -> bool {
         self.refreshing || self.discovering
     }
