@@ -633,6 +633,9 @@ impl TextEditorApp {
     }
 
     pub fn window_title(&self) -> String {
+        if self.show_welcome {
+            return "Red Text Editor".to_owned();
+        }
         let dirty_flag = if self.is_dirty() { " *" } else { "" };
         format!("{}{dirty_flag} - Red Text Editor", self.file_display_name())
     }
@@ -948,16 +951,17 @@ impl TextEditorApp {
         ui.separator();
         self.show_clipboard_items(ui, ctx);
         ui.separator();
-        if item(ui, self.i18n.t("edit.find"), &shortcuts::FIND) {
+        let editing = !self.show_welcome;
+        if ui.add_enabled_ui(editing, |ui| item(ui, self.i18n.t("edit.find"), &shortcuts::FIND)).inner {
             self.open_find(ctx, false);
         }
-        if item(ui, self.i18n.t("edit.replace"), &shortcuts::REPLACE) {
+        if ui.add_enabled_ui(editing, |ui| item(ui, self.i18n.t("edit.replace"), &shortcuts::REPLACE)).inner {
             self.open_find(ctx, true);
         }
         if item(ui, self.i18n.t("edit.find_in_files"), &shortcuts::FIND_IN_FILES) {
             self.open_search(ctx);
         }
-        if item(ui, self.i18n.t("edit.goto_line"), &shortcuts::GOTO_LINE) {
+        if ui.add_enabled_ui(editing, |ui| item(ui, self.i18n.t("edit.goto_line"), &shortcuts::GOTO_LINE)).inner {
             self.open_goto();
         }
         let navigable = symbols::supports(self.effective_language());
@@ -1131,6 +1135,10 @@ impl TextEditorApp {
 
     /// The editor's selection as sorted `char` indices, or just the caret.
     fn editor_selection(&self, ctx: &egui::Context) -> Option<find::Range> {
+        // The start page hides the editor; its old selection means nothing.
+        if self.show_welcome {
+            return None;
+        }
         // egui collapses the selection once the editor loses focus, so while
         // a menu holds that focus use the one remembered from before.
         if self.menu_focus == Some(self.editor_id())
@@ -1467,10 +1475,11 @@ impl TextEditorApp {
         }
         self.show_recent_menu(ui);
         ui.separator();
-        if item(ui, self.i18n.t("file.save"), &shortcuts::SAVE) {
+        let editing = !self.show_welcome;
+        if ui.add_enabled_ui(editing, |ui| item(ui, self.i18n.t("file.save"), &shortcuts::SAVE)).inner {
             self.save();
         }
-        if item(ui, self.i18n.t("file.save_as"), &shortcuts::SAVE_AS) {
+        if ui.add_enabled_ui(editing, |ui| item(ui, self.i18n.t("file.save_as"), &shortcuts::SAVE_AS)).inner {
             self.save_as();
         }
         ui.separator();
@@ -1496,6 +1505,8 @@ impl TextEditorApp {
             ShortcutAction::CloseTab => self.trigger_close_tab(self.active_tab_index),
             ShortcutAction::OpenFile => self.trigger_open_file(),
             ShortcutAction::OpenFolder => self.trigger_open_folder(),
+            // Nothing to save on the start page.
+            ShortcutAction::Save | ShortcutAction::SaveAs if self.show_welcome => {}
             ShortcutAction::Save => {
                 self.save();
             }
@@ -1533,6 +1544,11 @@ impl TextEditorApp {
     }
 
     pub fn open_new_tab(&mut self) {
+        // The blank tab under the start page becomes the new file.
+        if self.show_welcome && self.active_tab().is_pristine() {
+            self.leave_welcome();
+            return;
+        }
         self.leave_welcome();
         self.tabs.push(DocumentTab::default_new());
         self.active_tab_index = self.tabs.len() - 1;
@@ -1557,12 +1573,12 @@ impl TextEditorApp {
 
     pub fn open_file_in_tab(&mut self, path: PathBuf) {
         self.git_graph = None;
-        self.leave_welcome();
         if let Some(index) = self
             .tabs
             .iter()
             .position(|t| t.current_path.as_ref() == Some(&path))
         {
+            self.leave_welcome();
             self.active_tab_index = index;
             self.status_message = Some((self.i18n.t("msg.already_open").to_owned(), false));
             self.history.record(path, EntryKind::File);
@@ -1570,10 +1586,15 @@ impl TextEditorApp {
         }
 
         if self.active_tab().is_pristine() {
-            self.load_file(path);
+            self.load_file(path.clone());
+            // Only a file actually read leaves the start page.
+            if self.active_tab().current_path.as_ref() == Some(&path) {
+                self.leave_welcome();
+            }
         } else {
             match DocumentTab::from_file(path.clone()) {
                 Ok(tab) => {
+                    self.leave_welcome();
                     let exceeds = text_content_exceeds_highlight_limit(&tab.text_content);
                     self.tabs.push(tab);
                     self.active_tab_index = self.tabs.len() - 1;
@@ -1601,7 +1622,7 @@ impl TextEditorApp {
         if self.tabs.len() <= 1 {
             self.tabs[0] = DocumentTab::default_new();
             self.active_tab_index = 0;
-            self.show_welcome = true;
+            self.show_welcome_page();
         } else {
             self.tabs.remove(index);
             if self.active_tab_index > index {
@@ -1626,7 +1647,7 @@ impl TextEditorApp {
         if !keep.contains(&true) {
             self.tabs = vec![DocumentTab::default_new()];
             self.active_tab_index = 0;
-            self.show_welcome = true;
+            self.show_welcome_page();
             return;
         }
         let new_index = |old: usize| keep[..old].iter().filter(|k| **k).count();
@@ -2114,6 +2135,16 @@ impl TextEditorApp {
         self.show_sidebar = true;
         self.sidebar_view = SidebarView::SourceControl;
         self.scm.commits_open = true;
+    }
+
+    /// Brings the start page back, closing the bars of the editor it hides.
+    fn show_welcome_page(&mut self) {
+        self.show_welcome = true;
+        if self.find.visible {
+            self.close_find();
+        }
+        self.goto.visible = false;
+        self.symbol_picker.visible = false;
     }
 
     /// Leaves the start page for the editor, which gets the keyboard.
@@ -3376,7 +3407,7 @@ mod tests {
 
     #[test]
     fn test_window_title_formatting() {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         assert_eq!(app.window_title(), "[Dokumen Baru] - Red Text Editor");
 
         app.active_tab_mut().text_content = "Teks baru".to_string();
@@ -3587,7 +3618,7 @@ mod tests {
 
     #[test]
     fn test_open_new_tab() {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.open_new_tab();
         assert_eq!(app.tabs.len(), 2);
         assert_eq!(app.active_tab_index, 1);
@@ -3665,7 +3696,7 @@ mod tests {
 
     #[test]
     fn test_close_tab_adjusts_active_index() {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.open_new_tab(); // tab 1
         app.open_new_tab(); // tab 2
         assert_eq!(app.tabs.len(), 3);
@@ -3683,7 +3714,7 @@ mod tests {
     }
 
     fn app_with_tabs(dirty: &[bool]) -> TextEditorApp {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         for _ in 1..dirty.len() {
             app.open_new_tab();
         }
@@ -3810,12 +3841,19 @@ mod tests {
     fn test_welcome_shows_at_start_and_after_the_last_tab_closes() {
         let mut app = TextEditorApp::default();
         assert!(app.show_welcome, "the start page opens the editor");
+        assert_eq!(app.window_title(), "Red Text Editor");
+        app.open_file_in_tab(PathBuf::from("/nonexistent/x.txt"));
+        assert!(app.show_welcome, "a failed open keeps the page");
         app.open_new_tab();
         assert!(!app.show_welcome, "a new file dismisses it");
+        assert_eq!(app.tabs.len(), 1, "New File takes the blank tab underneath");
+        app.open_new_tab();
         app.close_tab(app.active_tab_index);
         assert!(!app.show_welcome, "one tab still open");
+        app.goto.visible = true;
         app.close_tab(0);
         assert!(app.show_welcome, "the last tab closed");
+        assert!(!app.goto.visible, "the page closes the editor's bars");
         app.open_file_in_tab(PathBuf::from("Cargo.toml"));
         assert!(!app.show_welcome, "opening a file dismisses it");
         app.close_tabs_where(app.active_tab_index, |_, _| true);
@@ -4211,7 +4249,7 @@ mod tests {
 
     /// An app whose editor lost `range` of "hello world" to a menu click.
     fn app_with_menu_selection(ctx: &egui::Context, range: find::Range) -> TextEditorApp {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.active_tab_mut().text_content = "hello world".into();
         app.menu_focus = Some(app.editor_id());
         ctx.data_mut(|d| d.insert_temp(app.saved_selection_id(), range));
@@ -4305,7 +4343,7 @@ mod tests {
 
     #[test]
     fn test_dirty_tab_triggers_close_tab_pending_action() {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.open_new_tab();
         app.active_tab_mut().text_content = "dirty content".to_string();
         assert!(app.active_tab().is_dirty());
@@ -5554,7 +5592,7 @@ mod tests {
 
     #[test]
     fn test_english_translates_title_status_and_menus() {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         assert!(app.i18n.select("en"));
         assert_eq!(app.window_title(), "[New Document] - Red Text Editor");
 
@@ -6027,7 +6065,7 @@ mod tests {
     #[test]
     fn test_tab_bar_ui_rendering_and_interaction() {
         let ctx = egui::Context::default();
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.open_new_tab(); // Tab 0 and Tab 1, both blank
         assert_eq!(app.tabs.len(), 2);
         assert_eq!(app.active_tab_index, 1);
@@ -6072,7 +6110,7 @@ mod tests {
     #[test]
     fn test_tab_bar_close_dirty_tab_triggers_pending_action() {
         let ctx = egui::Context::default();
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.open_new_tab();
         assert_eq!(app.tabs.len(), 2);
         assert_eq!(app.active_tab_index, 1);
@@ -6112,7 +6150,7 @@ mod tests {
     #[test]
     fn test_file_menu_tab_actions() {
         let ctx = egui::Context::default();
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         assert_eq!(app.tabs.len(), 1);
 
         // Warm up frame so egui lays out the buttons
@@ -6250,7 +6288,7 @@ mod tests {
 
     #[test]
     fn test_tab_bar_dirty_indicator_in_title() {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.open_new_tab();
         assert_eq!(app.tabs.len(), 2);
         assert!(!app.tabs[0].is_dirty());
@@ -6434,7 +6472,7 @@ mod tests {
     #[test]
     fn test_code_navigation_only_for_its_languages() {
         let ctx = egui::Context::default();
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.active_tab_mut().text_content = "fn main() {}\nmain();\n".into();
         app.apply_shortcut(&ctx, ShortcutAction::GotoSymbol);
         assert!(!app.symbol_picker.visible, "plain text has no symbols");

@@ -16,8 +16,8 @@ Out of scope: a "show on startup" setting, tips, project templates.
 
 ## State
 
-- `TextEditorApp.show_welcome: bool`. `Default` sets it to `true`;
-  `TextEditorApp::new` clears it when a command-line path opened a file.
+- `TextEditorApp.show_welcome: bool`. `Default` sets it to `true`. The app
+  takes no file on the command line, so the page always shows at launch.
 - The single untitled tab stays in `tabs` underneath, so every
   `active_tab()` caller is unchanged.
 - Set to `true` in `close_tab` when the last tab is closed (the branch that
