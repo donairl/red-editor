@@ -30,6 +30,7 @@ use crate::symbols::{self, PickerAction, SymbolPicker};
 use crate::tab_bar;
 use crate::terminal::{self, Terminal};
 use crate::theme::{self, ThemeId};
+use crate::welcome::{self, WelcomeAction};
 
 /// Storage key under which eframe remembers the interface language.
 const UI_LANGUAGE_KEY: &str = "ui_language";
@@ -318,6 +319,8 @@ pub struct TextEditorApp {
     pub git_confirm: Option<GitConfirm>,
     /// The Git Graph in place of the editor while `Some`.
     pub git_graph: Option<GitGraphUi>,
+    /// The start page in place of the editor; back whenever no tab is left.
+    pub show_welcome: bool,
     /// When the gutter's change markers were last computed.
     last_marks_at: Option<Instant>,
 }
@@ -385,6 +388,7 @@ impl Default for TextEditorApp {
             scm: ScmUi::default(),
             git_confirm: None,
             git_graph: None,
+            show_welcome: true,
             last_marks_at: None,
         }
     }
@@ -513,7 +517,7 @@ pub enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    /// Acts on the editor, which the Git Graph hides.
+    /// Acts on the editor, which the Git Graph and the start page hide.
     fn needs_editor(self) -> bool {
         use ShortcutAction::*;
         matches!(
@@ -1268,6 +1272,7 @@ impl TextEditorApp {
             && !self.zen_mode
             && self.git.diff().is_none()
             && self.git_graph.is_none()
+            && !self.show_welcome
     }
 
     /// Moves the preview, and the editor with it, to the next or previous
@@ -1482,7 +1487,7 @@ impl TextEditorApp {
         if self.pending_action.is_some() || self.show_about_modal || self.git_confirm.is_some() {
             return;
         }
-        if self.git_graph.is_some() && action.needs_editor() {
+        if (self.git_graph.is_some() || self.show_welcome) && action.needs_editor() {
             return;
         }
         match action {
@@ -1528,6 +1533,7 @@ impl TextEditorApp {
     }
 
     pub fn open_new_tab(&mut self) {
+        self.leave_welcome();
         self.tabs.push(DocumentTab::default_new());
         self.active_tab_index = self.tabs.len() - 1;
     }
@@ -1551,6 +1557,7 @@ impl TextEditorApp {
 
     pub fn open_file_in_tab(&mut self, path: PathBuf) {
         self.git_graph = None;
+        self.leave_welcome();
         if let Some(index) = self
             .tabs
             .iter()
@@ -1594,6 +1601,7 @@ impl TextEditorApp {
         if self.tabs.len() <= 1 {
             self.tabs[0] = DocumentTab::default_new();
             self.active_tab_index = 0;
+            self.show_welcome = true;
         } else {
             self.tabs.remove(index);
             if self.active_tab_index > index {
@@ -1964,6 +1972,7 @@ impl TextEditorApp {
 
     /// Shows `folder` in the Explorer sidebar and records it in the history.
     pub fn open_folder(&mut self, folder: PathBuf) {
+        self.leave_welcome();
         self.history.record(folder.clone(), EntryKind::Folder);
         self.explorer = Some(Explorer::new(folder));
         self.show_sidebar = true;
@@ -2104,6 +2113,13 @@ impl TextEditorApp {
         self.show_sidebar = true;
         self.sidebar_view = SidebarView::SourceControl;
         self.scm.commits_open = true;
+    }
+
+    /// Leaves the start page for the editor, which gets the keyboard.
+    fn leave_welcome(&mut self) {
+        if std::mem::take(&mut self.show_welcome) {
+            self.editor_request = EditorRequest { focus: true, ..Default::default() };
+        }
     }
 
     /// Shows the Git Graph in place of the editor, or hides it again.
@@ -3138,7 +3154,14 @@ impl eframe::App for TextEditorApp {
         let editor_fill = theme::active(&ctx).tab.tab_active;
         let editor_frame = egui::Frame::NONE.fill(editor_fill);
         let mut graph_action = None;
+        let mut welcome_action = None;
         egui::CentralPanel::default().frame(editor_frame).show(ui, |ui| {
+            // The start page has no tabs to show; the Git Graph wins over it.
+            if self.show_welcome && self.git_graph.is_none() {
+                welcome_action = welcome::show(ui, &self.history, &self.i18n);
+                self.scroll_sync.reset();
+                return;
+            }
             if !self.zen_mode {
                 self.render_tab_bar(ui);
             }
@@ -3275,6 +3298,14 @@ impl eframe::App for TextEditorApp {
         });
         if let Some(action) = graph_action {
             self.apply_graph_action(&ctx, action);
+        }
+        if let Some(action) = welcome_action {
+            match action {
+                WelcomeAction::NewFile => self.open_new_tab(),
+                WelcomeAction::OpenFile => self.trigger_open_file(),
+                WelcomeAction::OpenFolder => self.trigger_open_folder(),
+                WelcomeAction::Open(entry) => self.open_recent(entry),
+            }
         }
 
         // 5. Modals & Dialogs
@@ -3775,6 +3806,39 @@ mod tests {
     }
 
     #[test]
+    fn test_welcome_shows_at_start_and_after_the_last_tab_closes() {
+        let mut app = TextEditorApp::default();
+        assert!(app.show_welcome, "the start page opens the editor");
+        app.open_new_tab();
+        assert!(!app.show_welcome, "a new file dismisses it");
+        app.close_tab(app.active_tab_index);
+        assert!(!app.show_welcome, "one tab still open");
+        app.close_tab(0);
+        assert!(app.show_welcome, "the last tab closed");
+        app.open_file_in_tab(PathBuf::from("Cargo.toml"));
+        assert!(!app.show_welcome, "opening a file dismisses it");
+    }
+
+    #[test]
+    fn test_editor_shortcuts_are_ignored_on_the_welcome_page() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.apply_shortcut(&ctx, ShortcutAction::Find);
+        assert!(!app.find.visible);
+        app.open_new_tab();
+        app.apply_shortcut(&ctx, ShortcutAction::Find);
+        assert!(app.find.visible);
+    }
+
+    #[test]
+    fn test_no_markdown_preview_on_the_welcome_page() {
+        let mut app = markdown_app();
+        app.show_markdown_preview = true;
+        app.show_welcome = true;
+        assert!(!app.previewing());
+    }
+
+    #[test]
     fn test_git_graph_opens_only_with_a_repository() {
         let ctx = egui::Context::default();
         let mut app = TextEditorApp::default();
@@ -3802,7 +3866,7 @@ mod tests {
     #[test]
     fn test_editor_shortcuts_are_ignored_while_the_graph_is_open() {
         let ctx = egui::Context::default();
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         let Some(repo) = crate::git::temp_repo("app_graph_keys") else { return };
         let root = repo.root().to_path_buf();
         app.git.open(&ctx, root.clone());
@@ -3860,7 +3924,7 @@ mod tests {
 
     #[test]
     fn test_goto_line_moves_caret_and_scrolls() {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.active_tab_mut().text_content = "ab\ncde\nf".into();
         app.apply_shortcut(&egui::Context::default(), ShortcutAction::GotoLine);
         assert!(app.goto.visible && app.goto.focus);
@@ -3964,7 +4028,7 @@ mod tests {
     #[test]
     fn test_find_shortcuts_open_and_close_the_bar() {
         let ctx = egui::Context::default();
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.apply_shortcut(&ctx, ShortcutAction::Find);
         assert!(app.find.visible && !app.find.replace_mode && app.find.focus_query);
         app.apply_shortcut(&ctx, ShortcutAction::Replace);
@@ -6271,7 +6335,7 @@ mod tests {
     }
 
     fn markdown_app() -> TextEditorApp {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.active_tab_mut().current_path = Some(PathBuf::from("notes.md"));
         app.active_tab_mut().active_language = Language::Markdown;
         app.active_tab_mut().text_content = "# Title\n\nsome *text*".into();
@@ -6358,7 +6422,7 @@ mod tests {
     }
 
     fn rust_app(text: &str) -> TextEditorApp {
-        let mut app = TextEditorApp::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
         app.active_tab_mut().text_content = text.into();
         app.active_tab_mut().language_override = Some(Language::Rust);
         app
