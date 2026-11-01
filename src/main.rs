@@ -29,6 +29,7 @@ mod symbols;
 mod tab_bar;
 mod terminal;
 mod theme;
+mod welcome;
 
 use app::TextEditorApp;
 use eframe::egui;
