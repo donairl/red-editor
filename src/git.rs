@@ -176,6 +176,15 @@ pub struct CommitFile {
     pub path: PathBuf,
 }
 
+/// What the detail pane shows of a commit beyond the log row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitDetails {
+    /// Committer date as git prints `%ci`: `YYYY-MM-DD HH:MM:SS +ZZZZ`.
+    pub date: String,
+    /// The full message, subject included.
+    pub message: String,
+}
+
 /// A work tree, by its top folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Repo {
@@ -223,9 +232,15 @@ impl Repo {
         &self.root
     }
 
-    /// Files whose change means HEAD, the branch or the index moved.
-    pub fn watched_files(&self) -> [PathBuf; 2] {
-        [self.git_dir.join("HEAD"), self.git_dir.join("index")]
+    /// Files whose modified time moves when HEAD, the index or a branch
+    /// changes, so a commit or branch made outside the editor is noticed.
+    pub fn watched_files(&self) -> [PathBuf; 4] {
+        [
+            self.git_dir.join("HEAD"),
+            self.git_dir.join("index"),
+            self.git_dir.join("packed-refs"),
+            self.git_dir.join("refs").join("heads"),
+        ]
     }
 
     /// Whether `path` lies inside this work tree.
@@ -405,6 +420,47 @@ impl Repo {
             Err(GitError::Failed(e)) if e.contains("does not have any commits") => Ok(Vec::new()),
             Err(e) => Err(e),
         }
+    }
+
+    /// Up to `count` commits of every branch and tag, in topological
+    /// order (children before parents), skipping the first `skip`.
+    pub fn log_all(&self, skip: usize, count: usize) -> Result<Vec<Commit>, GitError> {
+        let skip = format!("--skip={skip}");
+        let count = format!("-n{count}");
+        let args = [
+            "log",
+            "--all",
+            "--topo-order",
+            "--format=%H%x00%h%x00%an%x00%at%x00%s%x00%D%x00%P",
+            "-z",
+            &count,
+            &skip,
+        ];
+        match self.git(&args) {
+            Ok(out) => Ok(parse_log(&out)),
+            Err(GitError::Failed(e)) if e.contains("does not have any commits") => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The date and full message of `hash`.
+    pub fn commit_details(&self, hash: &str) -> Result<CommitDetails, GitError> {
+        let out = self.git(&["show", "-s", "--format=%ci%n%B", hash])?;
+        let (date, message) = out.split_once('\n').unwrap_or((out.as_str(), ""));
+        Ok(CommitDetails {
+            date: date.trim().to_owned(),
+            message: message.trim_end().to_owned(),
+        })
+    }
+
+    /// Makes branch `name` point at `hash` without switching to it.
+    pub fn branch_at(&self, name: &str, hash: &str) -> Result<(), GitError> {
+        self.git(&["branch", name, hash]).map(drop)
+    }
+
+    /// Deletes a fully merged local branch; git refuses an unmerged one.
+    pub fn delete_branch(&self, name: &str) -> Result<(), GitError> {
+        self.git(&["branch", "-d", name]).map(drop)
     }
 
     /// The files `hash` changed.
@@ -923,6 +979,52 @@ mod tests {
         assert_eq!(age(20 * 86_400), "2w");
         assert_eq!(age(100 * 86_400), "3mo");
         assert_eq!(age(800 * 86_400), "2y");
+    }
+
+    #[test]
+    fn test_log_all_branch_at_and_delete_branch() {
+        let Some(repo) = temp_repo("graph") else { return };
+        let root = repo.root().to_path_buf();
+        assert_eq!(repo.log_all(0, 10).unwrap(), Vec::new(), "no commits yet");
+        fs::write(root.join("a.txt"), "one\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("first").unwrap();
+        let first = repo.log(0, 1, None).unwrap()[0].hash.clone();
+        repo.create_branch("feature").unwrap();
+        fs::write(root.join("b.txt"), "bee\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("second").unwrap();
+        repo.switch("main").unwrap();
+        fs::write(root.join("a.txt"), "two\n").unwrap();
+        repo.stage_all().unwrap();
+        repo.commit("third").unwrap();
+
+        // The branch's own log misses `second`; `--all` has it.
+        let subjects = |log: Vec<Commit>| log.into_iter().map(|c| c.subject).collect::<Vec<_>>();
+        assert_eq!(subjects(repo.log(0, 10, None).unwrap()), ["third", "first"]);
+        let all = repo.log_all(0, 10).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[2].subject, "first", "topo order puts the root last");
+        assert!(all.iter().any(|c| c.subject == "second" && c.refs.contains(&"feature".to_owned())));
+        assert!(all.iter().all(|c| c.subject == "first" || c.parents == [first.clone()]));
+        assert_eq!(repo.log_all(2, 10).unwrap().len(), 1, "skip works");
+
+        let details = repo.commit_details(&first).unwrap();
+        assert_eq!(details.message.trim(), "first");
+        assert_eq!(details.date.len(), 25, "git's %ci: `YYYY-MM-DD HH:MM:SS +ZZZZ`, got {}", details.date);
+
+        repo.branch_at("old", &first).unwrap();
+        let names: Vec<String> = repo.branches().unwrap().into_iter().map(|b| b.name).collect();
+        assert!(names.contains(&"old".to_owned()), "{names:?}");
+        assert_eq!(repo.log_all(0, 10).unwrap()[2].refs.iter().filter(|r| *r == "old").count(), 1);
+
+        repo.delete_branch("old").unwrap();
+        let names: Vec<String> = repo.branches().unwrap().into_iter().map(|b| b.name).collect();
+        assert!(!names.contains(&"old".to_owned()));
+        let err = repo.delete_branch("feature").unwrap_err();
+        assert!(matches!(&err, GitError::Failed(m) if m.contains("feature")), "unmerged: {err}");
+        assert!(repo.watched_files().iter().any(|p| p.ends_with("packed-refs")));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
