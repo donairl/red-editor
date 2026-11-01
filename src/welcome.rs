@@ -66,7 +66,7 @@ pub fn show(ui: &mut egui::Ui, history: &History, i18n: &I18n) -> Option<Welcome
                     ui.label(RichText::new(env!("CARGO_PKG_VERSION")).size(13.0).color(palette.icon_inactive));
                 });
                 ui.add_space(16.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let ctx = ui.ctx().clone();
                     for (key, shortcut, result) in [
                         ("welcome.new_file", crate::app::shortcuts::NEW_TAB, WelcomeAction::NewFile),
@@ -221,6 +221,10 @@ mod tests {
         for expected in ["File Baru", "Buka File…", "Buka Folder…", "FOLDER TERBARU", "FILE TERBARU", "proj-a/", "proj-b/", "notes.md", "main.rs"] {
             assert!(names.contains(&expected), "{expected} missing from {names:?}");
         }
+        let rect_of = |name: &str| texts.iter().find(|(t, _)| t == name).map(|(_, r)| *r).unwrap();
+        let (proj_b, proj_a) = (rect_of("proj-b/"), rect_of("proj-a/"));
+        assert!(proj_b.top() < proj_a.top(), "folder rows must stack: {proj_b:?} vs {proj_a:?}");
+        assert!((proj_a.left() - proj_b.left()).abs() < 1.0, "folder rows must share a left edge: {proj_b:?} vs {proj_a:?}");
     }
 
     #[test]
