@@ -265,11 +265,11 @@ pub struct GitState {
     /// when either changes.
     graph_key: Option<(Option<String>, Vec<String>)>,
     /// Date and message of commits the detail pane showed; None while loading.
-    commit_details: HashMap<String, Option<Result<CommitDetails, GitError>>>,
+    pub(crate) commit_details: HashMap<String, Option<Result<CommitDetails, GitError>>>,
     /// A command moved refs the graph key cannot see; reload on the next refresh.
     graph_stale: bool,
     /// The files of commits already expanded.
-    commit_files: HashMap<String, Result<Vec<CommitFile>, GitError>>,
+    pub(crate) commit_files: HashMap<String, Result<Vec<CommitFile>, GitError>>,
     /// Blame by file and the HEAD it was read at; `None` while loading or
     /// when git has no blame for the file.
     blames: HashMap<(PathBuf, String), Option<Blame>>,

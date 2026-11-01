@@ -637,9 +637,110 @@ fn show_new_branch_modal(ctx: &egui::Context, graph: &mut GitGraphUi, i18n: &I18
     action
 }
 
-/// Placeholder until Task 9 fills the pane.
-fn show_detail(_ui: &mut egui::Ui, _graph: &mut GitGraphUi, _git: &mut GitState, _commit: &Commit, _i18n: &I18n) -> Option<GraphAction> {
-    None
+/// Hash, author, date, refs, message, parents and files of `commit`.
+fn show_detail(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, commit: &Commit, i18n: &I18n) -> Option<GraphAction> {
+    let palette = theme::active(ui.ctx()).sidebar;
+    let root = git.repo().map(|r| r.root().to_path_buf()).unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let details = git.commit_details(ui.ctx(), &commit.hash).cloned();
+    let files = git.commit_files(ui.ctx(), &commit.hash).cloned();
+    let mut action = None;
+    ui.painter().hline(ui.max_rect().x_range(), ui.max_rect().top() + 0.5, Stroke::new(1.0, palette.border));
+    egui::ScrollArea::vertical()
+        .id_salt("git_graph_detail_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&commit.short).monospace().color(palette.foreground));
+                    if ui.small_button(i18n.t("graph.copy_hash")).clicked() {
+                        action = Some(GraphAction::Copy(commit.hash.clone()));
+                    }
+                    ui.label(egui::RichText::new(&commit.author).color(palette.foreground));
+                    let date = match &details {
+                        Some(Ok(d)) => format!("{} · {}", d.date, git::age(now - commit.time)),
+                        _ => git::age(now - commit.time),
+                    };
+                    ui.label(egui::RichText::new(date).color(palette.icon_inactive));
+                    for name in &commit.refs {
+                        let (_, label) = chip(name, &git.branches);
+                        ui.label(egui::RichText::new(label).small().color(palette.accent));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(i18n.t("graph.create_branch")).clicked() {
+                            graph.new_branch = Some(NewBranch { hash: commit.hash.clone(), name: String::new(), focused: false });
+                        }
+                        if ui.button(i18n.t("history.checkout")).clicked() {
+                            action = Some(GraphAction::Checkout(commit.hash.clone()));
+                        }
+                    });
+                });
+                match &details {
+                    Some(Ok(d)) => {
+                        ui.label(egui::RichText::new(&d.message).monospace().color(palette.foreground));
+                    }
+                    Some(Err(e)) => {
+                        ui.label(egui::RichText::new(e.to_string()).color(palette.git_deleted));
+                    }
+                    None => {
+                        ui.label(egui::RichText::new(&commit.subject).monospace().color(palette.foreground));
+                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(i18n.t("graph.parents")).small().color(palette.icon_inactive));
+                    for parent in &commit.parents {
+                        let short: String = parent.chars().take(7).collect();
+                        if ui.link(egui::RichText::new(short).monospace()).clicked() {
+                            match git.graph.commits.iter().position(|c| c.hash == *parent) {
+                                Some(row) => {
+                                    graph.selected = Some(parent.clone());
+                                    graph.scroll_to = Some(row);
+                                    action = Some(GraphAction::Select(parent.clone()));
+                                }
+                                None => graph.seek = Some(parent.clone()),
+                            }
+                        }
+                    }
+                });
+                ui.label(egui::RichText::new(i18n.t("graph.files")).small().color(palette.icon_inactive));
+            });
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            let width = ui.available_width();
+            match files {
+                None => {
+                    let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+                    egui::Spinner::new().size(12.0).color(palette.icon_inactive).paint_at(
+                        ui,
+                        Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), Vec2::splat(12.0)),
+                    );
+                }
+                Some(Err(e)) => {
+                    let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+                    ui.painter().text(
+                        pos2(rect.left() + 12.0, rect.center().y),
+                        Align2::LEFT_CENTER,
+                        e.to_string(),
+                        FontId::proportional(13.0),
+                        palette.git_deleted,
+                    );
+                }
+                Some(Ok(files)) => {
+                    for file in files {
+                        let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+                        let row = ui.interact(rect, egui::Id::unique(("git_graph_file", &commit.hash, &file.path)), Sense::click());
+                        let change = git::FileChange { path: file.path.clone(), orig_path: None, staged: Some(file.kind), unstaged: None };
+                        crate::source_control::paint_file_row(ui, &palette, rect, &change, file.kind, &root, row.hovered(), 0);
+                        if row.clicked() {
+                            action = Some(GraphAction::CommitDiff { hash: commit.hash.clone(), path: file.path });
+                        }
+                    }
+                }
+            }
+        });
+    action
 }
 
 #[cfg(test)]
@@ -926,6 +1027,49 @@ mod tests {
         let repeated = git.graph.commits[0].clone();
         git.graph.commits.push(repeated);
         frame(&ctx, &mut git, &mut graph, Vec::new());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_detail_pane_lists_files_parents_and_opens_a_diff() {
+        let ctx = egui::Context::default();
+        let Some((mut git, root)) = fixture("graph_detail", &ctx) else { return };
+        let mut graph = GitGraphUi::default();
+        let third = git.graph.commits.iter().find(|c| c.subject == "third").unwrap().clone();
+        graph.selected = Some(third.hash.clone());
+        frame(&ctx, &mut git, &mut graph, Vec::new());
+        wait(&ctx, &mut git, |g| {
+            g.commit_details.get(&third.hash).is_some_and(|d| d.as_ref().is_some_and(|d| d.is_ok()))
+                && g.commit_files.get(&third.hash).is_some_and(|f| f.as_ref().is_ok_and(|f| !f.is_empty()))
+        });
+        let (_, shapes) = frame(&ctx, &mut git, &mut graph, Vec::new());
+        let painted = texts(&shapes);
+        let names: Vec<&str> = painted.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(names.iter().any(|t| t.starts_with(&third.short)), "short hash: {names:?}");
+        assert!(names.contains(&"Induk"), "parents heading: {names:?}");
+        assert!(names.contains(&"File"), "files heading: {names:?}");
+        assert!(names.contains(&"M"), "a.txt was modified: {names:?}");
+
+        // The file row opens the diff of that commit.
+        let (_, file) = painted
+            .iter()
+            .filter(|(t, _)| t == "a.txt")
+            .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
+            .expect("file row");
+        let (action, _) = frame(&ctx, &mut git, &mut graph, click(file.center()));
+        assert_eq!(action, Some(GraphAction::CommitDiff { hash: third.hash.clone(), path: root.join("a.txt") }));
+
+        // The parent link selects the parent.
+        let parent = third.parents[0].clone();
+        let short: String = parent.chars().take(7).collect();
+        let (_, link) = painted
+            .iter()
+            .filter(|(t, _)| *t == short)
+            .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
+            .expect("parent link");
+        let (action, _) = frame(&ctx, &mut git, &mut graph, click(link.center()));
+        assert_eq!(action, Some(GraphAction::Select(parent.clone())));
+        assert_eq!(graph.selected, Some(parent));
         let _ = fs::remove_dir_all(&root);
     }
 }

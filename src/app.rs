@@ -3823,8 +3823,7 @@ mod tests {
     #[test]
     fn test_closing_the_graph_drops_stale_editor_requests() {
         let ctx = egui::Context::default();
-        let mut app = TextEditorApp::default();
-        app.git_graph = Some(GitGraphUi::default());
+        let mut app = TextEditorApp { git_graph: Some(GitGraphUi::default()), ..Default::default() };
         app.editor_request.goto = Some(5);
         app.toggle_git_graph(&ctx);
         assert!(app.git_graph.is_none());
