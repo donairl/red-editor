@@ -108,6 +108,8 @@ If installed outside `PATH`, provide the full binary path for `Exec=`, e.g. `Exe
 
 ## Usage
 
+The editor opens on a **start page** with **New File**, **Open File…** and **Open Folder…** and your recent folders and files; click one to reopen it. Closing the last tab brings the page back.
+
 | Menu | Items |
 |---|---|
 | **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Open Recent, Save, Save As…, Language, Exit |

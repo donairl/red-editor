@@ -108,6 +108,8 @@ Kalau dipasang di luar `PATH`, isi `Exec=` dengan path lengkapnya, misalnya `Exe
 
 ## Cara pakai
 
+Editor dibuka dengan **halaman awal** berisi **File Baru**, **Buka File…**, **Buka Folder…**, serta folder dan file yang baru dibuka; klik untuk membukanya lagi. Menutup tab terakhir memunculkan halaman ini kembali.
+
 | Menu | Isi |
 |---|---|
 | **File** | Tab Baru, Tutup Tab, Jendela Baru, Buka File…, Buka Folder…, Buka Terbaru, Simpan, Simpan Sebagai…, Bahasa, Keluar |
