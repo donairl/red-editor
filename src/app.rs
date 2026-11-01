@@ -1626,6 +1626,7 @@ impl TextEditorApp {
         if !keep.contains(&true) {
             self.tabs = vec![DocumentTab::default_new()];
             self.active_tab_index = 0;
+            self.show_welcome = true;
             return;
         }
         let new_index = |old: usize| keep[..old].iter().filter(|k| **k).count();
@@ -3817,6 +3818,8 @@ mod tests {
         assert!(app.show_welcome, "the last tab closed");
         app.open_file_in_tab(PathBuf::from("Cargo.toml"));
         assert!(!app.show_welcome, "opening a file dismisses it");
+        app.close_tabs_where(app.active_tab_index, |_, _| true);
+        assert!(app.show_welcome, "closing every tab brings it back");
     }
 
     #[test]
