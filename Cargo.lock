@@ -2877,7 +2877,7 @@ dependencies = [
 
 [[package]]
 name = "red_text_editor"
-version = "0.7.0"
+version = "0.7.7"
 dependencies = [
  "eframe",
  "egui_commonmark",
