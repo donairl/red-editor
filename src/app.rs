@@ -12,7 +12,8 @@ use crate::blame::{self, Blame};
 use crate::bookmarks::Bookmarks;
 use crate::file_browser::{self, Explorer};
 use crate::git::{FileChange, GitError};
-use crate::git_worker::{Base, GitState, Op};
+use crate::git_graph::{self, GitGraphUi, GraphAction};
+use crate::git_worker::{Base, DiffSource, GitState, Op};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::history::{Entry, EntryKind, History};
@@ -242,6 +243,8 @@ pub enum GitConfirm {
     Checkout(String),
     /// Make a file what it was in a commit.
     RestoreFile { hash: String, path: PathBuf },
+    /// Delete a local branch.
+    DeleteBranch(String),
 }
 
 pub struct TextEditorApp {
@@ -313,6 +316,8 @@ pub struct TextEditorApp {
     pub scm: ScmUi,
     /// A git command asking for confirmation.
     pub git_confirm: Option<GitConfirm>,
+    /// The Git Graph in place of the editor while `Some`.
+    pub git_graph: Option<GitGraphUi>,
     /// When the gutter's change markers were last computed.
     last_marks_at: Option<Instant>,
 }
@@ -379,6 +384,7 @@ impl Default for TextEditorApp {
             new_branch_name: String::new(),
             scm: ScmUi::default(),
             git_confirm: None,
+            git_graph: None,
             last_marks_at: None,
         }
     }
@@ -442,6 +448,8 @@ pub mod shortcuts {
     pub const SOURCE_CONTROL: KeyboardShortcut = cmd_shift(Key::G);
     pub const BLAME: KeyboardShortcut =
         KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::B);
+    pub const GIT_GRAPH: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::G);
     pub const NEXT_TAB: KeyboardShortcut = cmd(Key::Tab);
     pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
     pub const FIND_IN_FILES: KeyboardShortcut = cmd_shift(Key::F);
@@ -484,6 +492,7 @@ pub enum ShortcutAction {
     ToggleSidebar,
     SourceControl,
     Blame,
+    GitGraph,
     NextTab,
     PrevTab,
     GotoLine,
@@ -521,6 +530,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::PREV_TAB, PrevTab),
         (shortcuts::SOURCE_CONTROL, SourceControl),
         (shortcuts::BLAME, Blame),
+        (shortcuts::GIT_GRAPH, GitGraph),
         (shortcuts::SAVE, Save),
         (shortcuts::OPEN_FILE, OpenFile),
         (shortcuts::NEW_TAB, NewTab),
@@ -673,6 +683,13 @@ impl TextEditorApp {
             .shortcut_text(ctx.format_shortcut(&shortcuts::BLAME));
         if ui.add(blame).clicked() {
             self.show_blame = !self.show_blame;
+            ui.close();
+        }
+        let graph = egui::Button::new(self.i18n.t("view.git_graph"))
+            .selected(self.git_graph.is_some())
+            .shortcut_text(ctx.format_shortcut(&shortcuts::GIT_GRAPH));
+        if ui.add_enabled(self.git.repo().is_some(), graph).clicked() {
+            self.toggle_git_graph(&ctx);
             ui.close();
         }
         if menu_item(ui, self.i18n.t("view.zen_mode"), &ctx.format_shortcut(&shortcuts::ZEN_MODE)) {
@@ -1459,6 +1476,7 @@ impl TextEditorApp {
             ShortcutAction::ToggleSidebar => self.toggle_sidebar(),
             ShortcutAction::SourceControl => self.toggle_source_control(),
             ShortcutAction::Blame => self.show_blame = !self.show_blame,
+            ShortcutAction::GitGraph => self.toggle_git_graph(ctx),
             ShortcutAction::NextTab => {
                 self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
             }
@@ -1796,7 +1814,7 @@ impl TextEditorApp {
                     Op::Switch(b) => self.i18n.tf("git.switched", &[("branch", b)]),
                     Op::CreateBranch(b) => self.i18n.tf("git.branch_created", &[("branch", b)]),
                     Op::CreateBranchAt { name, .. } => self.i18n.tf("git.branch_created", &[("branch", name)]),
-                    Op::DeleteBranch(_) => return self.status_message.clone(),
+                    Op::DeleteBranch(name) => self.i18n.tf("graph.branch_deleted", &[("branch", name)]),
                     Op::Init(_) => self.i18n.t("git.initialized").to_owned(),
                     Op::RestoreFile { .. } => self.i18n.t("history.restored").to_owned(),
                     Op::Checkout(hash) => {
@@ -2062,6 +2080,39 @@ impl TextEditorApp {
         self.scm.commits_open = true;
     }
 
+    /// Shows the Git Graph in place of the editor, or hides it again.
+    /// Needs a repository; the first opening loads the graph.
+    pub fn toggle_git_graph(&mut self, ctx: &egui::Context) {
+        if self.git_graph.is_some() {
+            self.git_graph = None;
+            self.editor_request.focus = true;
+            return;
+        }
+        if self.git.repo().is_none() {
+            return;
+        }
+        let graph = &self.git.graph;
+        if graph.commits.is_empty() && !graph.loading && !graph.complete && graph.error.is_none() {
+            self.git.load_graph(ctx);
+        }
+        self.git_graph = Some(GitGraphUi::default());
+    }
+
+    /// Does what the Git Graph asked.
+    fn apply_graph_action(&mut self, ctx: &egui::Context, action: GraphAction) {
+        match action {
+            GraphAction::Close => self.toggle_git_graph(ctx),
+            GraphAction::Select(_) => {}
+            GraphAction::LoadMore => self.git.load_more_graph(ctx),
+            GraphAction::Checkout(hash) => self.git_confirm = Some(GitConfirm::Checkout(hash)),
+            GraphAction::CreateBranch { name, hash } => self.run_git(ctx, Op::CreateBranchAt { name, hash }),
+            GraphAction::Switch(name) => self.run_git(ctx, Op::Switch(name)),
+            GraphAction::DeleteBranch(name) => self.git_confirm = Some(GitConfirm::DeleteBranch(name)),
+            GraphAction::CommitDiff { hash, path } => self.git.show_diff(ctx, path, DiffSource::Commit(hash)),
+            GraphAction::Copy(text) => ctx.copy_text(text),
+        }
+    }
+
     /// Does what the Source Control view asked.
     fn apply_scm_action(&mut self, ctx: &egui::Context, action: ScmAction) {
         match action {
@@ -2080,6 +2131,11 @@ impl TextEditorApp {
             ScmAction::ExpandCommit(hash) => self.git.log.expanded = hash,
             ScmAction::ClearHistoryFilter => self.git.load_log(ctx, None),
             ScmAction::Checkout(hash) => self.git_confirm = Some(GitConfirm::Checkout(hash)),
+            ScmAction::OpenGraph => {
+                if self.git_graph.is_none() {
+                    self.toggle_git_graph(ctx);
+                }
+            }
             ScmAction::OpenConsole => {
                 self.scm.auth_failed = false;
                 if !self.show_console {
@@ -2124,6 +2180,11 @@ impl TextEditorApp {
                     self.i18n.t("history.restore_confirm"),
                 )
             }
+            GitConfirm::DeleteBranch(branch) => (
+                self.i18n.t("graph.delete_branch"),
+                self.i18n.tf("graph.delete_branch_message", &[("branch", branch)]),
+                self.i18n.t("graph.delete_branch_confirm"),
+            ),
         };
         let answer = modals::show_confirm_modal(ctx, title, &message, yes, self.i18n.t("unsaved.cancel"));
         match answer {
@@ -2133,6 +2194,7 @@ impl TextEditorApp {
                     Some(GitConfirm::CommitAll(message)) => Op::CommitAll(message),
                     Some(GitConfirm::Checkout(hash)) => Op::Checkout(hash),
                     Some(GitConfirm::RestoreFile { hash, path }) => Op::RestoreFile { hash, path },
+                    Some(GitConfirm::DeleteBranch(name)) => Op::DeleteBranch(name),
                     None => return,
                 };
                 self.run_git(ctx, op);
@@ -2757,6 +2819,17 @@ impl eframe::App for TextEditorApp {
         {
             self.close_find();
         }
+        if let Some(graph) = &self.git_graph
+            && graph.new_branch.is_none()
+            && !console_focused
+            && !self.find.visible
+            && !self.goto.visible
+            && !self.search.visible
+            && self.git_confirm.is_none()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.toggle_git_graph(&ctx);
+        }
         if self.zen_mode
             && !self.find.visible
             && !self.goto.visible
@@ -3008,9 +3081,15 @@ impl eframe::App for TextEditorApp {
         // editor below it read as one surface, as in VS Code.
         let editor_fill = theme::active(&ctx).tab.tab_active;
         let editor_frame = egui::Frame::NONE.fill(editor_fill);
+        let mut graph_action = None;
         egui::CentralPanel::default().frame(editor_frame).show(ui, |ui| {
             if !self.zen_mode {
                 self.render_tab_bar(ui);
+            }
+            if let Some(mut graph) = self.git_graph.take() {
+                graph_action = git_graph::show(ui, &mut graph, &mut self.git, &self.i18n);
+                self.git_graph = Some(graph);
+                return;
             }
 
             if self.find.visible
@@ -3137,6 +3216,9 @@ impl eframe::App for TextEditorApp {
                 None => self.scroll_sync.reset(),
             }
         });
+        if let Some(action) = graph_action {
+            self.apply_graph_action(&ctx, action);
+        }
 
         // 5. Modals & Dialogs
         about::show(&ctx, &mut self.show_about_modal, &mut self.about, &self.i18n);
@@ -3593,6 +3675,9 @@ mod tests {
             (egui::Key::N, ctrl, ShortcutAction::NewTab),
             (egui::Key::N, ctrl_shift, ShortcutAction::NewWindow),
             (egui::Key::V, ctrl_shift, ShortcutAction::MarkdownPreview),
+            (egui::Key::G, ctrl | egui::Modifiers::ALT, ShortcutAction::GitGraph),
+            (egui::Key::G, ctrl, ShortcutAction::GotoLine),
+            (egui::Key::G, ctrl_shift, ShortcutAction::SourceControl),
             (egui::Key::ArrowUp, egui::Modifiers::ALT, ShortcutAction::PrevHeading),
             (egui::Key::ArrowDown, egui::Modifiers::ALT, ShortcutAction::NextHeading),
             (egui::Key::R, ctrl, ShortcutAction::GotoSymbol),
@@ -3630,6 +3715,31 @@ mod tests {
         assert!(app.zen_mode && app.editor_request.focus);
         app.apply_shortcut(&ctx, ShortcutAction::ZenMode);
         assert!(!app.zen_mode);
+    }
+
+    #[test]
+    fn test_git_graph_opens_only_with_a_repository() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        app.apply_shortcut(&ctx, ShortcutAction::GitGraph);
+        assert!(app.git_graph.is_none(), "no repository, no graph");
+
+        let Some(repo) = crate::git::temp_repo("app_graph") else { return };
+        let root = repo.root().to_path_buf();
+        app.git.open(&ctx, root.clone());
+        for _ in 0..250 {
+            app.git.poll(&ctx);
+            if app.git.repo().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.apply_shortcut(&ctx, ShortcutAction::GitGraph);
+        assert!(app.git_graph.is_some());
+        assert!(app.git.graph.loading || app.git.graph.complete, "opening loads the graph");
+        app.apply_shortcut(&ctx, ShortcutAction::GitGraph);
+        assert!(app.git_graph.is_none(), "the shortcut toggles");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

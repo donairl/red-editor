@@ -70,6 +70,8 @@ pub enum ScmAction {
     ClearHistoryFilter,
     /// Check this commit out, once the user confirms.
     Checkout(String),
+    /// Show the Git Graph in place of the editor.
+    OpenGraph,
 }
 
 /// The three lists, by what the user can do with their files.
@@ -165,14 +167,23 @@ pub fn show(
         palette.foreground,
     );
     if git.repo().is_some() {
+        /// A title-bar button of the view.
+        #[derive(Clone, Copy, PartialEq)]
+        enum Tool {
+            Refresh,
+            Push,
+            Pull,
+            Graph,
+        }
         let busy = git.is_refreshing() || git.busy().is_some();
-        // Right to left: refresh, push, pull.
+        // Right to left: refresh, push, pull, graph.
         let tools = [
-            ("scm.refresh", None),
-            ("git.push", Some(Op::Push)),
-            ("git.pull", Some(Op::Pull)),
+            ("scm.refresh", Tool::Refresh),
+            ("git.push", Tool::Push),
+            ("git.pull", Tool::Pull),
+            ("scm.graph", Tool::Graph),
         ];
-        for (i, (tooltip, op)) in tools.into_iter().enumerate() {
+        for (i, (tooltip, tool)) in tools.into_iter().enumerate() {
             let right = title_rect.right() - ROW_PADDING_X - i as f32 * ACTION_SIZE;
             let rect = Rect::from_center_size(
                 pos2(right - ACTION_SIZE / 2.0, title_rect.center().y),
@@ -181,7 +192,7 @@ pub fn show(
             let response = ui
                 .interact(rect, egui::Id::unique(("scm_tool", i)), Sense::click())
                 .on_hover_text(i18n.t(tooltip));
-            if busy && op.is_none() {
+            if busy && tool == Tool::Refresh {
                 egui::Spinner::new()
                     .size(12.0)
                     .color(palette.icon_inactive)
@@ -192,15 +203,20 @@ pub fn show(
                 ui.painter()
                     .rect_filled(rect.shrink(2.0), CornerRadius::same(4), palette.row_hover);
             }
-            let color = if busy { palette.icon_inactive } else { palette.foreground };
-            match &op {
-                None => file_browser::paint_refresh_icon(ui.painter(), rect.center(), color),
-                Some(op) => paint_sync_arrow(ui.painter(), rect.center(), *op == Op::Pull, color),
+            let blocked = busy && tool != Tool::Graph;
+            let color = if blocked { palette.icon_inactive } else { palette.foreground };
+            match tool {
+                Tool::Refresh => file_browser::paint_refresh_icon(ui.painter(), rect.center(), color),
+                Tool::Push => paint_sync_arrow(ui.painter(), rect.center(), false, color),
+                Tool::Pull => paint_sync_arrow(ui.painter(), rect.center(), true, color),
+                Tool::Graph => paint_graph_icon(ui.painter(), rect.center(), color),
             }
-            if response.clicked() && !busy {
-                action = Some(match op {
-                    None => ScmAction::Refresh,
-                    Some(op) => ScmAction::Run(op),
+            if response.clicked() && !blocked {
+                action = Some(match tool {
+                    Tool::Refresh => ScmAction::Refresh,
+                    Tool::Push => ScmAction::Run(Op::Push),
+                    Tool::Pull => ScmAction::Run(Op::Pull),
+                    Tool::Graph => ScmAction::OpenGraph,
                 });
             }
         }
@@ -575,6 +591,21 @@ fn paint_commit_row(
     let subject_x = x + hash_width + BADGE_GAP;
     let subject = file_browser::elided(ui, text, FontId::proportional(13.0), palette.foreground, right - subject_x);
     painter.galley(pos2(subject_x, rect.center().y - subject.size().y / 2.0), subject, palette.foreground);
+}
+
+/// Two dots joined by a line with a branch curving off: the Git Graph.
+fn paint_graph_icon(painter: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.3, color);
+    painter.line_segment([c + vec2(-3.0, -5.0), c + vec2(-3.0, 5.0)], stroke);
+    painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+        [c + vec2(-3.0, 0.0), c + vec2(-3.0, -4.0), c + vec2(3.0, -2.0), c + vec2(3.0, -5.0)],
+        false,
+        Color32::TRANSPARENT,
+        stroke,
+    ));
+    painter.circle_filled(c + vec2(-3.0, -5.0), 2.0, color);
+    painter.circle_filled(c + vec2(-3.0, 5.0), 2.0, color);
+    painter.circle_filled(c + vec2(3.0, -5.0), 2.0, color);
 }
 
 /// An arrow into a box: check the commit out.
