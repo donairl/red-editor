@@ -675,17 +675,21 @@ fn show_detail(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, co
                 graph.new_branch = Some(NewBranch { hash: commit.hash.clone(), name: String::new(), focused: false });
             }
         });
-        match &details {
-            Some(Ok(d)) => {
-                ui.label(egui::RichText::new(&d.message).monospace().color(palette.foreground));
-            }
-            Some(Err(e)) => {
-                ui.label(egui::RichText::new(e.to_string()).color(palette.git_deleted));
-            }
-            None => {
-                ui.label(egui::RichText::new(&commit.subject).monospace().color(palette.foreground));
-            }
-        }
+        egui::ScrollArea::vertical()
+            .id_salt(("git_graph_msg", &commit.hash))
+            .max_height(ui.available_height() * 0.5)
+            .auto_shrink([false, true])
+            .show(ui, |ui| match &details {
+                Some(Ok(d)) => {
+                    ui.label(egui::RichText::new(&d.message).monospace().color(palette.foreground));
+                }
+                Some(Err(e)) => {
+                    ui.label(egui::RichText::new(e.to_string()).color(palette.git_deleted));
+                }
+                None => {
+                    ui.label(egui::RichText::new(&commit.subject).monospace().color(palette.foreground));
+                }
+            });
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(i18n.t("graph.parents")).small().color(palette.icon_inactive));
             for parent in &commit.parents {

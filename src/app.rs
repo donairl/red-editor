@@ -2122,14 +2122,17 @@ impl TextEditorApp {
         }
         self.goto.visible = false;
         self.symbol_picker.visible = false;
-        self.ensure_graph_loaded(ctx);
+        self.ensure_graph_loaded(ctx, true);
         self.git_graph = Some(GitGraphUi::default());
     }
 
-    /// Loads the graph unless it is loaded, loading or failed.
-    fn ensure_graph_loaded(&mut self, ctx: &egui::Context) {
+    /// Loads the graph unless it is loaded or loading; a failed load is
+    /// tried again only when `retry` (the graph being opened).
+    fn ensure_graph_loaded(&mut self, ctx: &egui::Context, retry: bool) {
         let graph = &self.git.graph;
-        if graph.commits.is_empty() && !graph.loading && !graph.complete && graph.error.is_none() {
+        let untouched = !graph.complete && graph.error.is_none();
+        let failed = retry && graph.error.is_some();
+        if graph.commits.is_empty() && !graph.loading && (untouched || failed) {
             self.git.load_graph(ctx);
         }
     }
@@ -2826,7 +2829,7 @@ impl eframe::App for TextEditorApp {
         // graph when there is no repository left.
         if self.git_graph.is_some() {
             if self.git.repo().is_some() {
-                self.ensure_graph_loaded(&ctx);
+                self.ensure_graph_loaded(&ctx, false);
             } else if !self.git.is_discovering() {
                 self.toggle_git_graph(&ctx);
             }
@@ -3817,6 +3820,31 @@ mod tests {
         app.apply_shortcut(&ctx, ShortcutAction::GitGraph);
         app.apply_shortcut(&ctx, ShortcutAction::Find);
         assert!(app.find.visible);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_reopening_the_graph_retries_a_failed_load() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        let Some(repo) = crate::git::temp_repo("app_graph_retry") else { return };
+        let root = repo.root().to_path_buf();
+        app.git.open(&ctx, root.clone());
+        for _ in 0..250 {
+            app.git.poll(&ctx);
+            if app.git.repo().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.git.graph.error = Some(GitError::Failed("x".into()));
+        app.git.graph.loading = false;
+        app.git.graph.commits.clear();
+        app.ensure_graph_loaded(&ctx, false);
+        assert!(app.git.graph.error.is_some(), "no retry every frame");
+        app.toggle_git_graph(&ctx);
+        assert!(app.git_graph.is_some());
+        assert!(app.git.graph.error.is_none() || app.git.graph.loading, "opening retries");
         let _ = std::fs::remove_dir_all(&root);
     }
 
