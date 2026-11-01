@@ -8,7 +8,7 @@ comes back when the last tab is closed.
 - A **welcome page** drawn in the central area instead of the tab bar and
   editor: title, three buttons (New File, Open File…, Open Folder…), and
   the recently opened folders and files from `History`.
-- Shown at startup unless a file path came on the command line, and again
+- Shown at startup, and again
   whenever the last tab is closed.
 - Dismissed by anything that puts a document in a tab or opens a folder.
 
