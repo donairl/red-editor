@@ -56,6 +56,7 @@ pub struct Layout {
 
 impl Layout {
     /// Lays out commits from scratch.
+    #[cfg(test)]
     pub fn new(commits: &[Commit]) -> Layout {
         let mut layout = Layout::default();
         layout.extend(commits);
@@ -252,6 +253,7 @@ pub fn show(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, i18n:
                 .resizable(true)
                 .default_size(height)
                 .min_size(100.0)
+                .max_size(ui.available_height() * 0.8)
                 .show(ui, |ui| {
                     if let Some(a) = show_detail(ui, graph, git, &commit, i18n) {
                         action = Some(a);
@@ -647,99 +649,103 @@ fn show_detail(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, co
     let details = git.commit_details(ui.ctx(), &commit.hash).cloned();
     let files = git.commit_files(ui.ctx(), &commit.hash).cloned();
     let mut action = None;
-    ui.painter().hline(ui.max_rect().x_range(), ui.max_rect().top() + 0.5, Stroke::new(1.0, palette.border));
-    egui::ScrollArea::vertical()
-        .id_salt("git_graph_detail_scroll")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
-                ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&commit.short).monospace().color(palette.foreground));
-                    if ui.small_button(i18n.t("graph.copy_hash")).clicked() {
-                        action = Some(GraphAction::Copy(commit.hash.clone()));
-                    }
-                    ui.label(egui::RichText::new(&commit.author).color(palette.foreground));
-                    let date = match &details {
-                        Some(Ok(d)) => format!("{} · {}", d.date, git::age(now - commit.time)),
-                        _ => git::age(now - commit.time),
-                    };
-                    ui.label(egui::RichText::new(date).color(palette.icon_inactive));
-                    for name in &commit.refs {
-                        let (_, label) = chip(name, &git.branches);
-                        ui.label(egui::RichText::new(label).small().color(palette.accent));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(i18n.t("graph.create_branch")).clicked() {
-                            graph.new_branch = Some(NewBranch { hash: commit.hash.clone(), name: String::new(), focused: false });
+    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(&commit.short).monospace().color(palette.foreground));
+            if ui.small_button(i18n.t("graph.copy_hash")).clicked() {
+                action = Some(GraphAction::Copy(commit.hash.clone()));
+            }
+            ui.label(egui::RichText::new(&commit.author).color(palette.foreground));
+            let date = match &details {
+                Some(Ok(d)) => format!("{} · {}", d.date, git::age(now - commit.time)),
+                _ => git::age(now - commit.time),
+            };
+            ui.label(egui::RichText::new(date).color(palette.icon_inactive));
+        });
+        ui.horizontal_wrapped(|ui| {
+            for name in &commit.refs {
+                let (_, label) = chip(name, &git.branches);
+                ui.label(egui::RichText::new(label).small().color(palette.accent));
+            }
+            if ui.button(i18n.t("history.checkout")).clicked() {
+                action = Some(GraphAction::Checkout(commit.hash.clone()));
+            }
+            if ui.button(i18n.t("graph.create_branch")).clicked() {
+                graph.new_branch = Some(NewBranch { hash: commit.hash.clone(), name: String::new(), focused: false });
+            }
+        });
+        match &details {
+            Some(Ok(d)) => {
+                ui.label(egui::RichText::new(&d.message).monospace().color(palette.foreground));
+            }
+            Some(Err(e)) => {
+                ui.label(egui::RichText::new(e.to_string()).color(palette.git_deleted));
+            }
+            None => {
+                ui.label(egui::RichText::new(&commit.subject).monospace().color(palette.foreground));
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(i18n.t("graph.parents")).small().color(palette.icon_inactive));
+            for parent in &commit.parents {
+                let short: String = parent.chars().take(7).collect();
+                if ui.link(egui::RichText::new(short).monospace()).clicked() {
+                    match git.graph.commits.iter().position(|c| c.hash == *parent) {
+                        Some(row) => {
+                            graph.selected = Some(parent.clone());
+                            graph.scroll_to = Some(row);
+                            action = Some(GraphAction::Select(parent.clone()));
                         }
-                        if ui.button(i18n.t("history.checkout")).clicked() {
-                            action = Some(GraphAction::Checkout(commit.hash.clone()));
-                        }
-                    });
-                });
-                match &details {
-                    Some(Ok(d)) => {
-                        ui.label(egui::RichText::new(&d.message).monospace().color(palette.foreground));
-                    }
-                    Some(Err(e)) => {
-                        ui.label(egui::RichText::new(e.to_string()).color(palette.git_deleted));
-                    }
-                    None => {
-                        ui.label(egui::RichText::new(&commit.subject).monospace().color(palette.foreground));
+                        None => graph.seek = Some(parent.clone()),
                     }
                 }
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(i18n.t("graph.parents")).small().color(palette.icon_inactive));
-                    for parent in &commit.parents {
-                        let short: String = parent.chars().take(7).collect();
-                        if ui.link(egui::RichText::new(short).monospace()).clicked() {
-                            match git.graph.commits.iter().position(|c| c.hash == *parent) {
-                                Some(row) => {
-                                    graph.selected = Some(parent.clone());
-                                    graph.scroll_to = Some(row);
-                                    action = Some(GraphAction::Select(parent.clone()));
-                                }
-                                None => graph.seek = Some(parent.clone()),
-                            }
-                        }
-                    }
-                });
-                ui.label(egui::RichText::new(i18n.t("graph.files")).small().color(palette.icon_inactive));
-            });
-            ui.spacing_mut().item_spacing = Vec2::ZERO;
-            let width = ui.available_width();
-            match files {
-                None => {
-                    let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-                    egui::Spinner::new().size(12.0).color(palette.icon_inactive).paint_at(
-                        ui,
-                        Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), Vec2::splat(12.0)),
-                    );
-                }
-                Some(Err(e)) => {
-                    let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-                    ui.painter().text(
-                        pos2(rect.left() + 12.0, rect.center().y),
-                        Align2::LEFT_CENTER,
-                        e.to_string(),
-                        FontId::proportional(13.0),
-                        palette.git_deleted,
-                    );
-                }
-                Some(Ok(files)) => {
-                    for file in files {
+            }
+        });
+        ui.label(egui::RichText::new(i18n.t("graph.files")).small().color(palette.icon_inactive));
+    });
+    ui.spacing_mut().item_spacing = Vec2::ZERO;
+    let width = ui.available_width();
+    match files {
+        None => {
+            let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+            egui::Spinner::new().size(12.0).color(palette.icon_inactive).paint_at(
+                ui,
+                Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), Vec2::splat(12.0)),
+            );
+        }
+        Some(Err(e)) => {
+            let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+            ui.painter().text(
+                pos2(rect.left() + 12.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                e.to_string(),
+                FontId::proportional(13.0),
+                palette.git_deleted,
+            );
+        }
+        Some(Ok(files)) => {
+            egui::ScrollArea::vertical()
+                .id_salt(("git_graph_files", &commit.hash))
+                .auto_shrink([false, false])
+                .max_height(ui.available_height())
+                .show_rows(ui, ROW_HEIGHT, files.len(), |ui, range| {
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    let width = ui.available_width();
+                    for file in &files[range] {
                         let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
                         let row = ui.interact(rect, egui::Id::unique(("git_graph_file", &commit.hash, &file.path)), Sense::click());
                         let change = git::FileChange { path: file.path.clone(), orig_path: None, staged: Some(file.kind), unstaged: None };
                         crate::source_control::paint_file_row(ui, &palette, rect, &change, file.kind, &root, row.hovered(), 0);
                         if row.clicked() {
-                            action = Some(GraphAction::CommitDiff { hash: commit.hash.clone(), path: file.path });
+                            action = Some(GraphAction::CommitDiff { hash: commit.hash.clone(), path: file.path.clone() });
                         }
                     }
-                }
-            }
-        });
+                });
+        }
+    }
+    // Fill the rest so the panel keeps its height while files load.
+    ui.allocate_space(ui.available_size());
     action
 }
 
@@ -1040,12 +1046,17 @@ mod tests {
         frame(&ctx, &mut git, &mut graph, Vec::new());
         wait(&ctx, &mut git, |g| {
             g.commit_details.get(&third.hash).is_some_and(|d| d.as_ref().is_some_and(|d| d.is_ok()))
-                && g.commit_files.get(&third.hash).is_some_and(|f| f.as_ref().is_ok_and(|f| !f.is_empty()))
+                && g.commit_files.get(&third.hash).is_some_and(|f| matches!(f, Some(Ok(v)) if !v.is_empty()))
         });
         let (_, shapes) = frame(&ctx, &mut git, &mut graph, Vec::new());
         let painted = texts(&shapes);
         let names: Vec<&str> = painted.iter().map(|(t, _)| t.as_str()).collect();
-        assert!(names.iter().any(|t| t.starts_with(&third.short)), "short hash: {names:?}");
+        let (_, hash) = painted
+            .iter()
+            .filter(|(t, _)| t.starts_with(&third.short))
+            .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
+            .expect("short hash");
+        assert!(hash.top() > 300.0, "short hash in the pane: {names:?}");
         assert!(names.contains(&"Induk"), "parents heading: {names:?}");
         assert!(names.contains(&"File"), "files heading: {names:?}");
         assert!(names.contains(&"M"), "a.txt was modified: {names:?}");

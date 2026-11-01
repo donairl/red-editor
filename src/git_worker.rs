@@ -268,8 +268,8 @@ pub struct GitState {
     pub(crate) commit_details: HashMap<String, Option<Result<CommitDetails, GitError>>>,
     /// A command moved refs the graph key cannot see; reload on the next refresh.
     graph_stale: bool,
-    /// The files of commits already expanded.
-    pub(crate) commit_files: HashMap<String, Result<Vec<CommitFile>, GitError>>,
+    /// The files of commits already shown; None while loading.
+    pub(crate) commit_files: HashMap<String, Option<Result<Vec<CommitFile>, GitError>>>,
     /// Blame by file and the HEAD it was read at; `None` while loading or
     /// when git has no blame for the file.
     blames: HashMap<(PathBuf, String), Option<Blame>>,
@@ -480,7 +480,7 @@ impl GitState {
         if !self.commit_files.contains_key(hash) {
             let repo = self.repo.clone()?;
             // Marked pending so one request goes out per commit.
-            self.commit_files.insert(hash.to_owned(), Ok(Vec::new()));
+            self.commit_files.insert(hash.to_owned(), None);
             let hash = hash.to_owned();
             let sender = self.sender.clone();
             let ctx = ctx.clone();
@@ -491,7 +491,7 @@ impl GitState {
             });
             return None;
         }
-        self.commit_files.get(hash)
+        self.commit_files.get(hash)?.as_ref()
     }
 
     /// Starts the log over, for `filter`'s history or the whole branch's.
@@ -719,7 +719,7 @@ impl GitState {
                     self.commit_details.insert(hash, Some(details));
                 }
                 Message::CommitFiles { hash, files } => {
-                    self.commit_files.insert(hash, files);
+                    self.commit_files.insert(hash, Some(files));
                 }
                 Message::Blame { path, head, blame } => {
                     // Blames of older HEADs are not coming back.
