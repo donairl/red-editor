@@ -4,14 +4,13 @@
 //! The lane layout is pure and incremental; the view returns what the
 //! user asked for as a [`GraphAction`] and `app.rs` runs it.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
 use crate::file_browser::{self, ACTION_SIZE, BADGE_GAP, ROW_HEIGHT, ROW_PADDING_X, SidebarPalette, TITLE_HEIGHT, TITLE_PADDING_X};
 use crate::git::{self, Branch, Commit};
-use crate::git_worker::GitState;
+use crate::git_worker::{GitState, Log};
 use crate::i18n::I18n;
 use crate::theme;
 
@@ -53,9 +52,6 @@ pub struct Layout {
     next_color: usize,
     /// The widest the graph has been.
     pub lanes: usize,
-    /// Hashes laid out so far; a page that shifted under the log can
-    /// repeat one.
-    seen: HashSet<String>,
 }
 
 impl Layout {
@@ -76,9 +72,6 @@ impl Layout {
 
     /// Places one commit and the lines into it from the row above.
     fn push(&mut self, commit: &Commit) {
-        if !self.seen.insert(commit.hash.clone()) {
-            return;
-        }
         // Joins reuse a waiting slot, so at most one slot waits for any hash.
         // 1. The commit's lane: the first slot waiting for it, else a free one.
         let waiting = self.active.iter().position(|s| s.as_ref().is_some_and(|s| s.hash == commit.hash));
@@ -173,6 +166,7 @@ pub struct GitGraphUi {
     pub layout: Layout,
     /// How many commits `layout` covers, and of which generation.
     laid_out: (u64, usize),
+    /// The hash of the commit shown in the detail pane.
     pub selected: Option<String>,
     /// Scroll so this row is in view, once.
     pub scroll_to: Option<usize>,
@@ -182,26 +176,35 @@ pub struct GitGraphUi {
     pub new_branch: Option<NewBranch>,
 }
 
+/// The open Create Branch Here prompt.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NewBranch {
     pub hash: String,
     pub name: String,
+    /// The name field has had its first focus.
+    pub focused: bool,
 }
 
 /// What the user asked of the view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GraphAction {
+    /// Close the Git Graph.
     Close,
+    /// Show this commit in the detail pane.
     Select(String),
+    /// Load the next page of the log.
     LoadMore,
     /// Check this commit out, once the user confirms.
     Checkout(String),
+    /// Create a branch with this name at this commit.
     CreateBranch { name: String, hash: String },
+    /// Switch to this local branch.
     Switch(String),
     /// Delete this branch, once the user confirms.
     DeleteBranch(String),
     /// Show what the commit did to the file in the diff panel.
     CommitDiff { hash: String, path: PathBuf },
+    /// Put this text on the clipboard.
     Copy(String),
 }
 
@@ -233,9 +236,50 @@ pub fn show(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, i18n:
     ui.spacing_mut().item_spacing = Vec2::ZERO;
     let mut action = None;
 
-    // The layout follows the loaded commits.
-    let log = &git.graph;
+    sync_layout(graph, &git.graph);
+    if let Some(a) = follow_seek(graph, &git.graph) {
+        action = Some(a);
+    }
+    if let Some(a) = show_header(ui, &palette, git, i18n) {
+        action = Some(a);
+    }
+
+    // Detail pane first: a bottom panel takes its height before the rows.
+    if let Some(selected) = graph.selected.clone() {
+        if let Some(commit) = git.graph.commits.iter().find(|c| c.hash == selected).cloned() {
+            let height = ui.available_height() * 0.35;
+            egui::Panel::bottom("git_graph_detail")
+                .resizable(true)
+                .default_size(height)
+                .min_size(100.0)
+                .show(ui, |ui| {
+                    if let Some(a) = show_detail(ui, graph, git, &commit, i18n) {
+                        action = Some(a);
+                    }
+                });
+        } else if git.graph.complete && !git.graph.loading {
+            graph.selected = None;
+        }
+    }
+
+    if let Some(a) = show_rows(ui, graph, git, &palette, lane_colors, i18n) {
+        action = Some(a);
+    }
+    if let Some(a) = show_new_branch_modal(ui.ctx(), graph, i18n) {
+        action = Some(a);
+    }
+    action
+}
+
+/// Brings the lanes up to date with the loaded commits.
+fn sync_layout(graph: &mut GitGraphUi, log: &Log) {
     if graph.laid_out.0 != log.generation || graph.laid_out.1 > log.commits.len() {
+        // A reload: select the same commit again once it is back.
+        if graph.laid_out.0 != log.generation
+            && let Some(selected) = graph.selected.take()
+        {
+            graph.seek = Some(selected);
+        }
         graph.layout = Layout::default();
         graph.laid_out = (log.generation, 0);
     }
@@ -243,26 +287,34 @@ pub fn show(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, i18n:
         graph.layout.extend(&log.commits[graph.laid_out.1..]);
         graph.laid_out.1 = log.commits.len();
     }
+}
 
-    // A parent asked for that was not loaded: select it once it is.
-    if let Some(seek) = graph.seek.clone() {
-        match log.commits.iter().position(|c| c.hash == seek) {
-            Some(row) => {
-                graph.seek = None;
-                graph.selected = Some(seek);
-                graph.scroll_to = Some(row);
-            }
-            None if log.complete || log.error.is_some() => graph.seek = None,
-            None if !log.loading => action = Some(GraphAction::LoadMore),
-            None => {}
+/// Selects the sought commit once it is loaded, asking for pages until
+/// then.
+fn follow_seek(graph: &mut GitGraphUi, log: &Log) -> Option<GraphAction> {
+    let seek = graph.seek.clone()?;
+    match log.commits.iter().position(|c| c.hash == seek) {
+        Some(row) => {
+            graph.seek = None;
+            graph.selected = Some(seek.clone());
+            graph.scroll_to = Some(row);
+            Some(GraphAction::Select(seek))
         }
+        None if log.complete || log.error.is_some() => {
+            graph.seek = None;
+            None
+        }
+        None if !log.loading => Some(GraphAction::LoadMore),
+        None => None,
     }
+}
 
-    // Header: title, branch count, close.
+/// The title, the branch count and the close button.
+fn show_header(ui: &mut egui::Ui, palette: &SidebarPalette, git: &GitState, i18n: &I18n) -> Option<GraphAction> {
     let width = ui.available_width();
     let (title_rect, _) = ui.allocate_exact_size(vec2(width, TITLE_HEIGHT), Sense::hover());
     let painter = ui.painter();
-    painter.text(
+    let title = painter.text(
         pos2(title_rect.left() + TITLE_PADDING_X, title_rect.center().y),
         Align2::LEFT_CENTER,
         i18n.t("graph.title"),
@@ -270,12 +322,8 @@ pub fn show(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, i18n:
         palette.foreground,
     );
     let count = i18n.tf("graph.branches", &[("count", &git.branches.len().to_string())]);
-    let title_width = painter
-        .layout_no_wrap(i18n.t("graph.title").to_owned(), FontId::proportional(13.0), palette.foreground)
-        .size()
-        .x;
     painter.text(
-        pos2(title_rect.left() + TITLE_PADDING_X + title_width + 12.0, title_rect.center().y),
+        pos2(title.right() + 12.0, title_rect.center().y),
         Align2::LEFT_CENTER,
         count,
         FontId::proportional(11.0),
@@ -292,32 +340,22 @@ pub fn show(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, i18n:
         ui.painter().rect_filled(close_rect.shrink(2.0), CornerRadius::same(4), palette.row_hover);
     }
     ui.painter().text(close_rect.center(), Align2::CENTER_CENTER, "×", FontId::proportional(16.0), palette.foreground);
-    if close.clicked() {
-        action = Some(GraphAction::Close);
-    }
     ui.painter().hline(title_rect.x_range(), title_rect.bottom() - 0.5, Stroke::new(1.0, palette.border));
+    close.clicked().then_some(GraphAction::Close)
+}
 
-    // Detail pane first: a bottom panel takes its height before the rows.
-    if let Some(selected) = graph.selected.clone() {
-        if let Some(commit) = git.graph.commits.iter().find(|c| c.hash == selected).cloned() {
-            let height = ui.available_height() * 0.35;
-            egui::Panel::bottom("git_graph_detail")
-                .resizable(true)
-                .default_size(height)
-                .min_size(100.0)
-                .show(ui, |ui| {
-                    if let Some(a) = show_detail(ui, graph, git, &commit, i18n) {
-                        action = Some(a);
-                    }
-                });
-        } else {
-            graph.selected = None;
-        }
-    }
-
-    // Rows.
-    let log = git.graph.clone();
-    let branches = git.branches.clone();
+/// The commit rows and the tail row, in a scroll area.
+fn show_rows(
+    ui: &mut egui::Ui,
+    graph: &mut GitGraphUi,
+    git: &GitState,
+    palette: &SidebarPalette,
+    lane_colors: &[Color32; PALETTE_LEN],
+    i18n: &I18n,
+) -> Option<GraphAction> {
+    let log = &git.graph;
+    let branches = &git.branches;
+    let mut action = None;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
@@ -333,23 +371,27 @@ pub fn show(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, i18n:
         ui.spacing_mut().item_spacing = Vec2::ZERO;
         let width = ui.available_width();
         for index in range {
-            let (rect, response) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+            let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
             let Some(commit) = log.commits.get(index) else {
-                if let Some(a) = show_tail_row(ui, &palette, rect, &response, &log, i18n) {
+                let response = ui.interact(rect, egui::Id::unique("git_graph_tail"), Sense::click());
+                if let Some(a) = show_tail_row(ui, palette, rect, &response, log, i18n) {
                     action = Some(a);
                 }
                 continue;
             };
+            let Some(row) = graph.layout.rows.get(index) else { continue };
+            let response = ui.interact(rect, egui::Id::unique(("git_graph_row", &commit.hash)), Sense::click());
             let lit = graph.selected.as_deref() == Some(commit.hash.as_str());
             if lit {
                 ui.painter().rect_filled(rect, CornerRadius::ZERO, palette.row_selected);
             } else if response.hovered() {
                 ui.painter().rect_filled(rect, CornerRadius::ZERO, palette.row_hover);
             }
-            paint_lanes(ui.painter(), rect, &graph.layout.rows[index], commit.head, lane_colors, palette.accent, palette.background);
+            let prev = index.checked_sub(1).and_then(|p| graph.layout.rows.get(p));
+            paint_lanes(&ui.painter().with_clip_rect(rect), rect, row, prev, commit.head, lane_colors, palette.accent);
             let text_left = rect.left() + lanes_width + BADGE_GAP;
-            let chips_end = paint_chips(ui, &palette, rect, text_left, commit, &branches, i18n, &mut action);
-            paint_text(ui, &palette, rect, chips_end, commit, now);
+            let chips_end = paint_chips(ui, palette, rect, text_left, commit, branches, i18n, &mut action);
+            paint_text(ui, palette, rect, chips_end, commit, now);
             let response = response.on_hover_text(&commit.hash);
             if response.clicked() {
                 graph.selected = Some(commit.hash.clone());
@@ -361,7 +403,7 @@ pub fn show(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, i18n:
                     ui.close();
                 }
                 if ui.button(i18n.t("graph.create_branch")).clicked() {
-                    graph.new_branch = Some(NewBranch { hash: commit.hash.clone(), name: String::new() });
+                    graph.new_branch = Some(NewBranch { hash: commit.hash.clone(), ..NewBranch::default() });
                     ui.close();
                 }
                 if ui.button(i18n.t("graph.copy_hash")).clicked() {
@@ -371,10 +413,6 @@ pub fn show(ui: &mut egui::Ui, graph: &mut GitGraphUi, git: &mut GitState, i18n:
             });
         }
     });
-
-    if let Some(a) = show_new_branch_modal(ui.ctx(), graph, i18n) {
-        action = Some(a);
-    }
     action
 }
 
@@ -385,7 +423,7 @@ fn show_tail_row(
     palette: &SidebarPalette,
     rect: Rect,
     response: &egui::Response,
-    log: &crate::git_worker::Log,
+    log: &Log,
     i18n: &I18n,
 ) -> Option<GraphAction> {
     let x = rect.left() + ROW_PADDING_X + LANE_WIDTH;
@@ -416,19 +454,36 @@ fn lane_x(rect: Rect, lane: usize) -> f32 {
     rect.left() + ROW_PADDING_X + LANE_WIDTH / 2.0 + lane.min(MAX_LANES - 1) as f32 * LANE_WIDTH
 }
 
-/// The commit's dot and the lines from this row to the next.
+/// The commit's dot, the lines into it from the row above and the lines
+/// out of it; `painter` clips to the row.
 fn paint_lanes(
     painter: &egui::Painter,
     rect: Rect,
     row: &GraphRow,
+    prev: Option<&GraphRow>,
     head: bool,
     colors: &[Color32; PALETTE_LEN],
     accent: Color32,
-    background: Color32,
 ) {
-    let top = rect.center().y;
+    let centre = rect.center().y;
+    if let Some(prev) = prev {
+        paint_edges(painter, rect, &prev.edges, centre - ROW_HEIGHT, colors);
+    }
+    paint_edges(painter, rect, &row.edges, centre, colors);
+    let center = pos2(lane_x(rect, row.lane), centre);
+    let color = colors[row.color % PALETTE_LEN];
+    if head {
+        painter.circle_filled(center, DOT_RADIUS + 1.0, color);
+        painter.circle_stroke(center, DOT_RADIUS + 3.0, Stroke::new(1.5, accent));
+    } else {
+        painter.circle_filled(center, DOT_RADIUS, color);
+    }
+}
+
+/// Lines from one row's dot height at `top` to the next row's.
+fn paint_edges(painter: &egui::Painter, rect: Rect, edges: &[Edge], top: f32, colors: &[Color32; PALETTE_LEN]) {
     let bottom = top + ROW_HEIGHT;
-    for edge in &row.edges {
+    for edge in edges {
         let stroke = Stroke::new(LINE_WIDTH, colors[edge.color % PALETTE_LEN]);
         let (x0, x1) = (lane_x(rect, edge.from), lane_x(rect, edge.to));
         if edge.from == edge.to {
@@ -442,15 +497,6 @@ fn paint_lanes(
                 stroke,
             ));
         }
-    }
-    let center = pos2(lane_x(rect, row.lane), top);
-    let color = colors[row.color % PALETTE_LEN];
-    if head {
-        painter.circle_filled(center, DOT_RADIUS + 1.0, color);
-        painter.circle_stroke(center, DOT_RADIUS + 3.0, Stroke::new(1.5, accent));
-    } else {
-        painter.circle_filled(center, DOT_RADIUS, color);
-        painter.circle_stroke(center, DOT_RADIUS, Stroke::new(1.0, background));
     }
 }
 
@@ -468,9 +514,10 @@ fn paint_chips(
     action: &mut Option<GraphAction>,
 ) -> f32 {
     let font = FontId::proportional(11.0);
-    let shown = commit.refs.iter().take(MAX_CHIPS);
-    let folded = commit.refs.len().saturating_sub(MAX_CHIPS);
-    for name in shown {
+    // A detached HEAD is already marked by the dot's ring.
+    let refs: Vec<&String> = commit.refs.iter().filter(|r| r.as_str() != "HEAD").collect();
+    let folded = refs.len().saturating_sub(MAX_CHIPS);
+    for name in refs.into_iter().take(MAX_CHIPS) {
         let (kind, label) = chip(name, branches);
         let text: String = if label.chars().count() > MAX_CHIP_CHARS {
             format!("{}…", label.chars().take(MAX_CHIP_CHARS - 1).collect::<String>())
@@ -487,7 +534,9 @@ fn paint_chips(
             pos2(x, rect.center().y - CHIP_HEIGHT / 2.0),
             vec2(galley.size().x + CHIP_PADDING * 2.0, CHIP_HEIGHT),
         );
-        let response = ui.interact(chip_rect, egui::Id::unique(("git_graph_chip", &commit.hash, name)), Sense::click());
+        let response = ui
+            .interact(chip_rect, egui::Id::unique(("git_graph_chip", &commit.hash, name)), Sense::click())
+            .on_hover_text(&label);
         let painter = ui.painter();
         if fill != Color32::TRANSPARENT {
             painter.rect_filled(chip_rect, CornerRadius::same(8), fill);
@@ -558,13 +607,15 @@ fn show_new_branch_modal(ctx: &egui::Context, graph: &mut GitGraphUi, i18n: &I18
     let mut action = None;
     let mut close = false;
     egui::Window::new(title)
+        .id(egui::Id::unique("git_graph_new_branch"))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
         .show(ctx, |ui| {
             let field = ui.add(egui::TextEdit::singleline(&mut new_branch.name).hint_text(i18n.t("git.new_branch_hint")));
-            if new_branch.name.is_empty() && !field.has_focus() {
+            if !new_branch.focused {
                 field.request_focus();
+                new_branch.focused = true;
             }
             let name = new_branch.name.trim().to_owned();
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -574,7 +625,8 @@ fn show_new_branch_modal(ctx: &egui::Context, graph: &mut GitGraphUi, i18n: &I18
                     action = Some(GraphAction::CreateBranch { name, hash: new_branch.hash.clone() });
                     close = true;
                 }
-                if ui.button(i18n.t("unsaved.cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                let escape = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                if ui.button(i18n.t("unsaved.cancel")).clicked() || escape {
                     close = true;
                 }
             });
@@ -738,12 +790,6 @@ mod tests {
         assert!(layout.active.is_empty());
     }
 
-    #[test]
-    fn test_repeated_commit_is_laid_out_once() {
-        let layout = Layout::new(&[commit("a", &["b"]), commit("b", &[]), commit("b", &[])]);
-        assert_eq!(lanes(&layout), [0, 0]);
-    }
-
     use crate::git_worker::GitState;
     use crate::i18n::I18n;
     use eframe::egui::{self, Rect, vec2};
@@ -835,7 +881,7 @@ mod tests {
         for expected in ["Git Graph", "third", "second", "first", "main", "feature"] {
             assert!(names.contains(&expected), "{expected} missing from {names:?}");
         }
-        assert!(!names.contains(&"Muat 200 lagi…"), "the log is complete");
+        assert!(!names.contains(&I18n::builtin().t("graph.load_more")), "the log is complete");
         assert!(graph.layout.lanes >= 2, "two branches need two lanes");
 
         let (_, second) = painted.iter().find(|(t, _)| t == "second").unwrap();
@@ -854,7 +900,7 @@ mod tests {
         git.graph.complete = false;
         let (_, shapes) = frame(&ctx, &mut git, &mut graph, Vec::new());
         let painted = texts(&shapes);
-        let (_, more) = painted.iter().find(|(t, _)| t == "Muat 200 lagi…").expect("load more row");
+        let (_, more) = painted.iter().find(|(t, _)| t == I18n::builtin().t("graph.load_more")).expect("load more row");
         let (action, _) = frame(&ctx, &mut git, &mut graph, click(more.center()));
         assert_eq!(action, Some(GraphAction::LoadMore));
         let _ = fs::remove_dir_all(&root);
@@ -869,6 +915,17 @@ mod tests {
         let (_, close) = texts(&shapes).into_iter().find(|(t, _)| t == "×").expect("close button");
         let (action, _) = frame(&ctx, &mut git, &mut graph, click(close.center()));
         assert_eq!(action, Some(GraphAction::Close));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_repeated_commit_does_not_break_the_rows() {
+        let ctx = egui::Context::default();
+        let Some((mut git, root)) = fixture("graph_repeat", &ctx) else { return };
+        let mut graph = GitGraphUi::default();
+        let repeated = git.graph.commits[0].clone();
+        git.graph.commits.push(repeated);
+        frame(&ctx, &mut git, &mut graph, Vec::new());
         let _ = fs::remove_dir_all(&root);
     }
 }

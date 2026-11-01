@@ -159,6 +159,12 @@ pub struct Log {
     pub error: Option<GitError>,
     /// The commit whose files are shown.
     pub expanded: Option<String>,
+    /// Commits received so far, repeats included; the next page skips
+    /// this many.
+    pub fetched: usize,
+    /// Hashes received so far; a page that shifted under the log can
+    /// repeat one.
+    seen: std::collections::HashSet<String>,
 }
 
 /// HEAD's copy of a file, for the gutter's change markers.
@@ -524,7 +530,7 @@ impl GitState {
         log.loading = true;
         let generation = log.generation;
         let filter = log.filter.clone();
-        let skip = log.commits.len();
+        let skip = log.fetched;
         let sender = self.sender.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -690,14 +696,16 @@ impl GitState {
                     let page = if all { GRAPH_PAGE } else { LOG_PAGE };
                     let log = if all { &mut self.graph } else { &mut self.log };
                     // A stale page, from before the log was started over.
-                    if log.generation != generation || log.filter != filter || log.commits.len() != skip {
+                    if log.generation != generation || log.filter != filter || log.fetched != skip {
                         continue;
                     }
                     log.loading = false;
                     match commits {
                         Ok(commits) => {
                             log.complete = commits.len() < page;
-                            log.commits.extend(commits);
+                            log.fetched += commits.len();
+                            let seen = &mut log.seen;
+                            log.commits.extend(commits.into_iter().filter(|c| seen.insert(c.hash.clone())));
                         }
                         Err(e) => log.error = Some(e),
                     }
