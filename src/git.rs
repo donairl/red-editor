@@ -162,6 +162,8 @@ pub struct Commit {
     pub subject: String,
     /// Branch and tag names pointing here, as `%D` lists them.
     pub refs: Vec<String>,
+    /// Parent hashes, first parent first; empty for a root commit.
+    pub parents: Vec<String>,
     /// The commit HEAD points at.
     pub head: bool,
 }
@@ -387,7 +389,7 @@ impl Repo {
         let count = format!("-n{count}");
         let mut args = vec![
             "log",
-            "--format=%H%x00%h%x00%an%x00%at%x00%s%x00%D",
+            "--format=%H%x00%h%x00%an%x00%at%x00%s%x00%D%x00%P",
             "-z",
             &count,
             &skip,
@@ -620,14 +622,14 @@ pub fn parse_branches(out: &str) -> Vec<Branch> {
         .collect()
 }
 
-/// Parses `git log --format=%H%x00%h%x00%an%x00%at%x00%s%x00%D -z`. The
-/// first commit is HEAD when the log was not filtered or skipped into.
+/// Parses `git log --format=%H%x00%h%x00%an%x00%at%x00%s%x00%D%x00%P -z`.
+/// The first commit is HEAD when the log was not filtered or skipped into.
 pub fn parse_log(out: &str) -> Vec<Commit> {
     out
         .split('\0')
         .collect::<Vec<_>>()
-        .chunks(6)
-        .filter(|fields| fields.len() == 6 && !fields[0].is_empty())
+        .chunks(7)
+        .filter(|fields| fields.len() == 7 && !fields[0].is_empty())
         .map(|f| Commit {
             hash: f[0].to_owned(),
             short: f[1].to_owned(),
@@ -640,6 +642,7 @@ pub fn parse_log(out: &str) -> Vec<Commit> {
                 .map(|r| r.strip_prefix("HEAD -> ").unwrap_or(r).to_owned())
                 .collect(),
             head: f[5].starts_with("HEAD"),
+            parents: f[6].split(' ').filter(|p| !p.is_empty()).map(str::to_owned).collect(),
         })
         .collect()
 }
@@ -878,8 +881,8 @@ mod tests {
     #[test]
     fn test_log_and_name_status_parsers() {
         // With `-z` every field, the last of a commit included, ends in NUL.
-        let out = "aaaa1111\0aaaa111\0Ana\x001700000000\0Fix thing\0HEAD -> main, tag: v1, origin/main\0\
-                   bbbb2222\0bbbb222\0Bo Bö\x001699990000\0初めて\0\0";
+        let out = "aaaa1111\0aaaa111\0Ana\x001700000000\0Fix thing\0HEAD -> main, tag: v1, origin/main\0bbbb2222 cccc3333\0\
+                   bbbb2222\0bbbb222\0Bo Bö\x001699990000\0初めて\0\0\0";
         let log = parse_log(out);
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].hash, "aaaa1111");
@@ -888,11 +891,13 @@ mod tests {
         assert_eq!(log[0].time, 1_700_000_000);
         assert_eq!(log[0].subject, "Fix thing");
         assert_eq!(log[0].refs, ["main", "tag: v1", "origin/main"]);
+        assert_eq!(log[0].parents, ["bbbb2222", "cccc3333"], "a merge has two parents");
         assert!(log[0].head);
         assert_eq!(log[1].hash, "bbbb2222");
         assert_eq!(log[1].author, "Bo Bö");
         assert_eq!(log[1].subject, "初めて");
         assert!(log[1].refs.is_empty() && !log[1].head);
+        assert!(log[1].parents.is_empty(), "a root commit has none");
         assert!(parse_log("").is_empty());
 
         let files = parse_name_status(&root(), "M\0a.rs\0A\0dir/b.rs\0D\0c.rs\0R087\0old.rs\0new name.rs\0");
