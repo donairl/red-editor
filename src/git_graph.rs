@@ -30,9 +30,8 @@ pub struct GraphRow {
 struct Slot {
     hash: String,
     color: usize,
-    /// Lanes of the row above that feed this slot: itself when it merely
-    /// continues, the committing lane when it was just opened or joined.
-    sources: Vec<usize>,
+    /// Lanes of the row above that feed this slot, each with its line colour: itself when it merely continues, the committing lane when it was just opened or joined.
+    sources: Vec<(usize, usize)>,
 }
 
 /// Lanes for commits in topological order (children before parents).
@@ -43,23 +42,31 @@ pub struct Layout {
     next_color: usize,
     /// The widest the graph has been.
     pub lanes: usize,
+    /// Hashes laid out so far; a page that shifted under the log can repeat one.
+    seen: std::collections::HashSet<String>,
 }
 
 impl Layout {
+    /// Lays out commits from scratch.
     pub fn new(commits: &[Commit]) -> Layout {
         let mut layout = Layout::default();
         layout.extend(commits);
         layout
     }
 
-    /// Lays out further commits; earlier rows keep their places.
+    /// Lays out further commits; earlier rows keep their lanes, and the last row gains its edges once the next commit is laid out.
     pub fn extend(&mut self, commits: &[Commit]) {
         for commit in commits {
             self.push(commit);
         }
     }
 
+    /// Places one commit and the lines into it from the row above.
     fn push(&mut self, commit: &Commit) {
+        if !self.seen.insert(commit.hash.clone()) {
+            return;
+        }
+        // Joins reuse a waiting slot, so at most one slot waits for any hash.
         // 1. The commit's lane: the first slot waiting for it, else a free one.
         let waiting = self.active.iter().position(|s| s.as_ref().is_some_and(|s| s.hash == commit.hash));
         let lane = match waiting {
@@ -75,33 +82,35 @@ impl Layout {
         if let Some(prev) = self.rows.last_mut() {
             for (i, slot) in self.active.iter_mut().enumerate() {
                 let Some(slot) = slot else { continue };
-                let to = if slot.hash == commit.hash { lane } else { i };
-                for &from in &slot.sources {
-                    prev.edges.push(Edge { from, to, color: slot.color });
+                for &(from, color) in &slot.sources {
+                    prev.edges.push(Edge { from, to: i, color });
                 }
-                slot.sources = vec![i];
+                slot.sources.clear();
+                slot.sources.push((i, slot.color));
             }
         }
 
         // 3. Every slot waiting for this commit ends here.
-        for slot in &mut self.active {
-            if slot.as_ref().is_some_and(|s| s.hash == commit.hash) {
-                *slot = None;
-            }
+        if let Some(l) = waiting {
+            self.active[l] = None;
         }
 
         // 4. Parents: the first keeps the lane, others open or join lanes.
         for (k, parent) in commit.parents.iter().enumerate() {
             let joined = self.active.iter().position(|s| s.as_ref().is_some_and(|s| s.hash == *parent));
             match joined {
-                Some(j) => self.active[j].as_mut().unwrap().sources.push(lane),
+                Some(j) => {
+                    let slot = self.active[j].as_mut().unwrap();
+                    let line = if k == 0 { color } else { slot.color };
+                    slot.sources.push((lane, line));
+                }
                 None if k == 0 => {
-                    self.active[lane] = Some(Slot { hash: parent.clone(), color, sources: vec![lane] });
+                    self.active[lane] = Some(Slot { hash: parent.clone(), color, sources: vec![(lane, color)] });
                 }
                 None => {
                     let j = self.free_slot();
                     let color = self.new_color();
-                    self.active[j] = Some(Slot { hash: parent.clone(), color, sources: vec![lane] });
+                    self.active[j] = Some(Slot { hash: parent.clone(), color, sources: vec![(lane, color)] });
                 }
             }
         }
@@ -124,6 +133,7 @@ impl Layout {
         }
     }
 
+    /// The next palette colour, cycling.
     fn new_color(&mut self) -> usize {
         let color = self.next_color % PALETTE_LEN;
         self.next_color += 1;
@@ -178,7 +188,7 @@ mod tests {
         assert!(layout.rows[0].edges.contains(&Edge { from: 0, to: 1, color: 1 }));
         assert!(layout.rows[0].edges.contains(&Edge { from: 0, to: 0, color: 0 }));
         // `b` sits in lane 1 and its line joins `r` in lane 0.
-        assert!(layout.rows[2].edges.contains(&Edge { from: 1, to: 0, color: 0 }));
+        assert!(layout.rows[2].edges.contains(&Edge { from: 1, to: 0, color: 1 }));
         assert!(layout.rows[2].edges.contains(&Edge { from: 0, to: 0, color: 0 }));
         assert_eq!(layout.rows[2].color, 1);
         assert!(layout.active.is_empty());
@@ -217,9 +227,11 @@ mod tests {
             commit("r", &[]),
         ];
         let whole = Layout::new(&commits);
-        let mut halves = Layout::new(&commits[..2]);
-        halves.extend(&commits[2..]);
-        assert_eq!(halves, whole);
+        for split in 0..=commits.len() {
+            let mut halves = Layout::new(&commits[..split]);
+            halves.extend(&commits[split..]);
+            assert_eq!(halves, whole, "split at {split}");
+        }
     }
 
     #[test]
@@ -231,5 +243,55 @@ mod tests {
         let layout = Layout::new(&commits);
         assert_eq!(layout.rows[9].color, 0, "the ninth lane reuses the first colour");
         assert_eq!(layout.lanes, 9);
+    }
+
+    #[test]
+    fn test_merge_second_parent_joins_a_waiting_lane() {
+        let commits = [
+            commit("x", &["b"]),
+            commit("m", &["a", "b"]),
+            commit("a", &["b"]),
+            commit("b", &[]),
+        ];
+        let layout = Layout::new(&commits);
+        assert_eq!(lanes(&layout), [0, 1, 1, 0]);
+        assert_eq!(layout.lanes, 2);
+        assert_eq!(layout.rows[0].edges, [Edge { from: 0, to: 0, color: 0 }]);
+        assert_eq!(
+            layout.rows[1].edges,
+            [Edge { from: 0, to: 0, color: 0 }, Edge { from: 1, to: 0, color: 0 }, Edge { from: 1, to: 1, color: 1 }],
+            "the merge line into b keeps b's lane colour; a continues in its own"
+        );
+        assert_eq!(
+            layout.rows[2].edges,
+            [Edge { from: 0, to: 0, color: 0 }, Edge { from: 1, to: 0, color: 1 }],
+            "a's first-parent curve into b keeps a's colour"
+        );
+        assert!(layout.active.is_empty());
+    }
+
+    #[test]
+    fn test_freed_lane_is_reused_and_joins_to_the_right() {
+        let commits = [
+            commit("a", &["x"]),
+            commit("b", &["y"]),
+            commit("x", &[]),
+            commit("c", &["y"]),
+            commit("y", &[]),
+        ];
+        let layout = Layout::new(&commits);
+        assert_eq!(lanes(&layout), [0, 1, 0, 0, 1]);
+        let colors: Vec<usize> = layout.rows.iter().map(|r| r.color).collect();
+        assert_eq!(colors, [0, 1, 0, 2, 1]);
+        assert_eq!(layout.rows[2].edges, [Edge { from: 1, to: 1, color: 1 }]);
+        assert_eq!(layout.rows[3].edges, [Edge { from: 1, to: 1, color: 1 }, Edge { from: 0, to: 1, color: 2 }]);
+        assert_eq!(layout.lanes, 2);
+        assert!(layout.active.is_empty());
+    }
+
+    #[test]
+    fn test_repeated_commit_is_laid_out_once() {
+        let layout = Layout::new(&[commit("a", &["b"]), commit("b", &[]), commit("b", &[])]);
+        assert_eq!(lanes(&layout), [0, 0]);
     }
 }
