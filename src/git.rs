@@ -234,6 +234,8 @@ impl Repo {
 
     /// Files whose modified time moves when HEAD, the index or a branch
     /// changes, so a commit or branch made outside the editor is noticed.
+    /// Only the top level of `refs/heads` is stamped: a branch named with a
+    /// slash is created in a subfolder, which the Refresh button covers.
     pub fn watched_files(&self) -> [PathBuf; 4] {
         [
             self.git_dir.join("HEAD"),
@@ -455,12 +457,12 @@ impl Repo {
 
     /// Makes branch `name` point at `hash` without switching to it.
     pub fn branch_at(&self, name: &str, hash: &str) -> Result<(), GitError> {
-        self.git(&["branch", name, hash]).map(drop)
+        self.git(&["branch", "--", name, hash]).map(drop)
     }
 
     /// Deletes a fully merged local branch; git refuses an unmerged one.
     pub fn delete_branch(&self, name: &str) -> Result<(), GitError> {
-        self.git(&["branch", "-d", name]).map(drop)
+        self.git(&["branch", "-d", "--", name]).map(drop)
     }
 
     /// The files `hash` changed.
@@ -1023,6 +1025,8 @@ mod tests {
         assert!(!names.contains(&"old".to_owned()));
         let err = repo.delete_branch("feature").unwrap_err();
         assert!(matches!(&err, GitError::Failed(m) if m.contains("feature")), "unmerged: {err}");
+        let err = repo.branch_at("-D", &first).unwrap_err();
+        assert!(matches!(err, GitError::Failed(_)), "an option-like name is a name, not a flag: {err}");
         assert!(repo.watched_files().iter().any(|p| p.ends_with("packed-refs")));
         let _ = fs::remove_dir_all(&root);
     }
