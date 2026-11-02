@@ -2483,6 +2483,7 @@ impl TextEditorApp {
             close_to_right: self.i18n.t("tab.close_to_right"),
             close_saved: self.i18n.t("tab.close_saved"),
             file_history: self.i18n.t("history.file_history"),
+            copy_path: self.i18n.t("tab.copy_path"),
         };
         let response = tab_bar::show(ui, &views, self.active_tab_index, &labels);
         match response.action {
@@ -2503,6 +2504,11 @@ impl TextEditorApp {
             Some(tab_bar::TabBarAction::FileHistory(index)) => {
                 if let Some(path) = self.tabs.get(index).and_then(|t| t.current_path.clone()) {
                     self.open_file_history(&ui.ctx().clone(), path);
+                }
+            }
+            Some(tab_bar::TabBarAction::CopyPath(index)) => {
+                if let Some(path) = self.tabs.get(index).and_then(|t| t.current_path.as_ref()) {
+                    ui.ctx().copy_text(path.display().to_string());
                 }
             }
             Some(tab_bar::TabBarAction::New) => self.open_new_tab(),

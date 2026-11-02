@@ -133,6 +133,8 @@ pub enum TabBarAction {
     CloseSaved,
     /// Context menu: show this tab's file in the commit log.
     FileHistory(usize),
+    /// Context menu: put this tab's file path on the clipboard.
+    CopyPath(usize),
     New,
 }
 
@@ -144,6 +146,7 @@ pub struct MenuLabels<'a> {
     pub close_to_right: &'a str,
     pub close_saved: &'a str,
     pub file_history: &'a str,
+    pub copy_path: &'a str,
 }
 
 /// One frame of the strip: what was clicked, and where each part was drawn.
@@ -336,7 +339,13 @@ fn show_tab(
             menu_action = Some(TabBarAction::CloseSaved);
         }
         ui.separator();
-        // Only a saved document has a history.
+        // Only a saved document has a path or a history.
+        if ui
+            .add_enabled(tab.tooltip.is_some(), egui::Button::new(labels.copy_path))
+            .clicked()
+        {
+            menu_action = Some(TabBarAction::CopyPath(index));
+        }
         if ui
             .add_enabled(tab.tooltip.is_some(), egui::Button::new(labels.file_history))
             .clicked()
@@ -458,6 +467,7 @@ mod tests {
         close_to_right: "Close to the Right",
         close_saved: "Close Saved",
         file_history: "File History",
+        copy_path: "Copy Path",
     };
 
     fn view(title: &str, dirty: bool) -> TabView {
