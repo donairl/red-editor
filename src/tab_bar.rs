@@ -82,6 +82,7 @@ pub fn badge(language: Language) -> (&'static str, Option<Color32>) {
         Language::Python => ("PY", Some(Color32::from_rgb(0x4B, 0x8B, 0xBE))),
         Language::Go => ("GO", Some(Color32::from_rgb(0x51, 0xA8, 0xDA))),
         Language::Sql => ("SQL", Some(Color32::from_rgb(0xE3, 0x8C, 0x00))),
+        Language::Bash => ("SH", Some(Color32::from_rgb(0x89, 0xE0, 0x51))),
         Language::Blade => ("BL", Some(Color32::from_rgb(0xF0, 0x53, 0x40))),
         Language::Twig => ("TW", Some(Color32::from_rgb(0x8D, 0xB3, 0x3A))),
         Language::Smarty => ("SM", Some(Color32::from_rgb(0xE8, 0xB3, 0x39))),

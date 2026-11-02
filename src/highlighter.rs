@@ -36,6 +36,8 @@ pub enum Language {
     Go,
     Python,
     Sql,
+    /// Shell scripts: `*.sh`, `*.bash`, `*.zsh` and rc dotfiles such as `.bashrc`.
+    Bash,
     /// Laravel Blade templates (`*.blade.php`).
     Blade,
     Twig,
@@ -60,6 +62,7 @@ impl Language {
             Language::Go,
             Language::Python,
             Language::Sql,
+            Language::Bash,
             Language::Blade,
             Language::Twig,
             Language::Smarty,
@@ -85,6 +88,8 @@ impl Language {
             "go" => Language::Go,
             "py" | "pyw" | "pyi" => Language::Python,
             "sql" => Language::Sql,
+            // zsh is close enough to bash for the bundled grammar to colour it well.
+            "sh" | "bash" | "zsh" | "bats" => Language::Bash,
             "twig" => Language::Twig,
             "tpl" | "smarty" => Language::Smarty,
             _ => Language::PlainText,
@@ -94,14 +99,21 @@ impl Language {
     /// Maps a file path to a language via its extension.
     ///
     /// `*.blade.php` is Blade rather than PHP, which the extension alone cannot
-    /// tell. Paths without an extension map to [`Language::PlainText`].
+    /// tell. Shell rc files (`.bashrc`, `.zshrc`, `.profile`, ...) have no
+    /// extension and are matched by name. Other paths without an extension map
+    /// to [`Language::PlainText`].
     pub fn from_path(path: &Path) -> Language {
-        let is_blade = path
+        let name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.to_ascii_lowercase().ends_with(".blade.php"));
-        if is_blade {
-            return Language::Blade;
+            .map(|name| name.to_ascii_lowercase());
+        if let Some(name) = &name {
+            if name.ends_with(".blade.php") {
+                return Language::Blade;
+            }
+            if SHELL_RC_FILES.contains(&name.as_str()) {
+                return Language::Bash;
+            }
         }
         path.extension()
             .and_then(|ext| ext.to_str())
@@ -126,6 +138,7 @@ impl Language {
             Language::Go => "Go",
             Language::Python => "Python",
             Language::Sql => "SQL",
+            Language::Bash => "Bash",
             Language::Blade => "Blade",
             Language::Twig => "Twig",
             Language::Smarty => "Smarty",
@@ -148,6 +161,7 @@ impl Language {
             Language::Go => "Go",
             Language::Python => "Python",
             Language::Sql => "SQL",
+            Language::Bash => "Bourne Again Shell (bash)",
             Language::Blade => "Blade",
             Language::Twig => "Twig",
             Language::Smarty => "Smarty",
@@ -170,6 +184,22 @@ impl Language {
         )
     }
 }
+
+/// Extension-less shell startup files, matched by (lowercased) file name.
+const SHELL_RC_FILES: &[&str] = &[
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".bash_aliases",
+    ".profile",
+    ".zshrc",
+    ".zshenv",
+    ".zprofile",
+    ".zlogin",
+    ".zlogout",
+    ".zsh_aliases",
+];
 
 /// Template grammars syntect does not bundle: HTML with embedded template tags.
 const TEMPLATE_GRAMMARS: [&str; 3] = [
@@ -1200,6 +1230,9 @@ mod tests {
         assert_eq!(Language::from_extension("less"), Language::Css);
         assert_eq!(Language::from_extension("go"), Language::Go);
         assert_eq!(Language::from_extension("sql"), Language::Sql);
+        for ext in ["sh", "bash", "zsh", "bats"] {
+            assert_eq!(Language::from_extension(ext), Language::Bash, "{ext}");
+        }
         for ext in ["py", "pyw", "pyi"] {
             assert_eq!(Language::from_extension(ext), Language::Python, "{ext}");
         }
@@ -1230,6 +1263,26 @@ mod tests {
     }
 
     #[test]
+    fn test_from_path_detects_shell_rc_files_by_name() {
+        for name in [".bashrc", ".bash_profile", ".profile", ".zshrc", ".zshenv", ".ZSHRC"] {
+            assert_eq!(
+                Language::from_path(Path::new("/home/user").join(name).as_path()),
+                Language::Bash,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            Language::from_path(Path::new("/home/user/.gitignore")),
+            Language::PlainText
+        );
+        // Only the file name counts, not a directory of the same name.
+        assert_eq!(
+            Language::from_path(Path::new("/home/user/.bashrc/notes.md")),
+            Language::Markdown
+        );
+    }
+
+    #[test]
     fn test_from_extension_is_case_insensitive() {
         assert_eq!(Language::from_extension("RS"), Language::Rust);
         assert_eq!(Language::from_extension("PHP"), Language::Php);
@@ -1242,6 +1295,7 @@ mod tests {
         assert_eq!(Language::from_extension("GO"), Language::Go);
         assert_eq!(Language::from_extension("PY"), Language::Python);
         assert_eq!(Language::from_extension("MD"), Language::Markdown);
+        assert_eq!(Language::from_extension("SH"), Language::Bash);
         assert_eq!(Language::from_extension("Markdown"), Language::Markdown);
     }
 
@@ -1266,6 +1320,10 @@ mod tests {
         assert_eq!(
             Language::from_path(Path::new("/tmp/Makefile")),
             Language::PlainText
+        );
+        assert_eq!(
+            Language::from_path(Path::new("/usr/local/bin/deploy.sh")),
+            Language::Bash
         );
         assert_eq!(
             Language::from_path(Path::new("/tmp/a/b/script.php")),
@@ -1296,6 +1354,7 @@ mod tests {
         assert_eq!(Language::Go.display_name(), "Go");
         assert_eq!(Language::Python.display_name(), "Python");
         assert_eq!(Language::Sql.display_name(), "SQL");
+        assert_eq!(Language::Bash.display_name(), "Bash");
         assert_eq!(Language::Css.display_name(), "CSS");
         assert_eq!(Language::Blade.display_name(), "Blade");
         assert_eq!(Language::Twig.display_name(), "Twig");
@@ -1304,7 +1363,7 @@ mod tests {
 
     #[test]
     fn test_all_lists_every_variant() {
-        assert_eq!(Language::all().len(), 17);
+        assert_eq!(Language::all().len(), 18);
     }
 
     #[test]
@@ -1774,6 +1833,27 @@ mod tests {
             assert!(
                 counts[0] > 1,
                 "{lang:?} produced a single plain section for {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bash_is_coloured() {
+        let lines = [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail  # strict mode",
+            "if [[ -f \"$HOME/.bashrc\" ]]; then",
+            "    echo \"found ${HOME}\"",
+            "fi",
+        ];
+        let counts = section_counts(Language::Bash, &lines);
+        // The shebang is one comment token and `fi` one keyword; the `set` line
+        // (command + comment) and the string-bearing lines each mix styles.
+        for index in [1, 2, 3] {
+            assert!(
+                counts[index] > 1,
+                "Bash produced a single plain section for {:?}",
+                lines[index]
             );
         }
     }
