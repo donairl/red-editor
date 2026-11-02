@@ -74,7 +74,7 @@ pub fn show(ui: &mut egui::Ui, history: &History, i18n: &I18n) -> Option<Welcome
                         ("welcome.open_folder", crate::app::shortcuts::OPEN_FOLDER, WelcomeAction::OpenFolder),
                     ] {
                         let button = egui::Button::new(RichText::new(i18n.t(key)).color(palette.foreground))
-                            .shortcut_text(RichText::new(ctx.format_shortcut(&shortcut)).color(palette.icon_inactive))
+                            .shortcut_text(RichText::new(crate::app::shortcuts::label(&ctx, &shortcut)).color(palette.icon_inactive))
                             .min_size(BUTTON_SIZE);
                         if ui.add(button).clicked() {
                             action = Some(result);

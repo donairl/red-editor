@@ -419,7 +419,7 @@ impl MarkdownPreview {
         let mut pick = None;
         ui.horizontal(|ui| {
             let hint =
-                |key, shortcut| format!("{} ({})", i18n.t(key), ui.ctx().format_shortcut(shortcut));
+                |key, shortcut| format!("{} ({})", i18n.t(key), shortcuts::label(ui.ctx(), shortcut));
             let prev_hint = hint("preview.prev_heading", &shortcuts::PREV_HEADING);
             let next_hint = hint("preview.next_heading", &shortcuts::NEXT_HEADING);
             if ui

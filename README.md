@@ -137,7 +137,13 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+Alt+G` | Git Graph |
 | `F11` | Zen mode (full screen, editor only); `Esc` to exit |
 | `Ctrl+Shift+V` | Toggle Markdown preview (`.md` files) |
-| `Ctrl+Shift+I` | Prettify the document |
+| `Ctrl+Shift+I` or `Shift+Alt+F` | Prettify the document |
+| `Alt+Up` / `Alt+Down` | Move the current line (or selected lines) up / down |
+| `Shift+Alt+Up` / `Shift+Alt+Down` | Copy the current line (or selected lines) up / down |
+| `Ctrl+Shift+K` | Delete the current line (or selected lines) |
+| `Ctrl+/` | Toggle line comment, in the document's language |
+| `Ctrl+D` | Select the word at the caret, then its next occurrence |
+| `Ctrl+Alt+Up` / `Ctrl+Alt+Down` | Previous / next heading in the Markdown preview |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` or `Ctrl+Shift+Z` | Redo |

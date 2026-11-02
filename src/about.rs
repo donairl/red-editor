@@ -46,7 +46,7 @@ pub fn info_text() -> String {
 
 /// The keyboard shortcuts the Shortcuts page lists: translation key and
 /// shortcut, in menu order.
-fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 16] {
+fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 23] {
     [
         ("file.new_tab", shortcuts::NEW_TAB),
         ("file.open_file", shortcuts::OPEN_FILE),
@@ -59,6 +59,13 @@ fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 16] {
         ("edit.goto_symbol", shortcuts::GOTO_SYMBOL),
         ("edit.goto_definition", shortcuts::GOTO_DEFINITION),
         ("edit.prettify", shortcuts::PRETTIFY),
+        ("edit.move_line_up", shortcuts::MOVE_LINE_UP),
+        ("edit.move_line_down", shortcuts::MOVE_LINE_DOWN),
+        ("edit.copy_line_up", shortcuts::COPY_LINE_UP),
+        ("edit.copy_line_down", shortcuts::COPY_LINE_DOWN),
+        ("edit.delete_line", shortcuts::DELETE_LINE),
+        ("edit.toggle_comment", shortcuts::TOGGLE_COMMENT),
+        ("edit.select_next_match", shortcuts::SELECT_NEXT_MATCH),
         ("view.markdown_preview", shortcuts::MARKDOWN_PREVIEW),
         ("view.source_control", shortcuts::SOURCE_CONTROL),
         ("view.blame", shortcuts::BLAME),
@@ -253,21 +260,21 @@ fn about_page(ui: &mut egui::Ui, palette: &crate::file_browser::SidebarPalette, 
 fn shortcuts_page(ui: &mut egui::Ui, palette: &crate::file_browser::SidebarPalette, i18n: &I18n) {
     let ctx = ui.ctx().clone();
     // What the window leaves for the list, so the footer stays in view.
-    let max_height = (ctx.content_rect().height() - 260.0).clamp(160.0, 400.0);
+    let max_height = (ctx.content_rect().height() - 260.0).clamp(160.0, 560.0);
     egui::ScrollArea::vertical()
         .max_height(max_height)
         .auto_shrink([false, true])
         .show(ui, |ui| {
             egui::Grid::new("about_shortcuts")
                 .num_columns(2)
-                .spacing([24.0, 5.0])
+                .spacing([24.0, 3.0])
                 .striped(true)
                 .show(ui, |ui| {
                     for (key, shortcut) in shortcut_rows() {
                         ui.label(RichText::new(i18n.t(key)).size(13.0).color(palette.foreground));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
-                                RichText::new(ctx.format_shortcut(&shortcut))
+                                RichText::new(shortcuts::label(&ctx, &shortcut))
                                     .monospace()
                                     .size(12.0)
                                     .color(palette.icon_inactive),

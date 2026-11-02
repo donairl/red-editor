@@ -17,6 +17,7 @@ use crate::git_worker::{Base, DiffSource, GitState, Op};
 use crate::gutter;
 use crate::highlighter::{DocumentHighlightCache, HighlighterLayouter, Language, SyntaxHighlighter};
 use crate::history::{Entry, EntryKind, History};
+use crate::line_ops;
 use crate::i18n::{self, I18n};
 use crate::layout_cache::{self, LayoutCache};
 use crate::line_diff::{self, LineMarks};
@@ -431,7 +432,15 @@ fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
 
 /// Keyboard shortcuts of the editor. `COMMAND` is Ctrl, or Cmd on macOS.
 pub mod shortcuts {
-    use eframe::egui::{Key, KeyboardShortcut, Modifiers};
+    use eframe::egui::{Context, Key, KeyboardShortcut, Modifiers};
+
+    /// The shortcut as the menus print it. egui spells `/` and `` ` `` out
+    /// by name, which reads oddly next to the other key caps.
+    pub fn label(ctx: &Context, shortcut: &KeyboardShortcut) -> String {
+        ctx.format_shortcut(shortcut)
+            .replace("Slash", "/")
+            .replace("Backtick", "`")
+    }
 
     const fn cmd(key: Key) -> KeyboardShortcut {
         KeyboardShortcut::new(Modifiers::COMMAND, key)
@@ -466,9 +475,24 @@ pub mod shortcuts {
     pub const REPLACE: KeyboardShortcut = cmd(Key::H);
     pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
     pub const FIND_PREV: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::F3);
-    pub const PREV_HEADING: KeyboardShortcut = KeyboardShortcut::new(Modifiers::ALT, Key::ArrowUp);
+    // Ctrl+Alt: Alt alone moves lines, as in other editors.
+    pub const PREV_HEADING: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::ArrowUp);
     pub const NEXT_HEADING: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::ArrowDown);
+    pub const MOVE_LINE_UP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::ALT, Key::ArrowUp);
+    pub const MOVE_LINE_DOWN: KeyboardShortcut =
         KeyboardShortcut::new(Modifiers::ALT, Key::ArrowDown);
+    pub const COPY_LINE_UP: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::SHIFT.plus(Modifiers::ALT), Key::ArrowUp);
+    pub const COPY_LINE_DOWN: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::SHIFT.plus(Modifiers::ALT), Key::ArrowDown);
+    pub const DELETE_LINE: KeyboardShortcut = cmd_shift(Key::K);
+    pub const TOGGLE_COMMENT: KeyboardShortcut = cmd(Key::Slash);
+    pub const SELECT_NEXT_MATCH: KeyboardShortcut = cmd(Key::D);
+    /// A second key for Prettify, the one other editors use.
+    pub const FORMAT_DOCUMENT: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::SHIFT.plus(Modifiers::ALT), Key::F);
     pub const GOTO_SYMBOL: KeyboardShortcut = cmd(Key::R);
     pub const GOTO_DEFINITION: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F12);
     pub const FIND_REFERENCES: KeyboardShortcut =
@@ -514,6 +538,13 @@ pub enum ShortcutAction {
     GotoSymbol,
     GotoDefinition,
     FindReferences,
+    MoveLineUp,
+    MoveLineDown,
+    CopyLineUp,
+    CopyLineDown,
+    DeleteLine,
+    ToggleComment,
+    SelectNextMatch,
 }
 
 impl ShortcutAction {
@@ -532,6 +563,13 @@ impl ShortcutAction {
                 | Prettify
                 | PrevHeading
                 | NextHeading
+                | MoveLineUp
+                | MoveLineDown
+                | CopyLineUp
+                | CopyLineDown
+                | DeleteLine
+                | ToggleComment
+                | SelectNextMatch
         )
     }
 }
@@ -545,6 +583,16 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::FIND_REFERENCES, FindReferences),
         (shortcuts::FIND_NEXT, FindNext),
         (shortcuts::FIND_IN_FILES, FindInFiles),
+        (shortcuts::FORMAT_DOCUMENT, Prettify),
+        (shortcuts::PREV_HEADING, PrevHeading),
+        (shortcuts::NEXT_HEADING, NextHeading),
+        (shortcuts::COPY_LINE_UP, CopyLineUp),
+        (shortcuts::COPY_LINE_DOWN, CopyLineDown),
+        (shortcuts::MOVE_LINE_UP, MoveLineUp),
+        (shortcuts::MOVE_LINE_DOWN, MoveLineDown),
+        (shortcuts::DELETE_LINE, DeleteLine),
+        (shortcuts::TOGGLE_COMMENT, ToggleComment),
+        (shortcuts::SELECT_NEXT_MATCH, SelectNextMatch),
         (shortcuts::MARKDOWN_PREVIEW, MarkdownPreview),
         (shortcuts::TOGGLE_CONSOLE, ToggleConsole),
         (shortcuts::PRETTIFY, Prettify),
@@ -566,8 +614,6 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::ZEN_MODE, ZenMode),
         (shortcuts::FIND, Find),
         (shortcuts::REPLACE, Replace),
-        (shortcuts::PREV_HEADING, PrevHeading),
-        (shortcuts::NEXT_HEADING, NextHeading),
         (shortcuts::GOTO_SYMBOL, GotoSymbol),
         (shortcuts::GOTO_DEFINITION, GotoDefinition),
     ]
@@ -707,23 +753,23 @@ impl TextEditorApp {
         let ctx = ui.ctx().clone();
         let blame = egui::Button::new(self.i18n.t("view.blame"))
             .selected(self.show_blame)
-            .shortcut_text(ctx.format_shortcut(&shortcuts::BLAME));
+            .shortcut_text(shortcuts::label(&ctx, &shortcuts::BLAME));
         if ui.add(blame).clicked() {
             self.show_blame = !self.show_blame;
             ui.close();
         }
         let graph = egui::Button::new(self.i18n.t("view.git_graph"))
             .selected(self.git_graph.is_some())
-            .shortcut_text(ctx.format_shortcut(&shortcuts::GIT_GRAPH));
+            .shortcut_text(shortcuts::label(&ctx, &shortcuts::GIT_GRAPH));
         if ui.add_enabled(self.git.repo().is_some(), graph).clicked() {
             self.toggle_git_graph(&ctx);
             ui.close();
         }
-        if menu_item(ui, self.i18n.t("view.zen_mode"), &ctx.format_shortcut(&shortcuts::ZEN_MODE)) {
+        if menu_item(ui, self.i18n.t("view.zen_mode"), &shortcuts::label(&ctx, &shortcuts::ZEN_MODE)) {
             self.toggle_zen_mode(&ctx);
         }
         let preview_label = self.i18n.t("view.markdown_preview");
-        let preview_shortcut = ctx.format_shortcut(&shortcuts::MARKDOWN_PREVIEW);
+        let preview_shortcut = shortcuts::label(&ctx, &shortcuts::MARKDOWN_PREVIEW);
         if ui
             .add_enabled(
                 self.preview_available(),
@@ -737,7 +783,7 @@ impl TextEditorApp {
             ui.close();
         }
         let scm_label = self.i18n.t("view.source_control");
-        let scm_shortcut = ctx.format_shortcut(&shortcuts::SOURCE_CONTROL);
+        let scm_shortcut = shortcuts::label(&ctx, &shortcuts::SOURCE_CONTROL);
         let scm_open = self.show_sidebar && self.sidebar_view == SidebarView::SourceControl;
         if ui
             .add(egui::Button::new(scm_label).selected(scm_open).shortcut_text(scm_shortcut))
@@ -747,7 +793,7 @@ impl TextEditorApp {
             ui.close();
         }
         let console_label = self.i18n.t("view.console");
-        let console_shortcut = ctx.format_shortcut(&shortcuts::TOGGLE_CONSOLE);
+        let console_shortcut = shortcuts::label(&ctx, &shortcuts::TOGGLE_CONSOLE);
         if ui
             .add(
                 egui::Button::new(console_label)
@@ -940,7 +986,7 @@ impl TextEditorApp {
 
     pub fn show_edit_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
-            menu_item(ui, label, &ctx.format_shortcut(shortcut))
+            menu_item(ui, label, &shortcuts::label(ctx, shortcut))
         };
         if item(ui, self.i18n.t("edit.undo"), &shortcuts::UNDO) {
             self.send_editor_key(egui::Key::Z);
@@ -964,9 +1010,25 @@ impl TextEditorApp {
         if ui.add_enabled_ui(editing, |ui| item(ui, self.i18n.t("edit.goto_line"), &shortcuts::GOTO_LINE)).inner {
             self.open_goto();
         }
+        ui.separator();
+        let line_items = [
+            ("edit.move_line_up", &shortcuts::MOVE_LINE_UP, ShortcutAction::MoveLineUp),
+            ("edit.move_line_down", &shortcuts::MOVE_LINE_DOWN, ShortcutAction::MoveLineDown),
+            ("edit.copy_line_up", &shortcuts::COPY_LINE_UP, ShortcutAction::CopyLineUp),
+            ("edit.copy_line_down", &shortcuts::COPY_LINE_DOWN, ShortcutAction::CopyLineDown),
+            ("edit.delete_line", &shortcuts::DELETE_LINE, ShortcutAction::DeleteLine),
+            ("edit.toggle_comment", &shortcuts::TOGGLE_COMMENT, ShortcutAction::ToggleComment),
+            ("edit.select_next_match", &shortcuts::SELECT_NEXT_MATCH, ShortcutAction::SelectNextMatch),
+        ];
+        for (key, shortcut, action) in line_items {
+            if ui.add_enabled_ui(editing, |ui| item(ui, self.i18n.t(key), shortcut)).inner {
+                self.apply_shortcut(ctx, action);
+            }
+        }
+        ui.separator();
         let navigable = symbols::supports(self.effective_language());
         let nav_item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
-            let button = egui::Button::new(label).shortcut_text(ctx.format_shortcut(shortcut));
+            let button = egui::Button::new(label).shortcut_text(shortcuts::label(ctx, shortcut));
             let clicked = ui.add_enabled(navigable, button).clicked();
             if clicked {
                 ui.close();
@@ -984,7 +1046,7 @@ impl TextEditorApp {
         }
         ui.separator();
         let prettify_label = self.i18n.t("edit.prettify");
-        let prettify_shortcut = ctx.format_shortcut(&shortcuts::PRETTIFY);
+        let prettify_shortcut = shortcuts::label(ctx, &shortcuts::PRETTIFY);
         if ui
             .add_enabled(
                 prettify::supports(self.effective_language()),
@@ -1001,7 +1063,7 @@ impl TextEditorApp {
     /// right-click menu.
     fn show_clipboard_items(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
-            menu_item(ui, label, &ctx.format_shortcut(shortcut))
+            menu_item(ui, label, &shortcuts::label(ctx, shortcut))
         };
         if item(ui, self.i18n.t("edit.cut"), &shortcuts::CUT) {
             self.cut_selection(ctx);
@@ -1028,7 +1090,7 @@ impl TextEditorApp {
                 ui.separator();
                 let at = ctx.data(|d| d.get_temp::<usize>(self.editor_id().with(CONTEXT_CHAR)));
                 let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
-                    menu_item(ui, label, &ctx.format_shortcut(shortcut))
+                    menu_item(ui, label, &shortcuts::label(ctx, shortcut))
                 };
                 if item(ui, self.i18n.t("edit.goto_definition"), &shortcuts::GOTO_DEFINITION) {
                     self.goto_definition(ctx, at);
@@ -1118,6 +1180,49 @@ impl TextEditorApp {
     fn send_editor_key(&mut self, key: egui::Key) {
         self.editor_request.focus = true;
         self.editor_request.key = Some(key);
+    }
+
+    /// Rewrites the active document around its selection and hands the
+    /// editor the selection to show next frame. A caret the editor has not
+    /// placed yet counts as the start of the document.
+    fn edit_lines(
+        &mut self,
+        ctx: &egui::Context,
+        edit: impl FnOnce(&str, line_ops::Range) -> Option<line_ops::Edit>,
+    ) {
+        let selection = self.editor_selection(ctx).unwrap_or((0, 0));
+        let Some(edit) = edit(&self.active_tab().text_content, selection) else {
+            return;
+        };
+        self.active_tab_mut().text_content = edit.text;
+        self.editor_request.focus = true;
+        self.editor_request.select = Some(edit.selection);
+        self.editor_request.reveal = Some(edit.selection);
+    }
+
+    /// Edit > Toggle Line Comment, in the active document's language.
+    pub fn toggle_comment(&mut self, ctx: &egui::Context) {
+        match line_ops::comment_style(self.effective_language()) {
+            Some(style) => {
+                self.edit_lines(ctx, |text, sel| line_ops::toggle_comment(text, sel, style));
+            }
+            None => {
+                self.status_message =
+                    Some((self.i18n.t("msg.comment_unsupported").to_owned(), true));
+            }
+        }
+    }
+
+    /// Edit > Select Next Match: the word at the caret, then each further
+    /// occurrence of the selection.
+    pub fn select_next_match(&mut self, ctx: &egui::Context) {
+        let selection = self.editor_selection(ctx).unwrap_or((0, 0));
+        if let Some(range) = line_ops::select_next_match(&self.active_tab().text_content, selection)
+        {
+            self.editor_request.focus = true;
+            self.editor_request.select = Some(range);
+            self.editor_request.reveal = Some(range);
+        }
     }
 
     fn saved_selection_id(&self) -> egui::Id {
@@ -1455,7 +1560,7 @@ impl TextEditorApp {
 
     pub fn show_file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
-            menu_item(ui, label, &ctx.format_shortcut(shortcut))
+            menu_item(ui, label, &shortcuts::label(ctx, shortcut))
         };
         if item(ui, self.i18n.t("file.new_tab"), &shortcuts::NEW_TAB) {
             self.open_new_tab();
@@ -1536,6 +1641,23 @@ impl TextEditorApp {
             ShortcutAction::GotoSymbol => self.open_symbol_picker(),
             ShortcutAction::GotoDefinition => self.goto_definition(ctx, None),
             ShortcutAction::FindReferences => self.find_references(ctx, None),
+            ShortcutAction::MoveLineUp => {
+                self.edit_lines(ctx, |text, sel| line_ops::move_lines(text, sel, true));
+            }
+            ShortcutAction::MoveLineDown => {
+                self.edit_lines(ctx, |text, sel| line_ops::move_lines(text, sel, false));
+            }
+            ShortcutAction::CopyLineUp => {
+                self.edit_lines(ctx, |text, sel| Some(line_ops::copy_lines(text, sel, true)));
+            }
+            ShortcutAction::CopyLineDown => {
+                self.edit_lines(ctx, |text, sel| Some(line_ops::copy_lines(text, sel, false)));
+            }
+            ShortcutAction::DeleteLine => {
+                self.edit_lines(ctx, |text, sel| Some(line_ops::delete_lines(text, sel)));
+            }
+            ShortcutAction::ToggleComment => self.toggle_comment(ctx),
+            ShortcutAction::SelectNextMatch => self.select_next_match(ctx),
             ShortcutAction::PrevTab => {
                 self.active_tab_index =
                     (self.active_tab_index + self.tabs.len() - 1) % self.tabs.len();
@@ -3802,8 +3924,18 @@ mod tests {
             (egui::Key::G, ctrl | egui::Modifiers::ALT, ShortcutAction::GitGraph),
             (egui::Key::G, ctrl, ShortcutAction::GotoLine),
             (egui::Key::G, ctrl_shift, ShortcutAction::SourceControl),
-            (egui::Key::ArrowUp, egui::Modifiers::ALT, ShortcutAction::PrevHeading),
-            (egui::Key::ArrowDown, egui::Modifiers::ALT, ShortcutAction::NextHeading),
+            (egui::Key::ArrowUp, ctrl | egui::Modifiers::ALT, ShortcutAction::PrevHeading),
+            (egui::Key::ArrowDown, ctrl | egui::Modifiers::ALT, ShortcutAction::NextHeading),
+            (egui::Key::ArrowUp, egui::Modifiers::ALT, ShortcutAction::MoveLineUp),
+            (egui::Key::ArrowDown, egui::Modifiers::ALT, ShortcutAction::MoveLineDown),
+            (egui::Key::ArrowUp, egui::Modifiers::SHIFT | egui::Modifiers::ALT, ShortcutAction::CopyLineUp),
+            (egui::Key::ArrowDown, egui::Modifiers::SHIFT | egui::Modifiers::ALT, ShortcutAction::CopyLineDown),
+            (egui::Key::K, ctrl_shift, ShortcutAction::DeleteLine),
+            (egui::Key::Slash, ctrl, ShortcutAction::ToggleComment),
+            (egui::Key::D, ctrl, ShortcutAction::SelectNextMatch),
+            (egui::Key::F, egui::Modifiers::SHIFT | egui::Modifiers::ALT, ShortcutAction::Prettify),
+            (egui::Key::F, ctrl_shift, ShortcutAction::FindInFiles),
+            (egui::Key::F, ctrl, ShortcutAction::Find),
             (egui::Key::R, ctrl, ShortcutAction::GotoSymbol),
             (egui::Key::F12, egui::Modifiers::NONE, ShortcutAction::GotoDefinition),
             (egui::Key::F12, egui::Modifiers::SHIFT, ShortcutAction::FindReferences),
@@ -3815,6 +3947,44 @@ mod tests {
             output.textures_delta.clear();
             assert_eq!(got, Some(want), "{key:?} {mods:?}");
         }
+    }
+
+    #[test]
+    fn test_line_shortcuts_edit_the_document_and_reselect() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.active_tab_mut().text_content = "one\ntwo".to_owned();
+        // No caret placed yet: the start of the document.
+        app.apply_shortcut(&ctx, ShortcutAction::MoveLineDown);
+        assert_eq!(app.active_tab().text_content, "two\none");
+        assert_eq!(app.editor_request.select, Some((4, 4)));
+        assert!(app.editor_request.focus);
+        app.apply_shortcut(&ctx, ShortcutAction::CopyLineDown);
+        assert_eq!(app.active_tab().text_content, "two\ntwo\none");
+        app.apply_shortcut(&ctx, ShortcutAction::DeleteLine);
+        assert_eq!(app.active_tab().text_content, "two\none");
+        app.apply_shortcut(&ctx, ShortcutAction::SelectNextMatch);
+        assert_eq!(app.editor_request.select, Some((0, 3)));
+        // Ignored on the start page.
+        app.show_welcome = true;
+        app.apply_shortcut(&ctx, ShortcutAction::DeleteLine);
+        assert_eq!(app.active_tab().text_content, "two\none");
+    }
+
+    #[test]
+    fn test_toggle_comment_follows_the_language_or_reports_none() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.active_tab_mut().text_content = "let x = 1;".to_owned();
+        app.active_tab_mut().language_override = Some(Language::Rust);
+        app.apply_shortcut(&ctx, ShortcutAction::ToggleComment);
+        assert_eq!(app.active_tab().text_content, "// let x = 1;");
+        app.apply_shortcut(&ctx, ShortcutAction::ToggleComment);
+        assert_eq!(app.active_tab().text_content, "let x = 1;");
+        app.active_tab_mut().language_override = Some(Language::PlainText);
+        app.apply_shortcut(&ctx, ShortcutAction::ToggleComment);
+        assert_eq!(app.active_tab().text_content, "let x = 1;");
+        assert!(app.status_message.as_ref().is_some_and(|(_, error)| *error));
     }
 
     #[test]
@@ -6301,7 +6471,7 @@ mod tests {
         let (new_window, _) =
             painted_text(&shapes, app.i18n.t("file.new_window")).expect("New Window is listed");
         assert!(new_window.top() > close_tab.top(), "below Close Tab");
-        let shortcut = ctx.format_shortcut(&shortcuts::NEW_WINDOW);
+        let shortcut = shortcuts::label(&ctx, &shortcuts::NEW_WINDOW);
         let (shortcut, _) = painted_text(&shapes, &shortcut).expect("its shortcut is shown");
         assert!((shortcut.center().y - new_window.center().y).abs() < 1.0);
     }
