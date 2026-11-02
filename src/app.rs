@@ -2115,7 +2115,14 @@ impl TextEditorApp {
     }
 
     /// Shows `folder` in the Explorer sidebar and records it in the history.
+    ///
+    /// The new folder starts clean: saved tabs of the old one are closed
+    /// (unsaved ones stay, so no work is lost) and Search in Files forgets
+    /// its query, options and results.
     pub fn open_folder(&mut self, folder: PathBuf) {
+        self.close_tabs_where(0, |_, _| true);
+        self.search.stop();
+        self.search = SearchState::default();
         self.leave_welcome();
         self.history.record(folder.clone(), EntryKind::Folder);
         self.explorer = Some(Explorer::new(folder));
@@ -5866,7 +5873,7 @@ mod tests {
         app.open_file_in_tab(a.clone());
         app.open_file_in_tab(b.clone());
         app.open_folder(dir.clone());
-        // Already open: its tab is focused, and it moves to the front.
+        // Opened again: it moves to the front.
         app.open_file_in_tab(a.clone());
         assert_eq!(
             history_of(&app),
@@ -5876,6 +5883,45 @@ mod tests {
                 (b, EntryKind::File),
             ]
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_opening_a_folder_resets_tabs_and_search() {
+        let dir = history_folder("reset");
+        let (a, b) = (dir.join("a.txt"), dir.join("b.txt"));
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(a.clone());
+        app.open_file_in_tab(b.clone());
+        app.active_tab_mut().text_content = "edited".into();
+        app.search.visible = true;
+        app.search.query = "needle".into();
+        app.search.include = "*.rs".into();
+        app.search.searched = true;
+
+        app.open_folder(dir.clone());
+
+        // Saved tabs go; the unsaved one stays so no work is lost.
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab().current_path.as_ref(), Some(&b));
+        assert_eq!(app.active_tab_index, 0);
+        assert!(!app.search.visible);
+        assert!(app.search.query.is_empty());
+        assert!(app.search.include.is_empty());
+        assert!(!app.search.searched);
+        assert!(app.search.hits.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_opening_a_folder_with_only_saved_tabs_leaves_a_blank_editor() {
+        let dir = history_folder("reset_clean");
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(dir.join("a.txt"));
+        app.open_folder(dir.clone());
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().is_pristine());
+        assert!(!app.show_welcome);
         let _ = fs::remove_dir_all(&dir);
     }
 
