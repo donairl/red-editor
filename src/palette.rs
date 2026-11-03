@@ -255,7 +255,7 @@ pub fn show<T>(
                             .id(field_id)
                             // Up and Down pick a row instead of moving focus.
                             .event_filter(egui::EventFilter {
-                                horizontal_arrows: true,
+                                tab: true,
                                 vertical_arrows: true,
                                 ..Default::default()
                             })

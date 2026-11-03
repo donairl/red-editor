@@ -1454,8 +1454,7 @@ mod tests {
         names(explorer)
     }
 
-    /// The filter never waits for the folder to be indexed: it lists what
-    /// was found so far, and the rest as it arrives.
+    /// Quick Open reads the index the Explorer filter builds, as it fills.
     #[test]
     fn test_indexed_files_starts_the_index_and_reports_when_done() {
         let dir = std::env::temp_dir().join("rred_test_indexed_files");
@@ -1481,6 +1480,8 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The filter never waits for the folder to be indexed: it lists what
+    /// was found so far, and the rest as it arrives.
     #[test]
     fn test_filter_lists_matches_while_the_folder_is_still_indexed() {
         let ctx = egui::Context::default();
