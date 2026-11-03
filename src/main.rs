@@ -22,6 +22,7 @@ mod layout_cache;
 mod line_diff;
 mod line_ops;
 mod markdown_preview;
+mod menus;
 mod modals;
 mod palette;
 mod prettify;
