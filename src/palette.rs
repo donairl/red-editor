@@ -51,7 +51,10 @@ impl Palette {
 
     /// Moves the selection by `delta` rows within `count` rows, no wrap.
     fn move_selection(&mut self, delta: isize, count: usize) {
-        self.selected = self.selected.saturating_add_signed(delta).min(count.saturating_sub(1));
+        self.selected = self
+            .selected
+            .saturating_add_signed(delta)
+            .min(count.saturating_sub(1));
     }
 
     fn clamp_selection(&mut self, count: usize) {
@@ -132,13 +135,28 @@ pub const COMMANDS: &[Command] = &[
     command("view.blame", ShortcutAction::Blame),
     command("view.git_graph", ShortcutAction::GitGraph),
     command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::System)),
-    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::LightModern)),
-    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::DarkModern)),
-    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::SolarizedLight)),
-    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::SolarizedDark)),
+    command(
+        "cmd.theme",
+        ShortcutAction::SelectTheme(ThemeId::LightModern),
+    ),
+    command(
+        "cmd.theme",
+        ShortcutAction::SelectTheme(ThemeId::DarkModern),
+    ),
+    command(
+        "cmd.theme",
+        ShortcutAction::SelectTheme(ThemeId::SolarizedLight),
+    ),
+    command(
+        "cmd.theme",
+        ShortcutAction::SelectTheme(ThemeId::SolarizedDark),
+    ),
     command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::OceanDark)),
     command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::MochaDark)),
-    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::EightiesDark)),
+    command(
+        "cmd.theme",
+        ShortcutAction::SelectTheme(ThemeId::EightiesDark),
+    ),
 ];
 
 /// Indices of the items matching `query`, best first; ties keep their
@@ -183,7 +201,8 @@ fn score_chars(query: &[char], text: &str) -> Option<u32> {
             break;
         }
         if c == query[next] {
-            let word_start = prev_char.is_none_or(|p| matches!(p, '/' | '\\' | '_' | '-' | '.' | ' '));
+            let word_start =
+                prev_char.is_none_or(|p| matches!(p, '/' | '\\' | '_' | '-' | '.' | ' '));
             let adjacent = previous.is_some_and(|p| p + 1 == at);
             score += if word_start {
                 3
@@ -318,7 +337,11 @@ mod tests {
     fn test_commands_are_unique_and_leave_out_the_palette_itself() {
         let mut seen = std::collections::HashSet::new();
         for command in COMMANDS {
-            assert!(seen.insert(command.action), "duplicate {:?}", command.action);
+            assert!(
+                seen.insert(command.action),
+                "duplicate {:?}",
+                command.action
+            );
             assert!(
                 !matches!(
                     command.action,
@@ -334,7 +357,12 @@ mod tests {
     fn test_every_command_label_is_translated() {
         let i18n = crate::i18n::I18n::builtin();
         for command in COMMANDS {
-            assert_ne!(i18n.t(command.key), command.key, "missing key {}", command.key);
+            assert_ne!(
+                i18n.t(command.key),
+                command.key,
+                "missing key {}",
+                command.key
+            );
         }
     }
 
@@ -346,10 +374,31 @@ mod tests {
         // knows, and check each action it produces is in the table.
         let listed: std::collections::HashSet<ShortcutAction> =
             COMMANDS.iter().map(|c| c.action).collect();
+        // Hand-maintained: a shortcut on a key missing here is not checked.
         let keys = [
-            Key::N, Key::W, Key::O, Key::S, Key::Q, Key::B, Key::G, Key::Tab, Key::F,
-            Key::I, Key::F11, Key::V, Key::Backtick, Key::H, Key::F3, Key::ArrowUp,
-            Key::ArrowDown, Key::K, Key::Slash, Key::D, Key::R, Key::F12, Key::P,
+            Key::N,
+            Key::W,
+            Key::O,
+            Key::S,
+            Key::Q,
+            Key::B,
+            Key::G,
+            Key::Tab,
+            Key::F,
+            Key::I,
+            Key::F11,
+            Key::V,
+            Key::Backtick,
+            Key::H,
+            Key::F3,
+            Key::ArrowUp,
+            Key::ArrowDown,
+            Key::K,
+            Key::Slash,
+            Key::D,
+            Key::R,
+            Key::F12,
+            Key::P,
         ];
         let modifiers = [
             Modifiers::NONE,
@@ -360,6 +409,7 @@ mod tests {
             Modifiers::COMMAND.plus(Modifiers::ALT),
             Modifiers::SHIFT.plus(Modifiers::ALT),
         ];
+        let mut produced = 0;
         for key in keys {
             for modifiers in modifiers {
                 let raw = RawInput {
@@ -374,12 +424,20 @@ mod tests {
                 };
                 let mut input =
                     InputState::default().begin_pass(raw, false, 1.0, InputOptions::default());
-                if let Some(action) = consume_shortcut(&mut input)
-                    && !matches!(action, ShortcutAction::CommandPalette | ShortcutAction::QuickOpen)
-                {
-                    assert!(listed.contains(&action), "{action:?} is not in COMMANDS");
+                if let Some(action) = consume_shortcut(&mut input) {
+                    produced += 1;
+                    if !matches!(
+                        action,
+                        ShortcutAction::CommandPalette | ShortcutAction::QuickOpen
+                    ) {
+                        assert!(listed.contains(&action), "{action:?} is not in COMMANDS");
+                    }
                 }
             }
         }
+        assert!(
+            produced > 20,
+            "consume_shortcut produced only {produced} actions"
+        );
     }
 }

@@ -563,7 +563,6 @@ pub enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    /// Acts on the editor, which the Git Graph and the start page hide.
     /// The key the action is bound to, as the menus print it; `None` for
     /// actions only the Command Palette offers.
     pub fn shortcut(self) -> Option<egui::KeyboardShortcut> {
@@ -611,6 +610,7 @@ impl ShortcutAction {
         })
     }
 
+    /// Acts on the editor, which the Git Graph and the start page hide.
     pub fn needs_editor(self) -> bool {
         use ShortcutAction::*;
         matches!(
