@@ -366,6 +366,7 @@ fn truncated(
 /// previous match scores 2; any other 1, minus one per text char skipped
 /// since the previous match. Jumping to a word start costs nothing, so
 /// `tc` prefers "Toggle Console" to "Watch".
+#[cfg(test)]
 pub fn score(query: &str, text: &str) -> Option<u32> {
     let query: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
     score_chars(&query, text)

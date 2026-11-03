@@ -29,6 +29,7 @@ use crate::search::{self, SearchAction, SearchState};
 use crate::source_control::{self, DiffAction, ScmAction, ScmUi};
 use crate::symbols::{self, PickerAction, SymbolPicker};
 use crate::tab_bar;
+use crate::palette::{self, Item, Palette, PaletteAction, PaletteMode};
 use crate::git_log::GitLogPanel;
 use crate::terminal::{self, Terminal};
 use crate::theme::{self, ThemeId};
@@ -311,6 +312,8 @@ pub struct TextEditorApp {
     /// editor ran, with its output.
     pub show_git_log: bool,
     pub git_log: GitLogPanel,
+    /// The Command Palette / Quick Open popup.
+    pub palette: Palette,
     /// Recently opened files and folders, for File > Open Recent.
     pub history: History,
     /// The color theme picked in View > Theme; `System` follows the OS.
@@ -389,6 +392,7 @@ impl Default for TextEditorApp {
             console: None,
             show_git_log: false,
             git_log: GitLogPanel::default(),
+            palette: Palette::default(),
             history: History::default(),
             theme: ThemeId::System,
             git: GitState::default(),
@@ -875,6 +879,13 @@ impl TextEditorApp {
         {
             self.show_git_log = !self.show_git_log;
             ui.close();
+        }
+        if menu_item(
+            ui,
+            self.i18n.t("view.command_palette"),
+            &shortcuts::label(&ctx, &shortcuts::COMMAND_PALETTE),
+        ) {
+            self.open_palette(PaletteMode::Commands);
         }
         self.show_theme_menu(ui);
         ui.separator();
@@ -1484,6 +1495,99 @@ impl TextEditorApp {
         }
     }
 
+    /// Opens the Command Palette in `mode`, or closes it when already open
+    /// in that mode. Takes over from the other bars that read the keys.
+    pub fn open_palette(&mut self, mode: PaletteMode) {
+        self.palette.open(mode);
+        if self.palette.visible {
+            self.symbol_picker.visible = false;
+            self.goto.visible = false;
+        } else {
+            self.editor_request.focus = true;
+        }
+    }
+
+    /// Draws the palette when open, with this frame's commands or files,
+    /// and acts on what the user picked.
+    fn show_palette(&mut self, ctx: &egui::Context) {
+        if !self.palette.visible {
+            return;
+        }
+        let action = match self.palette.mode {
+            PaletteMode::Commands => {
+                let editor_hidden = self.git_graph.is_some() || self.show_welcome;
+                let items: Vec<Item<ShortcutAction>> = palette::COMMANDS
+                    .iter()
+                    .filter(|c| !(editor_hidden && c.action.needs_editor()))
+                    .map(|c| {
+                        let label = match c.action {
+                            ShortcutAction::SelectTheme(id) => {
+                                let name = id.name().unwrap_or_else(|| self.i18n.t("theme.system"));
+                                self.i18n.tf(c.key, &[("name", name)])
+                            }
+                            _ => self.i18n.t(c.key).to_owned(),
+                        };
+                        let detail = c
+                            .action
+                            .shortcut()
+                            .map(|s| shortcuts::label(ctx, &s))
+                            .unwrap_or_default();
+                        Item { search: label.clone(), label, detail, payload: c.action }
+                    })
+                    .collect();
+                palette::show(ctx, &mut self.palette, &items, None, &self.i18n, |a| {
+                    PaletteAction::Run(*a)
+                })
+            }
+            PaletteMode::Files => {
+                let no_folder = self.i18n.t("palette.no_folder");
+                let indexing = self.i18n.t("palette.indexing");
+                let (items, status): (Vec<Item<PathBuf>>, Option<&str>) = match self.explorer.as_mut() {
+                    None => (Vec::new(), Some(no_folder)),
+                    Some(explorer) => {
+                        let root = explorer.root().to_path_buf();
+                        let (files, done) = explorer.indexed_files(ctx);
+                        let items = files
+                            .iter()
+                            .map(|f| {
+                                let relative = f.path.strip_prefix(&root).unwrap_or(&f.path);
+                                let folder = relative
+                                    .parent()
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_default();
+                                Item {
+                                    label: f.name.clone(),
+                                    detail: folder,
+                                    search: relative.display().to_string(),
+                                    payload: f.path.clone(),
+                                }
+                            })
+                            .collect();
+                        (items, (!done).then_some(indexing))
+                    }
+                };
+                palette::show(ctx, &mut self.palette, &items, status, &self.i18n, |p| {
+                    PaletteAction::Open(p.clone())
+                })
+            }
+        };
+        match action {
+            Some(PaletteAction::Run(action)) => {
+                self.palette.close();
+                self.apply_shortcut(ctx, action);
+            }
+            Some(PaletteAction::Open(path)) => {
+                self.palette.close();
+                self.open_file_in_tab(path);
+            }
+            Some(PaletteAction::Close) => {
+                self.palette.close();
+                self.editor_request.focus = true;
+            }
+            None => {}
+        }
+    }
+
     /// The identifier at the `char` index `at`, else at the caret, when code
     /// navigation knows the active document's language.
     fn navigation_word(&self, ctx: &egui::Context, at: Option<usize>) -> Option<(String, usize)> {
@@ -1649,6 +1753,9 @@ impl TextEditorApp {
         if item(ui, self.i18n.t("file.open_folder"), &shortcuts::OPEN_FOLDER) {
             self.trigger_open_folder();
         }
+        if item(ui, self.i18n.t("file.quick_open"), &shortcuts::QUICK_OPEN) {
+            self.open_palette(PaletteMode::Files);
+        }
         self.show_recent_menu(ui);
         ui.separator();
         let editing = !self.show_welcome;
@@ -1710,7 +1817,8 @@ impl TextEditorApp {
             ShortcutAction::PrevHeading => self.step_heading(false),
             ShortcutAction::NextHeading => self.step_heading(true),
             ShortcutAction::GotoSymbol => self.open_symbol_picker(),
-            ShortcutAction::CommandPalette | ShortcutAction::QuickOpen => {}
+            ShortcutAction::CommandPalette => self.open_palette(PaletteMode::Commands),
+            ShortcutAction::QuickOpen => self.open_palette(PaletteMode::Files),
             ShortcutAction::SelectTheme(id) => self.theme = id,
             ShortcutAction::GotoDefinition => self.goto_definition(ctx, None),
             ShortcutAction::FindReferences => self.find_references(ctx, None),
@@ -3618,6 +3726,7 @@ impl eframe::App for TextEditorApp {
                 None => self.scroll_sync.reset(),
             }
         });
+        self.show_palette(&ctx);
         if let Some(action) = graph_action {
             self.apply_graph_action(&ctx, action);
         }
