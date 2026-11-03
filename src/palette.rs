@@ -3,8 +3,12 @@
 
 use std::path::PathBuf;
 
+use eframe::egui::{self, Align2, CornerRadius, Key, Modifiers, Sense, pos2, vec2};
+
 use crate::app::ShortcutAction;
-use crate::theme::ThemeId;
+use crate::file_browser::ROW_HEIGHT;
+use crate::i18n::I18n;
+use crate::theme::{self, ThemeId};
 
 /// What the palette lists.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -170,6 +174,186 @@ pub fn rank<T>(query: &str, items: &[Item<T>]) -> Vec<usize> {
         .collect();
     ranked.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
     ranked.into_iter().map(|(_, i)| i).collect()
+}
+
+/// Width of the popup.
+const WIDTH: f32 = 520.0;
+/// Rows of the list shown at once.
+const VISIBLE_ROWS: f32 = 12.0;
+const PADDING: f32 = 8.0;
+
+/// Draws the popup at the top center of the window and returns what the
+/// user asked. `status` is a dimmed line under the list ("Indexing…").
+/// Up and Down move the selection, Enter picks it, Escape or a click
+/// outside closes. `to_action` turns the picked item's payload into the
+/// action to return.
+pub fn show<T>(
+    ctx: &egui::Context,
+    state: &mut Palette,
+    items: &[Item<T>],
+    status: Option<&str>,
+    i18n: &I18n,
+    to_action: impl Fn(&T) -> PaletteAction,
+) -> Option<PaletteAction> {
+    let palette = theme::active(ctx).sidebar;
+    let ranked = rank(&state.query, items);
+    state.clamp_selection(ranked.len());
+    let mut action = None;
+
+    let field_id = egui::Id::unique("command_palette_query");
+    // Focused before it draws, so its key filter holds from the first frame.
+    if std::mem::take(&mut state.focus) {
+        ctx.memory_mut(|m| m.request_focus(field_id));
+    }
+    // Taken before the field draws, which would move its caret.
+    if ctx.memory(|m| m.has_focus(field_id)) {
+        let (up, down, enter, escape) = ctx.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::NONE, Key::ArrowUp),
+                i.consume_key(Modifiers::NONE, Key::ArrowDown),
+                i.consume_key(Modifiers::NONE, Key::Enter),
+                i.consume_key(Modifiers::NONE, Key::Escape),
+            )
+        });
+        if up {
+            state.move_selection(-1, ranked.len());
+        }
+        if down {
+            state.move_selection(1, ranked.len());
+        }
+        if enter && let Some(&index) = ranked.get(state.selected) {
+            action = Some(to_action(&items[index].payload));
+        }
+        if escape {
+            action = Some(PaletteAction::Close);
+        }
+    }
+
+    let mut frame = egui::Frame::popup(&ctx.global_style());
+    frame.fill = palette.background;
+    frame.stroke = egui::Stroke::new(1.0, palette.border);
+    let area = egui::Area::new(egui::Id::unique("command_palette"))
+        .order(egui::Order::Foreground)
+        .anchor(Align2::CENTER_TOP, vec2(0.0, 60.0))
+        .show(ctx, |ui| {
+            frame.show(ui, |ui| {
+                ui.set_width(WIDTH);
+                ui.horizontal(|ui| {
+                    if state.mode == PaletteMode::Commands {
+                        ui.label(
+                            egui::RichText::new(">")
+                                .monospace()
+                                .color(palette.icon_inactive),
+                        );
+                    }
+                    let hint = match state.mode {
+                        PaletteMode::Commands => "palette.commands_hint",
+                        PaletteMode::Files => "palette.files_hint",
+                    };
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut state.query)
+                            .id(field_id)
+                            // Up and Down pick a row instead of moving focus.
+                            .event_filter(egui::EventFilter {
+                                horizontal_arrows: true,
+                                vertical_arrows: true,
+                                ..Default::default()
+                            })
+                            .hint_text(i18n.t(hint))
+                            .desired_width(f32::INFINITY),
+                    );
+                    if field.changed() {
+                        state.selected = 0;
+                    }
+                });
+                ui.separator();
+                if ranked.is_empty() {
+                    ui.weak(i18n.t("palette.no_results"));
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height(ROW_HEIGHT * VISIBLE_ROWS)
+                        .auto_shrink([false, true])
+                        .show_rows(ui, ROW_HEIGHT, ranked.len(), |ui, rows| {
+                            for row in rows {
+                                let item = &items[ranked[row]];
+                                let selected = row == state.selected;
+                                let (rect, response) = ui.allocate_exact_size(
+                                    vec2(ui.available_width(), ROW_HEIGHT),
+                                    Sense::click(),
+                                );
+                                if selected {
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        CornerRadius::same(3),
+                                        palette.row_selected,
+                                    );
+                                } else if response.hovered() {
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        CornerRadius::same(3),
+                                        palette.row_hover,
+                                    );
+                                }
+                                let font = egui::TextStyle::Body.resolve(ui.style());
+                                let detail = truncated(
+                                    ui,
+                                    &item.detail,
+                                    font.clone(),
+                                    palette.icon_inactive,
+                                    rect.width() * 0.5,
+                                );
+                                let label = truncated(
+                                    ui,
+                                    &item.label,
+                                    font,
+                                    palette.foreground,
+                                    rect.width() - detail.size().x - 3.0 * PADDING,
+                                );
+                                let y = rect.center().y;
+                                ui.painter().galley(
+                                    pos2(rect.left() + PADDING, y - label.size().y / 2.0),
+                                    label,
+                                    palette.foreground,
+                                );
+                                ui.painter().galley(
+                                    pos2(
+                                        rect.right() - PADDING - detail.size().x,
+                                        y - detail.size().y / 2.0,
+                                    ),
+                                    detail,
+                                    palette.icon_inactive,
+                                );
+                                if selected {
+                                    ui.scroll_to_rect(rect, None);
+                                }
+                                if response.clicked() {
+                                    action = Some(to_action(&item.payload));
+                                }
+                            }
+                        });
+                }
+                if let Some(status) = status {
+                    ui.weak(status);
+                }
+            });
+        });
+    if action.is_none() && area.response.clicked_elsewhere() {
+        action = Some(PaletteAction::Close);
+    }
+    action
+}
+
+/// `text` laid out on one line, cut with `…` to fit `max_width`.
+fn truncated(
+    ui: &egui::Ui,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
+    ui.painter().layout_job(job)
 }
 
 /// How well `query` matches `text`, higher is better; `None` when it does
