@@ -19,6 +19,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Find and Replace** (**Edit → Find**, **Edit → Replace**): Toolbar above the editor with highlighted search matches, case sensitivity option, and Replace All. Also includes **Go to Line…** to jump directly to a line number.
 - **Find in Files** (**Edit → Find in Files**, `Ctrl+Shift+F`): Asynchronous background text search across the opened folder. Results are grouped by file in the bottom panel, with the match highlighted on each line; click a file header to fold it, a result to open that line, or walk the results with `Up`/`Down` and `Enter` from the search field. A **files to include** field takes comma-separated globs (`*.rs`, `src/**`). Hidden files and folders, `target`, `node_modules`, files over 2 MB, and non-UTF-8 files are ignored; results are capped at 2,000 matches.
 - **Tab context menu**: Right-click tabs for Close Tab, Close Others, Close Tabs to the Right, and Close Saved. Unsaved tabs are protected from accidental closing.
+- **Command Palette** (`Ctrl+Shift+P`) and **Quick Open** (`Ctrl+P`): a popup at the top of the window. Type part of a command name to run it, or part of a file name or path (`src/app`) to open that file from the opened folder. `Up`/`Down` pick, `Enter` runs, `Esc` closes. Also in **View → Command Palette…** and **File → Quick Open…**.
 - **Unsaved changes confirmation** when closing tabs or quitting the application.
 - **Multilingual interface** (English, Indonesian, Spanish, German, Chinese, and additional languages via JSON files). Select via **View → Interface Language**; preference is persisted across restarts. See [Adding interface languages](#adding-interface-languages).
 - **Color themes** (**View → Theme**): System (follows the OS), Light Modern, Dark Modern, Solarized Light, Solarized Dark, Ocean Dark, Mocha Dark and Eighties Dark. The theme recolors syntax highlighting and the whole interface at once, without a restart, and is remembered across restarts.
@@ -112,9 +113,9 @@ The editor opens on a **start page** with **New File**, **Open File…** and **O
 
 | Menu | Items |
 |---|---|
-| **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Open Recent, Save, Save As…, Language, Exit |
+| **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Quick Open…, Open Recent, Save, Save As…, Language, Exit |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line…, Prettify |
-| **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Theme, Language, Interface Language |
+| **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Command Palette…, Theme, Language, Interface Language |
 | **Help** | About |
 
 ### Keyboard Shortcuts
@@ -152,6 +153,8 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+H` | Replace |
 | `F3` / `Shift+F3` | Next / previous find match |
 | `Ctrl+Shift+F` | Find in Files |
+| `Ctrl+Shift+P` | Command Palette |
+| `Ctrl+P` | Quick Open (file by name) |
 | `Ctrl+G` | Go to line |
 | `Esc` | Close find bar, go-to-line bar, or Find in Files panel |
 

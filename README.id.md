@@ -19,6 +19,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Cari dan ganti** (**Edit → Cari**, **Edit → Ganti**): bar di atas editor dengan hasil yang disorot, opsi huruf besar/kecil, dan Ganti Semua. Ada juga **Ke Baris…** untuk melompat ke nomor baris.
 - **Cari di File** (**Edit → Cari di File**, `Ctrl+Shift+F`): mencari teks di seluruh folder yang sedang dibuka, di thread terpisah. Hasil dikelompokkan per file di panel bawah dengan bagian yang cocok disorot; klik header file untuk melipatnya, klik hasil untuk membuka baris itu, atau telusuri hasil dengan `Up`/`Down` dan `Enter` dari kolom pencarian. Kolom **file yang disertakan** menerima pola glob dipisah koma (`*.rs`, `src/**`). File dan folder tersembunyi, `target`, `node_modules`, file di atas 2 MB, dan file non-UTF-8 dilewati; hasil dibatasi 2000.
 - **Menu klik kanan pada tab**: Tutup Tab, Tutup Lainnya, Tutup Tab di Kanan, dan Tutup yang Tersimpan. Tab yang belum disimpan tidak ikut tertutup.
+- **Palet Perintah** (`Ctrl+Shift+P`) dan **Buka Cepat** (`Ctrl+P`): popup di bagian atas jendela. Ketik sebagian nama perintah untuk menjalankannya, atau sebagian nama atau path file (`src/app`) untuk membuka file itu dari folder yang terbuka. `Up`/`Down` memilih, `Enter` menjalankan, `Esc` menutup. Juga ada di **Tampilan → Palet Perintah…** dan **File → Buka Cepat…**.
 - **Konfirmasi perubahan belum disimpan** saat menutup tab atau keluar dari aplikasi.
 - **Multi bahasa antarmuka** (Indonesia, English, Español, Deutsch, 中文, dan bahasa lain lewat file JSON). Pilih di **Tampilan → Bahasa Antarmuka**; pilihan diingat saat aplikasi dibuka lagi. Lihat [Menambah bahasa antarmuka](#menambah-bahasa-antarmuka).
 - **Tema warna** (**Tampilan → Tema**): Sistem (ikut OS), Light Modern, Dark Modern, Solarized Light, Solarized Dark, Ocean Dark, Mocha Dark, dan Eighties Dark. Tema mewarnai ulang syntax highlighting dan seluruh antarmuka sekaligus, tanpa restart, dan diingat saat aplikasi dibuka lagi.
@@ -112,9 +113,9 @@ Editor dibuka dengan **halaman awal** berisi **File Baru**, **Buka File…**, **
 
 | Menu | Isi |
 |---|---|
-| **File** | Tab Baru, Tutup Tab, Jendela Baru, Buka File…, Buka Folder…, Buka Terbaru, Simpan, Simpan Sebagai…, Bahasa, Keluar |
+| **File** | Tab Baru, Tutup Tab, Jendela Baru, Buka File…, Buka Folder…, Buka Cepat…, Buka Terbaru, Simpan, Simpan Sebagai…, Bahasa, Keluar |
 | **Edit** | Urungkan, Ulangi, Potong, Salin, Tempel, Cari, Ganti, Cari di File, Ke Baris… |
-| **Tampilan** | Bungkus Baris, Nomor Baris, Zen Mode, Pratinjau Markdown, Tema, Bahasa, Bahasa Antarmuka |
+| **Tampilan** | Bungkus Baris, Nomor Baris, Zen Mode, Pratinjau Markdown, Palet Perintah…, Tema, Bahasa, Bahasa Antarmuka |
 | **Help** | About |
 
 ### Shortcut keyboard
@@ -146,6 +147,8 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | `Ctrl+H` | Ganti |
 | `F3` / `Shift+F3` | Hasil cari berikutnya / sebelumnya |
 | `Ctrl+Shift+F` | Cari di File |
+| `Ctrl+Shift+P` | Palet Perintah |
+| `Ctrl+P` | Buka Cepat (file berdasarkan nama) |
 | `Ctrl+G` | Ke baris |
 | `Esc` | Tutup bar cari, bar ke baris, atau panel Cari di File |
 
