@@ -5,8 +5,8 @@ Last updated 2026-11-03.
 
 ## High priority (daily use)
 
-- [ ] **Command Palette** (`Ctrl+Shift+P`) and **Quick Open** (`Ctrl+P`) — in
-  progress. Spec: `docs/superpowers/specs/2026-11-03-command-palette-design.md`,
+- [ ] **Command Palette** (`Ctrl+Shift+P`) and **Quick Open** (`Ctrl+P`) —
+  code done and tested; waiting on the hand check in the running app. Spec: `docs/superpowers/specs/2026-11-03-command-palette-design.md`,
   plan: `docs/superpowers/plans/2026-11-03-command-palette.md`.
 - [ ] **File operations in the Explorer** — right-click: New File, New Folder,
   Rename, Delete, Reveal in Folder.
@@ -38,9 +38,11 @@ Last updated 2026-11-03.
 
 ## Tech debt
 
-- [ ] **Split `src/app.rs`** (~7,000 lines) into `menu.rs`,
-  `console_panel.rs`, `status_bar.rs`, `shortcuts.rs`. Do this before the
-  next feature that touches every menu action.
+- [x] **Split `src/app.rs`** — done 2026-11-03: 7,092 → 4,812 lines;
+  `shortcuts.rs`, `menus.rs`, `status_bar.rs`, `console_panel.rs`,
+  `editor_view.rs`. Left for later: `disk.rs` (poll/reload on disk change)
+  and `git_actions.rs` (poll git, SCM actions, confirm dialogs), and
+  `update` itself (~530 lines).
 
 ## Suggested order
 
