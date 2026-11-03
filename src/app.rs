@@ -567,6 +567,29 @@ pub enum ShortcutAction {
 }
 
 impl ShortcutAction {
+    /// Opens a bar, a dialog or a panel that takes the keyboard, so the
+    /// editor must not ask for focus in the same frame.
+    pub fn takes_keyboard(self) -> bool {
+        use ShortcutAction::*;
+        matches!(
+            self,
+            Find | Replace
+                | GotoLine
+                | GotoSymbol
+                | FindInFiles
+                | ToggleConsole
+                | SourceControl
+                | GitGraph
+                | OpenFile
+                | OpenFolder
+                | SaveAs
+                | NewWindow
+                | Exit
+                | CommandPalette
+                | QuickOpen
+        )
+    }
+
     /// The key the action is bound to, as the menus print it; `None` for
     /// actions only the Command Palette offers.
     pub fn shortcut(self) -> Option<egui::KeyboardShortcut> {
@@ -1574,11 +1597,17 @@ impl TextEditorApp {
         match action {
             Some(PaletteAction::Run(action)) => {
                 self.palette.close();
+                // Commands that open a bar, a dialog or a panel take the
+                // keyboard themselves; the rest hand it back to the editor.
+                if !action.takes_keyboard() {
+                    self.editor_request.focus = true;
+                }
                 self.apply_shortcut(ctx, action);
             }
             Some(PaletteAction::Open(path)) => {
                 self.palette.close();
                 self.open_file_in_tab(path);
+                self.editor_request.focus = true;
             }
             Some(PaletteAction::Close) => {
                 self.palette.close();
@@ -3290,6 +3319,13 @@ impl eframe::App for TextEditorApp {
             self.apply_shortcut(&ctx, action);
         }
 
+        // The palette floats over every bar, so its Escape comes first.
+        if self.palette.visible
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.palette.close();
+            self.editor_request.focus = true;
+        }
         if !console_focused
             && self.goto.visible
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
