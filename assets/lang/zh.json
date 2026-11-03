@@ -145,8 +145,8 @@
   "activity.explorer": "资源管理器",
   "activity.console": "控制台",
   "console.title": "控制台",
-  "console.hide": "隐藏",
-  "console.kill": "终止",
+  "console.hide": "隐藏面板",
+  "console.kill": "终止终端",
 
   "git.branches": "分支",
   "git.branch_tooltip": "Git 分支：切换、新建、拉取、推送",

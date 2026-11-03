@@ -145,8 +145,8 @@
   "activity.explorer": "Explorer",
   "activity.console": "Konsole",
   "console.title": "KONSOLE",
-  "console.hide": "Ausblenden",
-  "console.kill": "Beenden",
+  "console.hide": "Panel ausblenden",
+  "console.kill": "Terminal beenden",
 
   "git.branches": "Branches",
   "git.branch_tooltip": "Git-Branch: wechseln, erstellen, Fetch, Pull, Push",

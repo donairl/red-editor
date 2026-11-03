@@ -145,8 +145,8 @@
   "activity.explorer": "Explorador",
   "activity.console": "Consola",
   "console.title": "CONSOLA",
-  "console.hide": "Ocultar",
-  "console.kill": "Terminar",
+  "console.hide": "Ocultar panel",
+  "console.kill": "Finalizar terminal",
 
   "git.branches": "Ramas",
   "git.branch_tooltip": "Rama de git: cambiar, crear, fetch, pull, push",

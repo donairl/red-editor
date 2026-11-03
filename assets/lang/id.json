@@ -145,8 +145,8 @@
   "activity.explorer": "Explorer",
   "activity.console": "Konsol",
   "console.title": "KONSOL",
-  "console.hide": "Sembunyikan",
-  "console.kill": "Hentikan",
+  "console.hide": "Sembunyikan panel",
+  "console.kill": "Hentikan terminal",
 
   "git.branches": "Branch",
   "git.branch_tooltip": "Branch git: ganti, buat, fetch, pull, push",

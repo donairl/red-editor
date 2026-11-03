@@ -2193,8 +2193,8 @@ impl TextEditorApp {
                 ui.horizontal(|ui| {
                     ui.strong(self.i18n.t("console.title"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        hide = ui.small_button(self.i18n.t("console.hide")).clicked();
-                        kill = ui.small_button(self.i18n.t("console.kill")).clicked();
+                        hide = console_icon_button(ui, "console_hide", self.i18n.t("console.hide"), paint_hide_icon);
+                        kill = console_icon_button(ui, "console_kill", self.i18n.t("console.kill"), paint_kill_icon);
                     });
                 });
                 console.show(ui);
@@ -2531,6 +2531,79 @@ impl TextEditorApp {
 /// `HighlighterLayouter::frame_job`), so this only bounds how long that pass can
 /// take, not how long the UI can freeze.
 const HIGHLIGHT_SIZE_LIMIT: usize = 1024 * 1024;
+
+/// A painted icon button in the Console title row, with `tooltip` on hover.
+/// Returns whether it was clicked.
+fn console_icon_button(
+    ui: &mut egui::Ui,
+    id: &str,
+    tooltip: &str,
+    paint: fn(&egui::Painter, egui::Pos2, egui::Color32),
+) -> bool {
+    let palette = theme::active(ui.ctx()).sidebar;
+    let size = egui::Vec2::splat(file_browser::ACTION_SIZE);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let response = ui
+        .interact(rect, egui::Id::unique(id), egui::Sense::click())
+        .on_hover_text(tooltip);
+    let color = if response.hovered() {
+        ui.painter()
+            .rect_filled(rect.shrink(2.0), egui::CornerRadius::same(4), palette.row_hover);
+        palette.icon_active
+    } else {
+        palette.icon_inactive
+    };
+    paint(ui.painter(), rect.center(), color);
+    response.clicked()
+}
+
+/// A chevron pointing down: tuck the panel away.
+fn paint_hide_icon(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.4, color);
+    painter.line(
+        vec![
+            center + egui::vec2(-4.5, -2.0),
+            center + egui::vec2(0.0, 2.5),
+            center + egui::vec2(4.5, -2.0),
+        ],
+        stroke,
+    );
+}
+
+/// A trash can: end the shell.
+fn paint_kill_icon(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.2, color);
+    let lid_y = center.y - 3.5;
+    // Lid and its handle.
+    painter.line_segment([egui::pos2(center.x - 5.0, lid_y), egui::pos2(center.x + 5.0, lid_y)], stroke);
+    painter.line(
+        vec![
+            egui::pos2(center.x - 1.5, lid_y),
+            egui::pos2(center.x - 1.5, lid_y - 1.5),
+            egui::pos2(center.x + 1.5, lid_y - 1.5),
+            egui::pos2(center.x + 1.5, lid_y),
+        ],
+        stroke,
+    );
+    // Body, narrowing slightly to the bottom.
+    let bottom = center.y + 5.0;
+    painter.line(
+        vec![
+            egui::pos2(center.x - 3.5, lid_y),
+            egui::pos2(center.x - 3.0, bottom),
+            egui::pos2(center.x + 3.0, bottom),
+            egui::pos2(center.x + 3.5, lid_y),
+        ],
+        stroke,
+    );
+    // Two ribs.
+    for dx in [-1.0, 1.0] {
+        painter.line_segment(
+            [egui::pos2(center.x + dx, lid_y + 2.0), egui::pos2(center.x + dx, bottom - 1.5)],
+            stroke,
+        );
+    }
+}
 
 /// One File > Open Recent row: the entry's name, then its folder dimmed,
 /// fitted into egui's menu width. A name too long for it is cut with `…`,

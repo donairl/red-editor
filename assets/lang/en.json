@@ -145,8 +145,8 @@
   "activity.explorer": "Explorer",
   "activity.console": "Console",
   "console.title": "CONSOLE",
-  "console.hide": "Hide",
-  "console.kill": "Kill",
+  "console.hide": "Hide panel",
+  "console.kill": "Kill terminal",
 
   "git.branches": "Branches",
   "git.branch_tooltip": "Git branch: switch, create, fetch, pull, push",
