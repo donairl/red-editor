@@ -15,6 +15,7 @@ pub enum PaletteMode {
     Files,
 }
 
+/// State of the Command Palette popup.
 #[derive(Debug, Default)]
 pub struct Palette {
     pub visible: bool,
@@ -42,14 +43,14 @@ impl Palette {
         };
     }
 
+    /// Hides the popup.
     pub fn close(&mut self) {
         self.visible = false;
     }
 
     /// Moves the selection by `delta` rows within `count` rows, no wrap.
     fn move_selection(&mut self, delta: isize, count: usize) {
-        let last = count.saturating_sub(1);
-        self.selected = (self.selected as isize + delta).clamp(0, last as isize) as usize;
+        self.selected = self.selected.saturating_add_signed(delta).min(count.saturating_sub(1));
     }
 
     fn clamp_selection(&mut self, count: usize) {
@@ -72,18 +73,22 @@ pub struct Item<T> {
 /// What the user asked of the palette.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaletteAction {
+    /// Run this command.
     Run(ShortcutAction),
+    /// Open this file in a tab.
     Open(PathBuf),
+    /// Close the popup, nothing picked.
     Close,
 }
 
 /// Indices of the items matching `query`, best first; ties keep their
 /// original order.
 pub fn rank<T>(query: &str, items: &[Item<T>]) -> Vec<usize> {
+    let query: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
     let mut ranked: Vec<(u32, usize)> = items
         .iter()
         .enumerate()
-        .filter_map(|(i, item)| score(query, &item.search).map(|s| (s, i)))
+        .filter_map(|(i, item)| score_chars(&query, &item.search).map(|s| (s, i)))
         .collect();
     ranked.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
     ranked.into_iter().map(|(_, i)| i).collect()
@@ -101,32 +106,37 @@ pub fn rank<T>(query: &str, items: &[Item<T>]) -> Vec<usize> {
 /// `tc` prefers "Toggle Console" to "Watch".
 pub fn score(query: &str, text: &str) -> Option<u32> {
     let query: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    score_chars(&query, text)
+}
+
+/// `score` with the query already lowercased into chars.
+fn score_chars(query: &[char], text: &str) -> Option<u32> {
     if query.is_empty() {
         return Some(0);
     }
-    let text: Vec<char> = text.chars().flat_map(char::to_lowercase).collect();
     let mut score: i64 = 0;
     let mut next = 0;
     let mut previous: Option<usize> = None;
-    for (at, &c) in text.iter().enumerate() {
+    let mut prev_char: Option<char> = None;
+    for (at, c) in text.chars().flat_map(char::to_lowercase).enumerate() {
         if next == query.len() {
             break;
         }
-        if c != query[next] {
-            continue;
+        if c == query[next] {
+            let word_start = prev_char.is_none_or(|p| matches!(p, '/' | '\\' | '_' | '-' | '.' | ' '));
+            let adjacent = previous.is_some_and(|p| p + 1 == at);
+            score += if word_start {
+                3
+            } else if adjacent {
+                2
+            } else {
+                let skipped = previous.map_or(0, |p| at - p - 1) as i64;
+                1 - skipped
+            };
+            previous = Some(at);
+            next += 1;
         }
-        let word_start = at == 0 || matches!(text[at - 1], '/' | '\\' | '_' | '-' | '.' | ' ');
-        let adjacent = previous.is_some_and(|p| p + 1 == at);
-        score += if word_start {
-            3
-        } else if adjacent {
-            2
-        } else {
-            let skipped = previous.map_or(0, |p| at - p - 1) as i64;
-            1 - skipped
-        };
-        previous = Some(at);
-        next += 1;
+        prev_char = Some(c);
     }
     (next == query.len()).then(|| score.max(0) as u32)
 }
@@ -162,6 +172,16 @@ mod tests {
     #[test]
     fn test_score_ignores_case() {
         assert_eq!(score("TC", "toggle console"), score("tc", "Toggle Console"));
+    }
+
+    #[test]
+    fn test_score_lowercases_non_ascii() {
+        assert_eq!(score("é", "Éclair"), Some(3));
+    }
+
+    #[test]
+    fn test_query_longer_than_text_does_not_match() {
+        assert_eq!(score("toggle console x", "Toggle Console"), None);
     }
 
     #[test]
