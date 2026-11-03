@@ -23,6 +23,7 @@ mod line_diff;
 mod line_ops;
 mod markdown_preview;
 mod modals;
+mod palette;
 mod prettify;
 mod process;
 mod search;

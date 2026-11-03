@@ -90,8 +90,9 @@ and `PathBuf` items in Files mode.
   label, so the list keeps its original order.
 - Score, higher is better: +3 for a query char that matches at the start of
   the label or right after `/`, `\`, `_`, `-`, `.` or a space; +2 for a char
-  adjacent to the previous match; +1 otherwise. Minus 1 per label char
-  skipped between matches, floored at 0.
+  adjacent to the previous match; +1 otherwise, minus one per label char
+  skipped since the previous match; a jump to a word start costs nothing.
+  Total floored at 0.
 - The list is the items with `Some` score, sorted by score descending, then
   by their original index (stable sort), so ties keep menu or index order.
 
