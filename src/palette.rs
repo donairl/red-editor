@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Align2, CornerRadius, Key, Modifiers, Sense, pos2, vec2};
 
-use crate::app::ShortcutAction;
+use crate::shortcuts::ShortcutAction;
 use crate::file_browser::ROW_HEIGHT;
 use crate::i18n::I18n;
 use crate::theme::{self, ThemeId};
@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn test_every_keyboard_action_is_a_command() {
-        use crate::app::consume_shortcut;
+        use crate::shortcuts::consume_shortcut;
         use eframe::egui::{Event, InputOptions, InputState, Key, Modifiers, RawInput};
         // Drive consume_shortcut with every key/modifier combination it
         // knows, and check each action it produces is in the table.

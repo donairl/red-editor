@@ -3,7 +3,7 @@
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, RichText, Stroke, pos2, vec2};
 
-use crate::app::shortcuts;
+use crate::shortcuts;
 use crate::i18n::I18n;
 use crate::theme;
 

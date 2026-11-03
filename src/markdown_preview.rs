@@ -11,7 +11,7 @@ use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
-use crate::app::shortcuts;
+use crate::shortcuts;
 use crate::i18n::I18n;
 
 /// Documents past this size are not rendered. The viewer is immediate-mode, so
