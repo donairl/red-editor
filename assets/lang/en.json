@@ -259,5 +259,13 @@
   "search.expand_all": "Expand all",
   "search.found_so_far": "Searching… {count} results",
   "search.include_hint": "Files to include (e.g. *.rs, src/**)",
-  "search.include_tooltip": "Comma-separated globs. Without `/` a pattern matches the file name; with `/` the path relative to the folder. Empty means every file."
+  "search.include_tooltip": "Comma-separated globs. Without `/` a pattern matches the file name; with `/` the path relative to the folder. Empty means every file.",
+  "view.git_log": "Git Log",
+  "git_log.title": "GIT LOG",
+  "git_log.counts": "{total} commands, {failed} failed",
+  "git_log.errors_only": "Errors only",
+  "git_log.copy": "Copy",
+  "git_log.clear": "Clear",
+  "git_log.hide": "Hide",
+  "git_log.empty": "No git commands yet."
 }

@@ -259,5 +259,13 @@
   "search.expand_all": "Expandir todo",
   "search.found_so_far": "Buscando… {count} resultados",
   "search.include_hint": "Archivos a incluir (p. ej. *.rs, src/**)",
-  "search.include_tooltip": "Globs separados por comas. Sin `/` el patrón coincide con el nombre del archivo; con `/` con la ruta relativa a la carpeta. Vacío = todos los archivos."
+  "search.include_tooltip": "Globs separados por comas. Sin `/` el patrón coincide con el nombre del archivo; con `/` con la ruta relativa a la carpeta. Vacío = todos los archivos.",
+  "view.git_log": "Registro de Git",
+  "git_log.title": "REGISTRO DE GIT",
+  "git_log.counts": "{total} comandos, {failed} fallidos",
+  "git_log.errors_only": "Solo errores",
+  "git_log.copy": "Copiar",
+  "git_log.clear": "Limpiar",
+  "git_log.hide": "Ocultar",
+  "git_log.empty": "Aún no hay comandos de git."
 }

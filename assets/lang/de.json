@@ -259,5 +259,13 @@
   "search.expand_all": "Alle ausklappen",
   "search.found_so_far": "Suche… {count} Treffer",
   "search.include_hint": "Einzuschließende Dateien (z. B. *.rs, src/**)",
-  "search.include_tooltip": "Kommagetrennte Globs. Ohne `/` passt ein Muster auf den Dateinamen, mit `/` auf den Pfad relativ zum Ordner. Leer = alle Dateien."
+  "search.include_tooltip": "Kommagetrennte Globs. Ohne `/` passt ein Muster auf den Dateinamen, mit `/` auf den Pfad relativ zum Ordner. Leer = alle Dateien.",
+  "view.git_log": "Git-Protokoll",
+  "git_log.title": "GIT-PROTOKOLL",
+  "git_log.counts": "{total} Befehle, {failed} fehlgeschlagen",
+  "git_log.errors_only": "Nur Fehler",
+  "git_log.copy": "Kopieren",
+  "git_log.clear": "Leeren",
+  "git_log.hide": "Ausblenden",
+  "git_log.empty": "Noch keine Git-Befehle."
 }

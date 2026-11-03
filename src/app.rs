@@ -29,6 +29,7 @@ use crate::search::{self, SearchAction, SearchState};
 use crate::source_control::{self, DiffAction, ScmAction, ScmUi};
 use crate::symbols::{self, PickerAction, SymbolPicker};
 use crate::tab_bar;
+use crate::git_log::GitLogPanel;
 use crate::terminal::{self, Terminal};
 use crate::theme::{self, ThemeId};
 use crate::welcome::{self, WelcomeAction};
@@ -306,6 +307,10 @@ pub struct TextEditorApp {
     /// The shell of the Console panel, started the first time it is shown.
     /// Hiding the panel keeps it running.
     pub console: Option<Terminal>,
+    /// Show the Git Log panel below the editor: every git command the
+    /// editor ran, with its output.
+    pub show_git_log: bool,
+    pub git_log: GitLogPanel,
     /// Recently opened files and folders, for File > Open Recent.
     pub history: History,
     /// The color theme picked in View > Theme; `System` follows the OS.
@@ -382,6 +387,8 @@ impl Default for TextEditorApp {
             menu_focus: None,
             show_console: false,
             console: None,
+            show_git_log: false,
+            git_log: GitLogPanel::default(),
             history: History::default(),
             theme: ThemeId::System,
             git: GitState::default(),
@@ -803,6 +810,13 @@ impl TextEditorApp {
             .clicked()
         {
             self.toggle_console(&ctx);
+            ui.close();
+        }
+        if ui
+            .add(egui::Button::new(self.i18n.t("view.git_log")).selected(self.show_git_log))
+            .clicked()
+        {
+            self.show_git_log = !self.show_git_log;
             ui.close();
         }
         self.show_theme_menu(ui);
@@ -3336,6 +3350,11 @@ impl eframe::App for TextEditorApp {
         // after the side panels so it does not run under them.
         if self.show_console && !self.zen_mode {
             self.show_console_panel(ui);
+        }
+        // Git Log panel, above the Console when both are shown.
+        if self.show_git_log && !self.zen_mode && self.git_log.show(ui, &self.i18n) {
+            self.show_git_log = false;
+            self.editor_request.focus = true;
         }
 
         // A file's git diff, right of the editor, in place of the Markdown

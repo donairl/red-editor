@@ -259,5 +259,13 @@
   "search.expand_all": "Buka semua",
   "search.found_so_far": "Mencari… {count} hasil",
   "search.include_hint": "File yang disertakan (mis. *.rs, src/**)",
-  "search.include_tooltip": "Pola glob dipisah koma. Tanpa `/` cocok dengan nama file; dengan `/` cocok dengan path relatif folder. Kosong = semua file."
+  "search.include_tooltip": "Pola glob dipisah koma. Tanpa `/` cocok dengan nama file; dengan `/` cocok dengan path relatif folder. Kosong = semua file.",
+  "view.git_log": "Log Git",
+  "git_log.title": "LOG GIT",
+  "git_log.counts": "{total} perintah, {failed} gagal",
+  "git_log.errors_only": "Hanya error",
+  "git_log.copy": "Salin",
+  "git_log.clear": "Bersihkan",
+  "git_log.hide": "Sembunyikan",
+  "git_log.empty": "Belum ada perintah git."
 }

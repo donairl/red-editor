@@ -11,6 +11,7 @@ mod embedded_sql;
 mod file_browser;
 mod git;
 mod git_graph;
+mod git_log;
 mod git_worker;
 mod find;
 mod gutter;

@@ -7,8 +7,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use crate::git_log;
 use crate::process::{self, RunError};
 
 /// How long a local command (status, add, commit, ...) may run.
@@ -552,11 +553,22 @@ fn run(dir: &Path, args: &[&str], stdin: Option<&str>, timeout: Duration) -> Res
         // English messages, so failures can be recognized.
         .env("LC_ALL", "C")
         .env("LANGUAGE", "C");
-    let output = process::run(command, stdin.map(str::as_bytes), timeout).map_err(|e| match e {
+    let started = Instant::now();
+    let result = process::run(command, stdin.map(str::as_bytes), timeout).map_err(|e| match e {
         RunError::NotInstalled => GitError::NotInstalled,
         RunError::Io(e) => GitError::Failed(format!("git: {e}")),
         RunError::TimedOut => GitError::Failed("git timed out".to_owned()),
-    })?;
+    });
+    git_log::record(git_log::Record {
+        started,
+        dir: dir.to_path_buf(),
+        args,
+        exit: result.as_ref().ok().and_then(|o| o.status.code()),
+        failure: result.as_ref().err().map(GitError::to_string),
+        stdout: result.as_ref().map_or(&[][..], |o| &o.stdout),
+        stderr: result.as_ref().map_or(&[][..], |o| &o.stderr),
+    });
+    let output = result?;
     if !output.status.success() {
         return Err(classify(&String::from_utf8_lossy(&output.stderr)));
     }
@@ -1151,6 +1163,26 @@ mod tests {
         for dir in [first.root(), second.root(), &bare] {
             let _ = fs::remove_dir_all(dir);
         }
+    }
+
+    #[test]
+    fn test_every_command_is_logged_with_its_error() {
+        let dir = std::env::temp_dir().join("rred_git_log_outside");
+        let _ = std::fs::create_dir_all(&dir);
+        if run(&dir, &["rev-parse", "--verify", "no-such-ref-for-log"], None, LOCAL_TIMEOUT)
+            == Err(GitError::NotInstalled)
+        {
+            return;
+        }
+        let entry = git_log::entries()
+            .into_iter()
+            .rev()
+            .find(|e| e.dir == dir && e.args.last().is_some_and(|a| a == "no-such-ref-for-log"))
+            .expect("the command is in the log");
+        assert!(!entry.ok());
+        assert_ne!(entry.exit, Some(0));
+        assert!(!entry.stderr.is_empty(), "git's full stderr is kept");
+        assert_eq!(entry.command_line(), "git rev-parse --verify no-such-ref-for-log");
     }
 
     #[test]

@@ -259,5 +259,13 @@
   "search.expand_all": "全部展开",
   "search.found_so_far": "正在搜索… {count} 个结果",
   "search.include_hint": "要包含的文件（如 *.rs, src/**）",
-  "search.include_tooltip": "逗号分隔的 glob。不含 `/` 匹配文件名；含 `/` 匹配相对文件夹的路径。留空表示所有文件。"
+  "search.include_tooltip": "逗号分隔的 glob。不含 `/` 匹配文件名；含 `/` 匹配相对文件夹的路径。留空表示所有文件。",
+  "view.git_log": "Git 日志",
+  "git_log.title": "GIT 日志",
+  "git_log.counts": "{total} 条命令，{failed} 条失败",
+  "git_log.errors_only": "仅错误",
+  "git_log.copy": "复制",
+  "git_log.clear": "清空",
+  "git_log.hide": "隐藏",
+  "git_log.empty": "尚无 git 命令。"
 }
