@@ -29,6 +29,7 @@ mod prettify;
 mod process;
 mod search;
 mod shortcuts;
+mod status_bar;
 mod source_control;
 mod symbols;
 mod tab_bar;
