@@ -28,6 +28,7 @@ use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
 use crate::prettify;
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::search::{self, SearchAction, SearchState};
+use crate::session::{SESSION_KEY, Session};
 use crate::source_control::{self, DiffAction, ScmAction, ScmUi};
 use crate::symbols::{self, PickerAction, SymbolPicker};
 use crate::tab_bar;
@@ -450,13 +451,15 @@ impl TextEditorApp {
             );
             (message, true)
         });
-        Self {
+        let mut app = Self {
             i18n,
             status_message,
             history: saved_history(cc.storage),
             theme: saved_theme(cc.storage),
             ..Default::default()
-        }
+        };
+        saved_session(cc.storage).restore(&mut app);
+        app
     }
 
     pub fn active_tab(&self) -> &DocumentTab {
@@ -1921,6 +1924,15 @@ fn saved_history(storage: Option<&dyn eframe::Storage>) -> History {
         .unwrap_or_default()
 }
 
+/// The folder and files open when the editor last quit; empty on the first
+/// run.
+fn saved_session(storage: Option<&dyn eframe::Storage>) -> Session {
+    storage
+        .and_then(|storage| storage.get_string(SESSION_KEY))
+        .map(|text| Session::from_storage(&text))
+        .unwrap_or_default()
+}
+
 /// The theme eframe kept from the last run; `System` on the first.
 fn saved_theme(storage: Option<&dyn eframe::Storage>) -> ThemeId {
     storage
@@ -1955,6 +1967,7 @@ impl eframe::App for TextEditorApp {
         storage.set_string(UI_LANGUAGE_KEY, self.i18n.code().to_owned());
         storage.set_string(HISTORY_KEY, self.history.to_storage());
         storage.set_string(THEME_KEY, self.theme.slug().to_owned());
+        storage.set_string(SESSION_KEY, Session::from_app(self).to_storage());
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -4395,6 +4408,27 @@ mod tests {
         assert!(eframe::Storage::get_string(&storage, super::HISTORY_KEY).is_some());
         assert_eq!(saved_history(Some(&storage)), app.history);
         assert_eq!(saved_history(None), History::default());
+    }
+
+    #[test]
+    fn test_session_is_saved_and_restored() {
+        let dir = std::env::temp_dir().join("rred_test_app_session");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main() {}").unwrap();
+        let mut app = TextEditorApp::default();
+        app.open_folder(dir.clone());
+        app.open_file_in_tab(file.clone());
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        assert!(eframe::Storage::get_string(&storage, SESSION_KEY).is_some());
+
+        let session = saved_session(Some(&storage));
+        assert_eq!(session.folder.as_ref(), Some(&dir));
+        assert_eq!(session.tabs, [file]);
+        assert_eq!(saved_session(None), Session::default());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

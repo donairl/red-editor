@@ -14,6 +14,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Line numbers** that can be toggled on or off (**View → Line Numbers**). The active line number is highlighted.
 - **Line bookmarks**: right-click a line in the editor and pick **Add Bookmark** (or **Remove Bookmark**). Bookmarked lines get a marker in the gutter and follow their line as you edit. A **Bookmarked: N** badge in the status bar opens the list of bookmarked lines; click one to jump to it. Bookmarks last for the session.
 - **Open Recent** (**File → Open Recent**): the last 20 files and folders you opened, newest first, kept across restarts. Click one to reopen it. If it no longer exists, the status bar says so and the entry is removed. **Clear Recently Opened** empties the list.
+- **Restore session**: the folder and the saved files open when you quit are reopened at the next start, with the same tab active. Untitled tabs are not kept; files that no longer exist are skipped.
 - **Word wrap** that can be toggled on or off (**View → Word Wrap**). When disabled, long lines scroll horizontally.
 - **VS Code-style Explorer and Activity Bar**: Open folders, browse tree hierarchy, click files to open in tabs. Includes **Refresh** and **Collapse All** actions in the folder header.
 - **Find and Replace** (**Edit → Find**, **Edit → Replace**): Toolbar above the editor with highlighted search matches, case sensitivity option, and Replace All. Also includes **Go to Line…** to jump directly to a line number.

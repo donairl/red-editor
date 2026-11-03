@@ -10,12 +10,11 @@ Last updated 2026-11-03.
   plan: `docs/superpowers/plans/2026-11-03-command-palette.md`.
 - [ ] **File operations in the Explorer** — right-click: New File, New Folder,
   Rename, Delete, Reveal in Folder.
-- [ ] **Restore session** — reopen the tabs, folder and caret positions from
-  the last run. `History` and eframe `persistence` already exist; save the
-  tab list.
-- [ ] **Reload when a file changes on disk** — `DiskStamp` exists; add a
-  watcher (`notify` crate) or a poll on focus, then a "file changed, reload?"
-  prompt.
+- [x] **Restore session** — done 2026-11-03 (`src/session.rs`): folder,
+  saved tabs and the active tab. Later: caret and scroll position per tab.
+- [x] **Reload when a file changes on disk** — already there:
+  `check_files_on_disk` polls on focus and every few seconds, reloads clean
+  tabs and flags dirty ones with a conflict prompt.
 
 ## Editing experience
 
