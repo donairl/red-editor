@@ -504,6 +504,8 @@ pub mod shortcuts {
     pub const GOTO_DEFINITION: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F12);
     pub const FIND_REFERENCES: KeyboardShortcut =
         KeyboardShortcut::new(Modifiers::SHIFT, Key::F12);
+    pub const COMMAND_PALETTE: KeyboardShortcut = cmd_shift(Key::P);
+    pub const QUICK_OPEN: KeyboardShortcut = cmd(Key::P);
     // Shown in the Edit menu only: the focused text editor handles these
     // keys itself.
     pub const UNDO: KeyboardShortcut = cmd(Key::Z);
@@ -514,7 +516,7 @@ pub mod shortcuts {
 }
 
 /// What a keyboard shortcut asks the editor to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutAction {
     NewTab,
     NewWindow,
@@ -552,11 +554,64 @@ pub enum ShortcutAction {
     DeleteLine,
     ToggleComment,
     SelectNextMatch,
+    /// Open the Command Palette listing every command.
+    CommandPalette,
+    /// Open the Command Palette listing the folder's files.
+    QuickOpen,
+    /// Switch to this color theme (a Command Palette entry; no key).
+    SelectTheme(ThemeId),
 }
 
 impl ShortcutAction {
     /// Acts on the editor, which the Git Graph and the start page hide.
-    fn needs_editor(self) -> bool {
+    /// The key the action is bound to, as the menus print it; `None` for
+    /// actions only the Command Palette offers.
+    pub fn shortcut(self) -> Option<egui::KeyboardShortcut> {
+        use ShortcutAction::*;
+        Some(match self {
+            NewTab => shortcuts::NEW_TAB,
+            NewWindow => shortcuts::NEW_WINDOW,
+            CloseTab => shortcuts::CLOSE_TAB,
+            OpenFile => shortcuts::OPEN_FILE,
+            OpenFolder => shortcuts::OPEN_FOLDER,
+            Save => shortcuts::SAVE,
+            SaveAs => shortcuts::SAVE_AS,
+            Exit => shortcuts::EXIT,
+            ToggleSidebar => shortcuts::TOGGLE_SIDEBAR,
+            SourceControl => shortcuts::SOURCE_CONTROL,
+            Blame => shortcuts::BLAME,
+            GitGraph => shortcuts::GIT_GRAPH,
+            NextTab => shortcuts::NEXT_TAB,
+            PrevTab => shortcuts::PREV_TAB,
+            GotoLine => shortcuts::GOTO_LINE,
+            Prettify => shortcuts::PRETTIFY,
+            ZenMode => shortcuts::ZEN_MODE,
+            MarkdownPreview => shortcuts::MARKDOWN_PREVIEW,
+            ToggleConsole => shortcuts::TOGGLE_CONSOLE,
+            FindInFiles => shortcuts::FIND_IN_FILES,
+            Find => shortcuts::FIND,
+            Replace => shortcuts::REPLACE,
+            FindNext => shortcuts::FIND_NEXT,
+            FindPrev => shortcuts::FIND_PREV,
+            PrevHeading => shortcuts::PREV_HEADING,
+            NextHeading => shortcuts::NEXT_HEADING,
+            GotoSymbol => shortcuts::GOTO_SYMBOL,
+            GotoDefinition => shortcuts::GOTO_DEFINITION,
+            FindReferences => shortcuts::FIND_REFERENCES,
+            MoveLineUp => shortcuts::MOVE_LINE_UP,
+            MoveLineDown => shortcuts::MOVE_LINE_DOWN,
+            CopyLineUp => shortcuts::COPY_LINE_UP,
+            CopyLineDown => shortcuts::COPY_LINE_DOWN,
+            DeleteLine => shortcuts::DELETE_LINE,
+            ToggleComment => shortcuts::TOGGLE_COMMENT,
+            SelectNextMatch => shortcuts::SELECT_NEXT_MATCH,
+            CommandPalette => shortcuts::COMMAND_PALETTE,
+            QuickOpen => shortcuts::QUICK_OPEN,
+            SelectTheme(_) => return None,
+        })
+    }
+
+    pub fn needs_editor(self) -> bool {
         use ShortcutAction::*;
         matches!(
             self,
@@ -586,6 +641,7 @@ impl ShortcutAction {
 pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> {
     use ShortcutAction::*;
     [
+        (shortcuts::COMMAND_PALETTE, CommandPalette),
         (shortcuts::FIND_PREV, FindPrev),
         (shortcuts::FIND_REFERENCES, FindReferences),
         (shortcuts::FIND_NEXT, FindNext),
@@ -623,6 +679,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (shortcuts::REPLACE, Replace),
         (shortcuts::GOTO_SYMBOL, GotoSymbol),
         (shortcuts::GOTO_DEFINITION, GotoDefinition),
+        (shortcuts::QUICK_OPEN, QuickOpen),
     ]
     .into_iter()
     .find(|(shortcut, _)| input.consume_shortcut(shortcut))
@@ -1653,6 +1710,8 @@ impl TextEditorApp {
             ShortcutAction::PrevHeading => self.step_heading(false),
             ShortcutAction::NextHeading => self.step_heading(true),
             ShortcutAction::GotoSymbol => self.open_symbol_picker(),
+            ShortcutAction::CommandPalette | ShortcutAction::QuickOpen => {}
+            ShortcutAction::SelectTheme(id) => self.theme = id,
             ShortcutAction::GotoDefinition => self.goto_definition(ctx, None),
             ShortcutAction::FindReferences => self.find_references(ctx, None),
             ShortcutAction::MoveLineUp => {

@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use crate::app::ShortcutAction;
+use crate::theme::ThemeId;
 
 /// What the palette lists.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -80,6 +81,65 @@ pub enum PaletteAction {
     /// Close the popup, nothing picked.
     Close,
 }
+
+/// One command the palette can run.
+pub struct Command {
+    /// Translation key of the label. `cmd.theme` takes a `{name}`.
+    pub key: &'static str,
+    pub action: ShortcutAction,
+}
+
+const fn command(key: &'static str, action: ShortcutAction) -> Command {
+    Command { key, action }
+}
+
+/// Every command, in menu order: File, Edit, View, Git, then the themes.
+pub const COMMANDS: &[Command] = &[
+    command("file.new_tab", ShortcutAction::NewTab),
+    command("file.new_window", ShortcutAction::NewWindow),
+    command("file.close_tab", ShortcutAction::CloseTab),
+    command("file.open_file", ShortcutAction::OpenFile),
+    command("file.open_folder", ShortcutAction::OpenFolder),
+    command("file.save", ShortcutAction::Save),
+    command("file.save_as", ShortcutAction::SaveAs),
+    command("file.exit", ShortcutAction::Exit),
+    command("edit.find", ShortcutAction::Find),
+    command("edit.replace", ShortcutAction::Replace),
+    command("cmd.find_next", ShortcutAction::FindNext),
+    command("cmd.find_prev", ShortcutAction::FindPrev),
+    command("edit.find_in_files", ShortcutAction::FindInFiles),
+    command("edit.goto_line", ShortcutAction::GotoLine),
+    command("edit.goto_symbol", ShortcutAction::GotoSymbol),
+    command("edit.goto_definition", ShortcutAction::GotoDefinition),
+    command("edit.find_references", ShortcutAction::FindReferences),
+    command("edit.prettify", ShortcutAction::Prettify),
+    command("edit.move_line_up", ShortcutAction::MoveLineUp),
+    command("edit.move_line_down", ShortcutAction::MoveLineDown),
+    command("edit.copy_line_up", ShortcutAction::CopyLineUp),
+    command("edit.copy_line_down", ShortcutAction::CopyLineDown),
+    command("edit.delete_line", ShortcutAction::DeleteLine),
+    command("edit.toggle_comment", ShortcutAction::ToggleComment),
+    command("edit.select_next_match", ShortcutAction::SelectNextMatch),
+    command("cmd.prev_heading", ShortcutAction::PrevHeading),
+    command("cmd.next_heading", ShortcutAction::NextHeading),
+    command("cmd.toggle_sidebar", ShortcutAction::ToggleSidebar),
+    command("cmd.next_tab", ShortcutAction::NextTab),
+    command("cmd.prev_tab", ShortcutAction::PrevTab),
+    command("view.zen_mode", ShortcutAction::ZenMode),
+    command("view.markdown_preview", ShortcutAction::MarkdownPreview),
+    command("view.console", ShortcutAction::ToggleConsole),
+    command("view.source_control", ShortcutAction::SourceControl),
+    command("view.blame", ShortcutAction::Blame),
+    command("view.git_graph", ShortcutAction::GitGraph),
+    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::System)),
+    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::LightModern)),
+    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::DarkModern)),
+    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::SolarizedLight)),
+    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::SolarizedDark)),
+    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::OceanDark)),
+    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::MochaDark)),
+    command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::EightiesDark)),
+];
 
 /// Indices of the items matching `query`, best first; ties keep their
 /// original order.
@@ -252,5 +312,74 @@ mod tests {
         assert_eq!(palette.selected, 1);
         palette.clamp_selection(0);
         assert_eq!(palette.selected, 0);
+    }
+
+    #[test]
+    fn test_commands_are_unique_and_leave_out_the_palette_itself() {
+        let mut seen = std::collections::HashSet::new();
+        for command in COMMANDS {
+            assert!(seen.insert(command.action), "duplicate {:?}", command.action);
+            assert!(
+                !matches!(
+                    command.action,
+                    ShortcutAction::CommandPalette | ShortcutAction::QuickOpen
+                ),
+                "{:?} must not list itself",
+                command.action
+            );
+        }
+    }
+
+    #[test]
+    fn test_every_command_label_is_translated() {
+        let i18n = crate::i18n::I18n::builtin();
+        for command in COMMANDS {
+            assert_ne!(i18n.t(command.key), command.key, "missing key {}", command.key);
+        }
+    }
+
+    #[test]
+    fn test_every_keyboard_action_is_a_command() {
+        use crate::app::consume_shortcut;
+        use eframe::egui::{Event, InputOptions, InputState, Key, Modifiers, RawInput};
+        // Drive consume_shortcut with every key/modifier combination it
+        // knows, and check each action it produces is in the table.
+        let listed: std::collections::HashSet<ShortcutAction> =
+            COMMANDS.iter().map(|c| c.action).collect();
+        let keys = [
+            Key::N, Key::W, Key::O, Key::S, Key::Q, Key::B, Key::G, Key::Tab, Key::F,
+            Key::I, Key::F11, Key::V, Key::Backtick, Key::H, Key::F3, Key::ArrowUp,
+            Key::ArrowDown, Key::K, Key::Slash, Key::D, Key::R, Key::F12, Key::P,
+        ];
+        let modifiers = [
+            Modifiers::NONE,
+            Modifiers::SHIFT,
+            Modifiers::ALT,
+            Modifiers::COMMAND,
+            Modifiers::COMMAND.plus(Modifiers::SHIFT),
+            Modifiers::COMMAND.plus(Modifiers::ALT),
+            Modifiers::SHIFT.plus(Modifiers::ALT),
+        ];
+        for key in keys {
+            for modifiers in modifiers {
+                let raw = RawInput {
+                    events: vec![Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                };
+                let mut input =
+                    InputState::default().begin_pass(raw, false, 1.0, InputOptions::default());
+                if let Some(action) = consume_shortcut(&mut input)
+                    && !matches!(action, ShortcutAction::CommandPalette | ShortcutAction::QuickOpen)
+                {
+                    assert!(listed.contains(&action), "{action:?} is not in COMMANDS");
+                }
+            }
+        }
     }
 }
