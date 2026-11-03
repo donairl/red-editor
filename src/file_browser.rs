@@ -311,6 +311,17 @@ impl Explorer {
         !self.query.trim().is_empty()
     }
 
+    /// Every file under the root found so far, and whether the walk is
+    /// done. Starts the background index the first time; never waits for
+    /// it (`ctx` is woken as more files arrive).
+    pub fn indexed_files(&mut self, ctx: &egui::Context) -> (&[FsEntry], bool) {
+        let index = self
+            .index
+            .get_or_insert_with(|| FileIndex::start(ctx, self.root.clone()));
+        index.poll();
+        (&index.files, index.is_done())
+    }
+
     /// Brings [`Self::matches`] up to date with the filter and with what the
     /// index found since the last call, starting the index on first use.
     /// Never waits for the index: `ctx` is woken when more files arrive.
@@ -1445,6 +1456,31 @@ mod tests {
 
     /// The filter never waits for the folder to be indexed: it lists what
     /// was found so far, and the rest as it arrives.
+    #[test]
+    fn test_indexed_files_starts_the_index_and_reports_when_done() {
+        let dir = std::env::temp_dir().join("rred_test_indexed_files");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        File::create(dir.join("b.rs")).unwrap();
+        File::create(dir.join("a.rs")).unwrap();
+        let ctx = egui::Context::default();
+        let mut explorer = Explorer::new(dir.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let (_, done) = explorer.indexed_files(&ctx);
+            if done {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "index never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let (files, done) = explorer.indexed_files(&ctx);
+        assert!(done);
+        let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["a.rs", "b.rs"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn test_filter_lists_matches_while_the_folder_is_still_indexed() {
         let ctx = egui::Context::default();
