@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Align2, CornerRadius, Key, Modifiers, Sense, pos2, vec2};
 
-use crate::shortcuts::ShortcutAction;
 use crate::file_browser::ROW_HEIGHT;
 use crate::i18n::I18n;
+use crate::shortcuts::ShortcutAction;
 use crate::theme::{self, ThemeId};
 
 /// What the palette lists.
@@ -201,8 +201,10 @@ pub fn show<T>(
     let mut action = None;
 
     let field_id = egui::Id::unique("command_palette_query");
+    // Set only on the frame the palette opens.
+    let opening = std::mem::take(&mut state.focus);
     // Focused before it draws, so its key filter holds from the first frame.
-    if std::mem::take(&mut state.focus) {
+    if opening {
         ctx.memory_mut(|m| m.request_focus(field_id));
     }
     // Taken before the field draws, which would move its caret.
@@ -337,7 +339,9 @@ pub fn show<T>(
                 }
             });
         });
-    if action.is_none() && area.response.clicked_elsewhere() {
+    // Opened from a menu, the click on the menu item is in this frame and
+    // lands outside the popup; only later clicks close it.
+    if action.is_none() && !opening && area.response.clicked_elsewhere() {
         action = Some(PaletteAction::Close);
     }
     action
@@ -408,6 +412,53 @@ fn score_chars(query: &[char], text: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::test_support::{click_events, run_frame_with_events};
+
+    fn show_frame(
+        ctx: &egui::Context,
+        palette: &mut Palette,
+        events: Vec<egui::Event>,
+    ) -> Option<PaletteAction> {
+        let i18n = I18n::builtin();
+        let items = [Item {
+            label: "Save".into(),
+            detail: String::new(),
+            search: "Save".into(),
+            payload: (),
+        }];
+        let mut action = None;
+        run_frame_with_events(ctx, events, |ui| {
+            action = show(ui.ctx(), palette, &items, None, &i18n, |_| {
+                PaletteAction::Close
+            });
+        });
+        action
+    }
+
+    /// Opened from a menu, the click on the menu item lands in the same
+    /// frame: it must not count as a click outside the popup.
+    #[test]
+    fn test_the_click_that_opens_the_palette_does_not_close_it() {
+        let ctx = egui::Context::default();
+        let mut palette = Palette::default();
+        palette.open(PaletteMode::Commands);
+        let outside = pos2(5.0, 500.0);
+        assert_eq!(show_frame(&ctx, &mut palette, click_events(outside)), None);
+        assert!(palette.visible);
+    }
+
+    #[test]
+    fn test_a_later_click_outside_closes_the_palette() {
+        let ctx = egui::Context::default();
+        let mut palette = Palette::default();
+        palette.open(PaletteMode::Commands);
+        assert_eq!(show_frame(&ctx, &mut palette, Vec::new()), None);
+        let outside = pos2(5.0, 500.0);
+        assert_eq!(
+            show_frame(&ctx, &mut palette, click_events(outside)),
+            Some(PaletteAction::Close)
+        );
+    }
 
     #[test]
     fn test_empty_query_matches_everything_with_zero() {
