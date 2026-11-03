@@ -8,6 +8,7 @@ mod app;
 mod blame;
 mod bookmarks;
 mod console_panel;
+mod editor_view;
 mod embedded_sql;
 mod file_browser;
 mod git;

@@ -264,7 +264,7 @@ mod tests {
                 app.show_status_bar(ui);
                 let text = &mut app.active_tab_mut().text_content;
                 let request = request.take().unwrap_or_default();
-                crate::app::render_editor_with(
+                crate::editor_view::render_editor_with(
                     ui,
                     text,
                     None,
