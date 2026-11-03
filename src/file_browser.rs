@@ -38,8 +38,9 @@ pub fn scan_directory(dir: &Path) -> Vec<FsEntry> {
                 None => continue,
             };
 
-            // Ignore hidden files / directories
-            if name.starts_with('.') {
+            // Hidden files are listed; only the repository's own `.git`
+            // folder is left out, as VS Code does.
+            if name == ".git" {
                 continue;
             }
 
@@ -937,21 +938,26 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(temp_dir.join("sub_folder")).unwrap();
         fs::create_dir_all(temp_dir.join(".hidden_folder")).unwrap();
+        fs::create_dir_all(temp_dir.join(".git")).unwrap();
         File::create(temp_dir.join("a_file.txt")).unwrap();
         File::create(temp_dir.join("b_file.txt")).unwrap();
         File::create(temp_dir.join(".hidden_file.txt")).unwrap();
 
-        let entries = scan_directory(&temp_dir);
-        assert!(!entries.is_empty());
-        // Directory must come first
-        assert!(entries[0].is_dir);
-        assert_eq!(entries[0].name, "sub_folder");
-        // Followed by sorted files, hidden files/dirs skipped
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[1].name, "a_file.txt");
-        assert!(!entries[1].is_dir);
-        assert_eq!(entries[2].name, "b_file.txt");
-        assert!(!entries[2].is_dir);
+        let listed: Vec<(String, bool)> = scan_directory(&temp_dir)
+            .into_iter()
+            .map(|entry| (entry.name, entry.is_dir))
+            .collect();
+        // Folders first, then files; hidden entries shown, `.git` skipped.
+        assert_eq!(
+            listed,
+            [
+                (".hidden_folder".to_owned(), true),
+                ("sub_folder".to_owned(), true),
+                (".hidden_file.txt".to_owned(), false),
+                ("a_file.txt".to_owned(), false),
+                ("b_file.txt".to_owned(), false),
+            ]
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -1039,7 +1045,7 @@ mod tests {
     /// src/main.rs
     /// src/nested/deep.rs
     /// Cargo.toml
-    /// .hidden
+    /// .git/HEAD
     /// ```
     fn fixture(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("rred_explorer_{name}"));
@@ -1050,7 +1056,8 @@ mod tests {
         File::create(root.join("src/main.rs")).unwrap();
         File::create(root.join("src/nested/deep.rs")).unwrap();
         File::create(root.join("Cargo.toml")).unwrap();
-        File::create(root.join(".hidden")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        File::create(root.join(".git/HEAD")).unwrap();
         root
     }
 
