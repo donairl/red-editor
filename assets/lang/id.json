@@ -267,5 +267,20 @@
   "git_log.copy": "Salin",
   "git_log.clear": "Bersihkan",
   "git_log.hide": "Sembunyikan",
-  "git_log.empty": "Belum ada perintah git."
+  "git_log.empty": "Belum ada perintah git.",
+  "view.command_palette": "Palet Perintah...",
+  "file.quick_open": "Buka Cepat...",
+  "palette.commands_hint": "Ketik nama perintah",
+  "palette.files_hint": "Ketik nama file",
+  "palette.no_results": "Tidak ada yang cocok",
+  "palette.no_folder": "Buka folder untuk mencari file",
+  "palette.indexing": "Mengindeks file…",
+  "cmd.theme": "Tema: {name}",
+  "cmd.toggle_sidebar": "Tampilkan/Sembunyikan Sidebar",
+  "cmd.next_tab": "Tab Berikutnya",
+  "cmd.prev_tab": "Tab Sebelumnya",
+  "cmd.find_next": "Cari Berikutnya",
+  "cmd.find_prev": "Cari Sebelumnya",
+  "cmd.prev_heading": "Judul Sebelumnya",
+  "cmd.next_heading": "Judul Berikutnya"
 }

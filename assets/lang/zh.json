@@ -267,5 +267,20 @@
   "git_log.copy": "复制",
   "git_log.clear": "清空",
   "git_log.hide": "隐藏",
-  "git_log.empty": "尚无 git 命令。"
+  "git_log.empty": "尚无 git 命令。",
+  "view.command_palette": "命令面板...",
+  "file.quick_open": "快速打开...",
+  "palette.commands_hint": "输入命令名称",
+  "palette.files_hint": "输入文件名",
+  "palette.no_results": "无匹配项",
+  "palette.no_folder": "打开文件夹以搜索文件",
+  "palette.indexing": "正在索引文件…",
+  "cmd.theme": "主题：{name}",
+  "cmd.toggle_sidebar": "切换侧边栏",
+  "cmd.next_tab": "下一个标签页",
+  "cmd.prev_tab": "上一个标签页",
+  "cmd.find_next": "查找下一个",
+  "cmd.find_prev": "查找上一个",
+  "cmd.prev_heading": "上一个标题",
+  "cmd.next_heading": "下一个标题"
 }

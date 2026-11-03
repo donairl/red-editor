@@ -398,6 +398,7 @@ mod tests {
             include_str!("terminal.rs"),
             include_str!("source_control.rs"),
             include_str!("about.rs"),
+            include_str!("palette.rs"),
         ];
         let known = keys(BUILTIN[0].1);
         let mut used = HashSet::new();

@@ -267,5 +267,20 @@
   "git_log.copy": "Kopieren",
   "git_log.clear": "Leeren",
   "git_log.hide": "Ausblenden",
-  "git_log.empty": "Noch keine Git-Befehle."
+  "git_log.empty": "Noch keine Git-Befehle.",
+  "view.command_palette": "Befehlspalette...",
+  "file.quick_open": "Schnell öffnen...",
+  "palette.commands_hint": "Befehlsnamen eingeben",
+  "palette.files_hint": "Dateinamen eingeben",
+  "palette.no_results": "Keine Treffer",
+  "palette.no_folder": "Ordner öffnen, um Dateien zu suchen",
+  "palette.indexing": "Dateien werden indiziert…",
+  "cmd.theme": "Farbschema: {name}",
+  "cmd.toggle_sidebar": "Seitenleiste umschalten",
+  "cmd.next_tab": "Nächster Tab",
+  "cmd.prev_tab": "Vorheriger Tab",
+  "cmd.find_next": "Weitersuchen",
+  "cmd.find_prev": "Rückwärts suchen",
+  "cmd.prev_heading": "Vorherige Überschrift",
+  "cmd.next_heading": "Nächste Überschrift"
 }

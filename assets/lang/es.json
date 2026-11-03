@@ -267,5 +267,20 @@
   "git_log.copy": "Copiar",
   "git_log.clear": "Limpiar",
   "git_log.hide": "Ocultar",
-  "git_log.empty": "Aún no hay comandos de git."
+  "git_log.empty": "Aún no hay comandos de git.",
+  "view.command_palette": "Paleta de comandos...",
+  "file.quick_open": "Apertura rápida...",
+  "palette.commands_hint": "Escribe el nombre de un comando",
+  "palette.files_hint": "Escribe el nombre de un archivo",
+  "palette.no_results": "Sin coincidencias",
+  "palette.no_folder": "Abre una carpeta para buscar sus archivos",
+  "palette.indexing": "Indexando archivos…",
+  "cmd.theme": "Tema: {name}",
+  "cmd.toggle_sidebar": "Alternar barra lateral",
+  "cmd.next_tab": "Pestaña siguiente",
+  "cmd.prev_tab": "Pestaña anterior",
+  "cmd.find_next": "Buscar siguiente",
+  "cmd.find_prev": "Buscar anterior",
+  "cmd.prev_heading": "Encabezado anterior",
+  "cmd.next_heading": "Encabezado siguiente"
 }

@@ -267,5 +267,20 @@
   "git_log.copy": "Copy",
   "git_log.clear": "Clear",
   "git_log.hide": "Hide",
-  "git_log.empty": "No git commands yet."
+  "git_log.empty": "No git commands yet.",
+  "view.command_palette": "Command Palette...",
+  "file.quick_open": "Quick Open...",
+  "palette.commands_hint": "Type a command name",
+  "palette.files_hint": "Type a file name",
+  "palette.no_results": "No matches",
+  "palette.no_folder": "Open a folder to search its files",
+  "palette.indexing": "Indexing files…",
+  "cmd.theme": "Theme: {name}",
+  "cmd.toggle_sidebar": "Toggle Sidebar",
+  "cmd.next_tab": "Next Tab",
+  "cmd.prev_tab": "Previous Tab",
+  "cmd.find_next": "Find Next",
+  "cmd.find_prev": "Find Previous",
+  "cmd.prev_heading": "Previous Heading",
+  "cmd.next_heading": "Next Heading"
 }
