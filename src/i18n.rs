@@ -401,6 +401,7 @@ mod tests {
             include_str!("palette.rs"),
             include_str!("menus.rs"),
             include_str!("status_bar.rs"),
+            include_str!("console_panel.rs"),
         ];
         let known = keys(BUILTIN[0].1);
         let mut used = HashSet::new();
