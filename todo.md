@@ -5,8 +5,8 @@ Last updated 2026-11-03.
 
 ## High priority (daily use)
 
-- [ ] **Command Palette** (`Ctrl+Shift+P`) and **Quick Open** (`Ctrl+P`) —
-  code done and tested; waiting on the hand check in the running app. Spec: `docs/superpowers/specs/2026-11-03-command-palette-design.md`,
+- [x] **Command Palette** (`Ctrl+Shift+P`) and **Quick Open** (`Ctrl+P`) —
+  done 2026-11-04 (`src/palette.rs`), hand-checked. Spec: `docs/superpowers/specs/2026-11-03-command-palette-design.md`,
   plan: `docs/superpowers/plans/2026-11-03-command-palette.md`.
 - [ ] **File operations in the Explorer** — right-click: New File, New Folder,
   Rename, Delete, Reveal in Folder.
