@@ -11,6 +11,7 @@ mod console_panel;
 mod editor_view;
 mod embedded_sql;
 mod file_browser;
+mod file_ops;
 mod git;
 mod git_graph;
 mod git_log;
