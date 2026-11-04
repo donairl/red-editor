@@ -166,7 +166,7 @@ New keys in `en`, `id`, `de`, `es`, `zh`:
 `explorer.new_file`, `explorer.new_folder`, `explorer.rename`,
 `explorer.delete`, `explorer.reveal`, `explorer.delete_title`,
 `explorer.delete_file_message`, `explorer.delete_folder_message`,
-`explorer.delete_confirm`, `explorer.name_empty`, `explorer.name_reserved`,
+`explorer.delete_confirm`, `explorer.name_reserved`,
 `explorer.name_separator`, `explorer.name_exists`, `explorer.op_failed`.
 
 ## Testing
