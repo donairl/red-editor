@@ -10,7 +10,8 @@ use crate::about::{self, AboutState};
 use crate::activity_bar;
 use crate::blame::{self, Blame};
 use crate::bookmarks::Bookmarks;
-use crate::file_browser::{self, Explorer};
+use crate::file_browser::{self, Explorer, ExplorerAction};
+use crate::file_ops;
 use crate::git::{FileChange, GitError};
 use crate::git_graph::{self, GitGraphUi, GraphAction};
 use crate::git_worker::{Base, DiffSource, GitState, Op};
@@ -330,6 +331,8 @@ pub struct TextEditorApp {
     pub scm: ScmUi,
     /// A git command asking for confirmation.
     pub git_confirm: Option<GitConfirm>,
+    /// An Explorer entry waiting for the user to confirm its move to the Trash.
+    pub pending_delete: Option<PathBuf>,
     /// The Git Graph in place of the editor while `Some`.
     pub git_graph: Option<GitGraphUi>,
     /// The start page in place of the editor; back whenever no tab is left.
@@ -403,6 +406,7 @@ impl Default for TextEditorApp {
             new_branch_name: String::new(),
             scm: ScmUi::default(),
             git_confirm: None,
+            pending_delete: None,
             git_graph: None,
             show_welcome: true,
             last_marks_at: None,
@@ -703,7 +707,7 @@ impl TextEditorApp {
         }
         self.menu_focus = None;
         let dialog_open =
-            self.show_about_modal || self.pending_action.is_some() || self.git_confirm.is_some();
+            self.show_about_modal || self.pending_action.is_some() || self.git_confirm.is_some() || self.pending_delete.is_some();
         let focus_free = ctx.memory(|m| m.focused().is_none());
         if id == self.editor_id() && !dialog_open && focus_free {
             self.editor_request.focus = true;
@@ -1045,7 +1049,7 @@ impl TextEditorApp {
     /// Runs the action of a keyboard shortcut. Ignored while a dialog waits
     /// for an answer.
     pub fn apply_shortcut(&mut self, ctx: &egui::Context, action: ShortcutAction) {
-        if self.pending_action.is_some() || self.show_about_modal || self.git_confirm.is_some() {
+        if self.pending_action.is_some() || self.show_about_modal || self.git_confirm.is_some() || self.pending_delete.is_some() {
             return;
         }
         if (self.git_graph.is_some() || self.show_welcome) && action.needs_editor() {
@@ -1234,6 +1238,131 @@ impl TextEditorApp {
         self.active_tab_index = new_index(target);
         let mut flags = keep.into_iter();
         self.tabs.retain(|_| flags.next().unwrap_or(true));
+    }
+
+    /// Runs a file operation asked for in the Explorer. A delete only
+    /// stores the path: the user confirms it first.
+    pub fn apply_explorer_action(&mut self, action: ExplorerAction) {
+        match action {
+            ExplorerAction::Create { dir, name, folder } => {
+                let made = if folder {
+                    file_ops::create_dir(&dir, &name)
+                } else {
+                    file_ops::create_file(&dir, &name)
+                };
+                match made {
+                    Ok(path) => {
+                        self.after_file_op();
+                        if folder {
+                            if let Some(explorer) = self.explorer.as_mut() {
+                                explorer.expand(&path);
+                            }
+                        } else {
+                            self.open_file_in_tab(path);
+                        }
+                    }
+                    Err(err) => self.file_op_failed(&dir.join(&name), &err),
+                }
+            }
+            ExplorerAction::Rename { from, name } => match file_ops::rename(&from, &name) {
+                Ok(to) => {
+                    self.rebase_tabs(&from, &to);
+                    if let Some(explorer) = self.explorer.as_mut() {
+                        explorer.rebase_expanded(&from, &to);
+                    }
+                    self.after_file_op();
+                }
+                Err(err) => self.file_op_failed(&from, &err),
+            },
+            ExplorerAction::Delete(path) => self.pending_delete = Some(path),
+            ExplorerAction::Reveal(path) => {
+                if let Err(err) = file_ops::reveal(&path) {
+                    self.file_op_failed(&path, &err);
+                }
+            }
+        }
+    }
+
+    /// Points the tabs open at or under `from` to the same files under
+    /// `to`. Their text, undo and bookmarks stay; the language follows a
+    /// new extension unless the user picked one, and git is asked for the
+    /// new path's HEAD copy.
+    pub fn rebase_tabs(&mut self, from: &Path, to: &Path) {
+        for tab in &mut self.tabs {
+            let Some(path) = tab
+                .current_path
+                .as_deref()
+                .and_then(|path| file_ops::rebase(path, from, to))
+            else {
+                continue;
+            };
+            if tab.language_override.is_none() {
+                tab.active_language = Language::from_path(&path);
+            }
+            tab.disk_stamp = disk_stamp(&path);
+            tab.git_base = None;
+            tab.marks_text = None;
+            tab.current_path = Some(path);
+        }
+    }
+
+    /// Closes the tabs of files at or under `path` (just moved to the
+    /// Trash). Tabs with unsaved changes stay, so saving brings them back.
+    pub fn close_tabs_under(&mut self, path: &Path) {
+        let fallback = self.active_tab_index;
+        self.close_tabs_where(fallback, |_, tab| {
+            tab.current_path.as_deref().is_some_and(|p| p.starts_with(path))
+        });
+    }
+
+    /// Asks before moving `pending_delete` to the Trash.
+    fn show_delete_confirm(&mut self, ctx: &egui::Context) {
+        let Some(path) = &self.pending_delete else { return };
+        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let key = if path.is_dir() {
+            "explorer.delete_folder_message"
+        } else {
+            "explorer.delete_file_message"
+        };
+        let message = self.i18n.tf(key, &[("name", &name)]);
+        let answer = modals::show_confirm_modal(
+            ctx,
+            self.i18n.t("explorer.delete_title"),
+            &message,
+            self.i18n.t("explorer.delete_confirm"),
+            self.i18n.t("unsaved.cancel"),
+        );
+        match answer {
+            Some(true) => {
+                if let Some(path) = self.pending_delete.take() {
+                    match file_ops::move_to_trash(&path) {
+                        Ok(()) => {
+                            self.close_tabs_under(&path);
+                            self.after_file_op();
+                        }
+                        Err(err) => self.file_op_failed(&path, &err),
+                    }
+                }
+            }
+            Some(false) => self.pending_delete = None,
+            None => {}
+        }
+    }
+
+    /// The tree and git status after a file was created, renamed or removed.
+    fn after_file_op(&mut self) {
+        if let Some(explorer) = self.explorer.as_mut() {
+            explorer.refresh();
+        }
+        self.git.request_refresh();
+    }
+
+    fn file_op_failed(&mut self, path: &Path, error: &std::io::Error) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let message = self
+            .i18n
+            .tf("explorer.op_failed", &[("name", &name), ("error", &error.to_string())]);
+        self.status_message = Some((message, true));
     }
 
     pub fn trigger_close_tab(&mut self, index: usize) {
@@ -2170,6 +2299,7 @@ impl eframe::App for TextEditorApp {
 
         let mut file_to_open = None;
         let mut file_history = None;
+        let mut explorer_action = None;
         let mut find_in_files = false;
         let active_file = self.active_tab().current_path.clone();
         let mut scm_action = None;
@@ -2217,6 +2347,7 @@ impl eframe::App for TextEditorApp {
                         file_to_open = tree.open_file;
                         file_history = tree.file_history;
                         find_in_files = tree.find_in_files;
+                        explorer_action = tree.action;
                     });
             }
         }
@@ -2229,6 +2360,9 @@ impl eframe::App for TextEditorApp {
         }
         if find_in_files {
             self.open_search(&ctx);
+        }
+        if let Some(action) = explorer_action {
+            self.apply_explorer_action(action);
         }
 
         // Console panel, below the editor and the Markdown preview: declared
@@ -2488,6 +2622,8 @@ impl eframe::App for TextEditorApp {
             }
         } else if self.git_confirm.is_some() {
             self.show_git_confirm(&ctx);
+        } else if self.pending_delete.is_some() {
+            self.show_delete_confirm(&ctx);
         }
 
         self.return_focus_after_menu(&ctx);
@@ -3594,6 +3730,94 @@ mod tests {
         fs::write(dir.join("notes.txt"), "notes").unwrap();
         dir
     }
+
+    #[test]
+    fn test_create_file_action_opens_the_new_file() {
+        let dir = folder_with_notes("explorer_create");
+        let mut app = TextEditorApp {
+            explorer: Some(Explorer::new(dir.clone())),
+            ..TextEditorApp::default()
+        };
+        app.apply_explorer_action(ExplorerAction::Create {
+            dir: dir.clone(),
+            name: "added.rs".into(),
+            folder: false,
+        });
+        assert!(dir.join("added.rs").is_file());
+        assert_eq!(app.active_tab().current_path.as_deref(), Some(dir.join("added.rs").as_path()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rename_action_moves_the_tab_and_its_language() {
+        let dir = folder_with_notes("explorer_rename");
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(dir.join("notes.txt"));
+        app.active_tab_mut().text_content.push_str(" edited");
+
+        app.apply_explorer_action(ExplorerAction::Rename {
+            from: dir.join("notes.txt"),
+            name: "notes.rs".into(),
+        });
+        let tab = app.active_tab();
+        assert_eq!(tab.current_path.as_deref(), Some(dir.join("notes.rs").as_path()));
+        assert_eq!(tab.active_language, Language::Rust);
+        assert_eq!(tab.text_content, "notes edited", "unsaved edits stay");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_renaming_a_folder_moves_every_tab_under_it() {
+        let dir = folder_with_notes("explorer_rename_dir");
+        fs::create_dir(dir.join("src")).unwrap();
+        fs::write(dir.join("src/a.rs"), "a").unwrap();
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(dir.join("src/a.rs"));
+        app.open_file_in_tab(dir.join("notes.txt"));
+
+        app.apply_explorer_action(ExplorerAction::Rename { from: dir.join("src"), name: "lib".into() });
+        let paths: Vec<_> = app.tabs.iter().filter_map(|t| t.current_path.clone()).collect();
+        assert_eq!(paths, vec![dir.join("lib/a.rs"), dir.join("notes.txt")]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_close_tabs_under_keeps_unsaved_tabs() {
+        let dir = folder_with_notes("explorer_delete_tabs");
+        fs::write(dir.join("other.txt"), "other").unwrap();
+        let mut app = TextEditorApp::default();
+        app.open_file_in_tab(dir.join("notes.txt"));
+        app.open_file_in_tab(dir.join("other.txt"));
+        app.active_tab_mut().text_content.push_str(" edited");
+
+        app.close_tabs_under(&dir);
+        let paths: Vec<_> = app.tabs.iter().filter_map(|t| t.current_path.clone()).collect();
+        assert_eq!(paths, vec![dir.join("other.txt")], "the clean tab closes, the dirty one stays");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_delete_action_waits_for_confirmation() {
+        let dir = folder_with_notes("explorer_delete_ask");
+        let mut app = TextEditorApp::default();
+        app.apply_explorer_action(ExplorerAction::Delete(dir.join("notes.txt")));
+        assert_eq!(app.pending_delete.as_deref(), Some(dir.join("notes.txt").as_path()));
+        assert!(dir.join("notes.txt").exists(), "nothing is deleted before the answer");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_failed_rename_reports_an_error() {
+        let dir = folder_with_notes("explorer_rename_fail");
+        let mut app = TextEditorApp::default();
+        app.apply_explorer_action(ExplorerAction::Rename {
+            from: dir.join("missing.txt"),
+            name: "x.txt".into(),
+        });
+        assert!(matches!(app.status_message, Some((_, true))));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
 
     #[test]
     fn test_toggle_explorer_hides_and_shows_the_sidebar() {
