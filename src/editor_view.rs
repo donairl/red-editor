@@ -6,6 +6,7 @@ use crate::app::{BlameColumn, CONTEXT_CHAR, EditorRequest};
 use crate::auto_edit;
 use crate::blame;
 use crate::bookmarks::Bookmarks;
+use crate::brackets;
 use crate::find;
 use crate::gutter;
 use crate::highlighter::{HighlighterLayouter, Language};
@@ -485,6 +486,33 @@ fn render_editor_inner(
                 egui::CornerRadius::same(2),
                 egui::Color32::from_rgba_unmultiplied(255, 200, 0, 90),
             );
+        }
+        // The bracket at this frame's caret and its partner, boxed as in VS
+        // Code. Only for a caret in a focused editor, and not in a document
+        // too large to highlight, so the scan never slows a frame.
+        let caret = cursor_range
+            .filter(|r| r.is_empty())
+            .map(|r| r.primary.index.0);
+        if let (true, Some(caret), true) =
+            (request.match_brackets, caret, output.response.has_focus())
+            && !text_content_exceeds_highlight_limit(text)
+            && let Some((a, b)) = brackets::matching_pair(text, caret)
+        {
+            let color = ui
+                .visuals()
+                .override_text_color
+                .unwrap_or_else(|| ui.visuals().widgets.inactive.text_color())
+                .gamma_multiply(0.4);
+            for at in [a, b] {
+                if let Some(rect) = span((at, at + 1)) {
+                    ui.painter().rect_stroke(
+                        rect,
+                        egui::CornerRadius::same(2),
+                        egui::Stroke::new(1.0, color),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
         }
         if let Some(rect) = request.reveal.and_then(span) {
             ui.scroll_to_rect(rect, None);

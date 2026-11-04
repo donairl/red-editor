@@ -283,6 +283,14 @@ impl TextEditorApp {
         {
             self.open_goto();
         }
+        if ui
+            .add_enabled_ui(editing, |ui| {
+                item(ui, self.i18n.t("edit.go_to_bracket"), &shortcuts::GO_TO_BRACKET)
+            })
+            .inner
+        {
+            self.apply_shortcut(ctx, ShortcutAction::GoToBracket);
+        }
         ui.separator();
         let line_items = [
             (

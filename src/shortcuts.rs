@@ -59,6 +59,10 @@ pub const COPY_LINE_DOWN: KeyboardShortcut =
 pub const DELETE_LINE: KeyboardShortcut = cmd_shift(Key::K);
 pub const TOGGLE_COMMENT: KeyboardShortcut = cmd(Key::Slash);
 pub const SELECT_NEXT_MATCH: KeyboardShortcut = cmd(Key::D);
+pub const GO_TO_BRACKET: KeyboardShortcut = cmd_shift(Key::Backslash);
+/// `GO_TO_BRACKET` as egui hears it on layouts where Shift turns `\` into
+/// `|` (US and others): it reports the shifted key.
+const GO_TO_BRACKET_SHIFTED: KeyboardShortcut = cmd_shift(Key::Pipe);
 /// A second key for Prettify, the one other editors use.
 pub const FORMAT_DOCUMENT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::SHIFT.plus(Modifiers::ALT), Key::F);
@@ -114,6 +118,8 @@ pub enum ShortcutAction {
     DeleteLine,
     ToggleComment,
     SelectNextMatch,
+    /// Put the caret by the partner of the bracket it touches.
+    GoToBracket,
     /// Open the Command Palette listing every command.
     CommandPalette,
     /// Open the Command Palette listing the folder's files.
@@ -187,6 +193,7 @@ impl ShortcutAction {
             DeleteLine => DELETE_LINE,
             ToggleComment => TOGGLE_COMMENT,
             SelectNextMatch => SELECT_NEXT_MATCH,
+            GoToBracket => GO_TO_BRACKET,
             CommandPalette => COMMAND_PALETTE,
             QuickOpen => QUICK_OPEN,
             SelectTheme(_) => return None,
@@ -215,6 +222,7 @@ impl ShortcutAction {
                 | DeleteLine
                 | ToggleComment
                 | SelectNextMatch
+                | GoToBracket
         )
     }
 }
@@ -239,6 +247,8 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (DELETE_LINE, DeleteLine),
         (TOGGLE_COMMENT, ToggleComment),
         (SELECT_NEXT_MATCH, SelectNextMatch),
+        (GO_TO_BRACKET, GoToBracket),
+        (GO_TO_BRACKET_SHIFTED, GoToBracket),
         (MARKDOWN_PREVIEW, MarkdownPreview),
         (TOGGLE_CONSOLE, ToggleConsole),
         (PRETTIFY, Prettify),
@@ -339,6 +349,9 @@ mod tests {
             (egui::Key::K, ctrl_shift, ShortcutAction::DeleteLine),
             (egui::Key::Slash, ctrl, ShortcutAction::ToggleComment),
             (egui::Key::D, ctrl, ShortcutAction::SelectNextMatch),
+            (egui::Key::Backslash, ctrl_shift, ShortcutAction::GoToBracket),
+            // What a US layout reports for Shift+\.
+            (egui::Key::Pipe, ctrl_shift, ShortcutAction::GoToBracket),
             (
                 egui::Key::F,
                 egui::Modifiers::SHIFT | egui::Modifiers::ALT,

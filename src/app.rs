@@ -10,6 +10,7 @@ use crate::about::{self, AboutState};
 use crate::activity_bar;
 use crate::blame::{self, Blame};
 use crate::bookmarks::Bookmarks;
+use crate::brackets;
 use crate::file_browser::{self, Explorer, ExplorerAction};
 use crate::file_ops;
 use crate::git::{FileChange, GitError};
@@ -364,6 +365,8 @@ pub struct EditorRequest {
     /// Auto-indent on Enter and auto-close brackets and quotes, by the rules
     /// of this language. `None` leaves typing to `TextEdit`.
     pub auto_edit: Option<Language>,
+    /// Box the bracket at the caret and its partner.
+    pub match_brackets: bool,
 }
 
 impl Default for TextEditorApp {
@@ -614,6 +617,17 @@ impl TextEditorApp {
             self.editor_request.focus = true;
             self.editor_request.select = Some(range);
             self.editor_request.reveal = Some(range);
+        }
+    }
+
+    /// Edit > Go to Bracket: the caret jumps by the partner of the bracket
+    /// it touches. A selection counts from its start, as in VS Code.
+    pub fn go_to_bracket(&mut self, ctx: &egui::Context) {
+        let (start, _) = self.editor_selection(ctx).unwrap_or((0, 0));
+        if let Some(at) = brackets::jump_target(&self.active_tab().text_content, start) {
+            self.editor_request.focus = true;
+            self.editor_request.select = Some((at, at));
+            self.editor_request.reveal = Some((at, at));
         }
     }
 
@@ -1115,6 +1129,7 @@ impl TextEditorApp {
             }
             ShortcutAction::ToggleComment => self.toggle_comment(ctx),
             ShortcutAction::SelectNextMatch => self.select_next_match(ctx),
+            ShortcutAction::GoToBracket => self.go_to_bracket(ctx),
             ShortcutAction::PrevTab => {
                 self.active_tab_index =
                     (self.active_tab_index + self.tabs.len() - 1) % self.tabs.len();
@@ -2506,6 +2521,7 @@ impl eframe::App for TextEditorApp {
             let active_idx = self.active_tab_index;
             let language = self.tabs[active_idx].effective_language();
             request.auto_edit = Some(language);
+            request.match_brackets = true;
 
             let scroll_to = if previewing { self.scroll_sync.take_editor_offset() } else { None };
             // Blame only speaks for the committed text: with unsaved edits
@@ -3126,6 +3142,35 @@ mod tests {
         app.show_welcome = true;
         app.apply_shortcut(&ctx, ShortcutAction::DeleteLine);
         assert_eq!(app.active_tab().text_content, "two\none");
+    }
+
+    #[test]
+    fn test_go_to_bracket_moves_the_caret_to_the_partner() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.active_tab_mut().text_content = String::from("f(a[1]) + x");
+        let put_caret = |app: &TextEditorApp, at| {
+            let mut state = egui::TextEdit::load_state(&ctx, app.editor_id()).unwrap_or_default();
+            let caret = egui::text::CCursorRange::one(egui::text::CCursor::new(at));
+            state.cursor.set_char_range(Some(caret));
+            state.store(&ctx, app.editor_id());
+        };
+        // Before "(": lands after ")".
+        put_caret(&app, 1);
+        app.apply_shortcut(&ctx, ShortcutAction::GoToBracket);
+        assert_eq!(app.editor_request.select, Some((7, 7)));
+        assert_eq!(app.editor_request.reveal, Some((7, 7)));
+        assert!(app.editor_request.focus);
+        // And back.
+        app.editor_request = EditorRequest::default();
+        put_caret(&app, 7);
+        app.apply_shortcut(&ctx, ShortcutAction::GoToBracket);
+        assert_eq!(app.editor_request.select, Some((1, 1)));
+        // No bracket at the caret: nothing moves.
+        app.editor_request = EditorRequest::default();
+        put_caret(&app, 9);
+        app.apply_shortcut(&ctx, ShortcutAction::GoToBracket);
+        assert_eq!(app.editor_request.select, None);
     }
 
     #[test]

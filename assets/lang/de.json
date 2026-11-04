@@ -37,6 +37,7 @@
   "edit.delete_line": "Zeile löschen",
   "edit.toggle_comment": "Zeilenkommentar umschalten",
   "edit.select_next_match": "Nächste Übereinstimmung auswählen",
+  "edit.go_to_bracket": "Zur Klammer springen",
   "search.query": "Im Ordner suchen",
   "search.run": "Suchen",
   "search.no_folder": "Öffne zuerst einen Ordner, um in Dateien zu suchen.",

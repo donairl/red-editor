@@ -37,6 +37,7 @@
   "edit.delete_line": "Eliminar línea",
   "edit.toggle_comment": "Alternar comentario de línea",
   "edit.select_next_match": "Seleccionar siguiente coincidencia",
+  "edit.go_to_bracket": "Ir al corchete",
   "search.query": "Buscar en la carpeta",
   "search.run": "Buscar",
   "search.no_folder": "Abre primero una carpeta para buscar en archivos.",

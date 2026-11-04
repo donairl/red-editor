@@ -37,6 +37,7 @@
   "edit.delete_line": "删除行",
   "edit.toggle_comment": "切换行注释",
   "edit.select_next_match": "选择下一个匹配项",
+  "edit.go_to_bracket": "跳转到匹配括号",
   "search.query": "在文件夹中搜索",
   "search.run": "搜索",
   "search.no_folder": "请先打开文件夹再在文件中搜索。",

@@ -37,6 +37,7 @@
   "edit.delete_line": "Hapus Baris",
   "edit.toggle_comment": "Komentari/Buka Komentar Baris",
   "edit.select_next_match": "Pilih Kecocokan Berikutnya",
+  "edit.go_to_bracket": "Ke Pasangan Kurung",
   "search.query": "Cari di folder",
   "search.run": "Cari",
   "search.no_folder": "Buka folder dulu untuk mencari di file.",
