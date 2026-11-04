@@ -2352,9 +2352,11 @@ impl eframe::App for TextEditorApp {
                 .show(ui, |ui| {
                     let items = activity_bar::ActivityItems {
                         explorer_open,
+                        search_open: self.search.visible,
                         source_control_open,
                         console_open: self.show_console,
                         explorer_tooltip: self.i18n.t("activity.explorer"),
+                        search_tooltip: self.i18n.t("edit.find_in_files"),
                         source_control_tooltip: self.i18n.t("activity.source_control"),
                         console_tooltip: self.i18n.t("activity.console"),
                         changes: self.git.change_count(),
@@ -2364,6 +2366,13 @@ impl eframe::App for TextEditorApp {
                 .inner;
             if activity.explorer_clicked {
                 self.toggle_explorer();
+            }
+            if activity.search_clicked {
+                if self.search.visible {
+                    self.close_search();
+                } else {
+                    self.open_search(&ctx);
+                }
             }
             if activity.source_control_clicked {
                 self.toggle_source_control();

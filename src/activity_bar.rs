@@ -1,6 +1,7 @@
 //! VS Code-style Activity Bar: the icon column at the far left.
 //!
-//! Holds three items, the Explorer, Source Control and the Console, and only
+//! Holds four items, the Explorer, Search (Find in Files), Source Control
+//! and the Console, and only
 //! reports clicks: `app.rs` decides what a click does.
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, Vec2, pos2, vec2};
@@ -17,11 +18,14 @@ const ACCENT_WIDTH: f32 = 2.0;
 #[derive(Clone, Copy, Debug)]
 pub struct ActivityBarResponse {
     pub explorer_clicked: bool,
+    pub search_clicked: bool,
     pub source_control_clicked: bool,
     pub console_clicked: bool,
     // Only the tests read where the items were drawn.
     #[cfg_attr(not(test), allow(dead_code))]
     pub explorer_rect: Rect,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub search_rect: Rect,
     #[cfg_attr(not(test), allow(dead_code))]
     pub source_control_rect: Rect,
     #[cfg_attr(not(test), allow(dead_code))]
@@ -32,9 +36,12 @@ pub struct ActivityBarResponse {
 #[derive(Clone, Copy, Debug)]
 pub struct ActivityItems<'a> {
     pub explorer_open: bool,
+    /// The Find in Files panel is shown.
+    pub search_open: bool,
     pub source_control_open: bool,
     pub console_open: bool,
     pub explorer_tooltip: &'a str,
+    pub search_tooltip: &'a str,
     pub source_control_tooltip: &'a str,
     pub console_tooltip: &'a str,
     /// Changed files, shown in a badge on the Source Control item.
@@ -63,6 +70,13 @@ pub fn show(ui: &mut egui::Ui, items: ActivityItems) -> ActivityBarResponse {
         items.explorer_tooltip,
         paint_explorer_icon,
     );
+    let (search_rect, search_clicked) = item(
+        ui,
+        &palette,
+        items.search_open,
+        items.search_tooltip,
+        paint_search_icon,
+    );
     let (source_control_rect, source_control_clicked) = item(
         ui,
         &palette,
@@ -82,9 +96,11 @@ pub fn show(ui: &mut egui::Ui, items: ActivityItems) -> ActivityBarResponse {
     );
     ActivityBarResponse {
         explorer_clicked,
+        search_clicked,
         source_control_clicked,
         console_clicked,
         explorer_rect,
+        search_rect,
         source_control_rect,
         console_rect,
     }
@@ -176,6 +192,17 @@ fn paint_console_icon(painter: &egui::Painter, center: egui::Pos2, color: Color3
     painter.line_segment([pos2(prompt.x + 5.0, caret_y), pos2(prompt.x + 10.0, caret_y)], stroke);
 }
 
+/// A magnifying glass: a ring with its handle to the bottom right, the size
+/// of the other items' icons.
+fn paint_search_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let radius = 6.0;
+    let ring = center + vec2(-2.0, -2.0);
+    painter.circle_stroke(ring, radius, stroke);
+    let handle = vec2(1.0, 1.0).normalized();
+    painter.line_segment([ring + handle * radius, center + vec2(8.0, 8.0)], stroke);
+}
+
 /// Two overlapping pages, the front one with a folded top-right corner.
 /// Drawn as lines, so it never depends on the bundled fonts.
 fn paint_explorer_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
@@ -220,9 +247,11 @@ mod tests {
     ) -> (ActivityBarResponse, Vec<egui::epaint::ClippedShape>) {
         let items = ActivityItems {
             explorer_open,
+            search_open: false,
             source_control_open: false,
             console_open,
             explorer_tooltip: "Explorer",
+            search_tooltip: "Search",
             source_control_tooltip: "Source Control",
             console_tooltip: "Console",
             changes: 0,
@@ -265,15 +294,17 @@ mod tests {
     }
 
     #[test]
-    fn test_items_are_squares_explorer_first() {
+    fn test_items_are_squares_explorer_then_search() {
         let ctx = egui::Context::default();
         let (bar, _) = run(&ctx, Vec::new(), false, false);
-        assert_eq!(bar.explorer_rect.size(), Vec2::splat(WIDTH));
-        assert_eq!(bar.source_control_rect.size(), Vec2::splat(WIDTH));
-        assert_eq!(bar.console_rect.size(), Vec2::splat(WIDTH));
-        assert_eq!(bar.source_control_rect.top(), bar.explorer_rect.bottom());
+        for rect in [bar.explorer_rect, bar.search_rect, bar.source_control_rect, bar.console_rect] {
+            assert_eq!(rect.size(), Vec2::splat(WIDTH));
+        }
+        assert_eq!(bar.search_rect.top(), bar.explorer_rect.bottom());
+        assert_eq!(bar.source_control_rect.top(), bar.search_rect.bottom());
         assert_eq!(bar.console_rect.top(), bar.source_control_rect.bottom());
-        assert!(!bar.explorer_clicked && !bar.source_control_clicked && !bar.console_clicked);
+        assert!(!bar.explorer_clicked && !bar.search_clicked);
+        assert!(!bar.source_control_clicked && !bar.console_clicked);
     }
 
     #[test]
@@ -286,6 +317,8 @@ mod tests {
         assert!(clicked.console_clicked && !clicked.explorer_clicked);
         let (clicked, _) = run(&ctx, click(bar.source_control_rect.center()), false, false);
         assert!(clicked.source_control_clicked && !clicked.explorer_clicked && !clicked.console_clicked);
+        let (clicked, _) = run(&ctx, click(bar.search_rect.center()), false, false);
+        assert!(clicked.search_clicked && !clicked.explorer_clicked && !clicked.source_control_clicked);
     }
 
     #[test]
@@ -293,9 +326,11 @@ mod tests {
         let ctx = egui::Context::default();
         let items = |changes| ActivityItems {
             explorer_open: false,
+            search_open: false,
             source_control_open: true,
             console_open: false,
             explorer_tooltip: "",
+            search_tooltip: "",
             source_control_tooltip: "",
             console_tooltip: "",
             changes,
