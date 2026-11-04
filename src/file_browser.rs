@@ -16,6 +16,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use crate::git::Kind;
 use crate::git_worker::Decorations;
+use crate::file_ops::{self, NameError};
 use crate::highlighter::Language;
 use crate::i18n::I18n;
 use crate::{find, search, tab_bar, theme};
@@ -136,6 +137,48 @@ pub struct TreeRow {
     pub depth: usize,
     /// Only ever `true` for folders.
     pub expanded: bool,
+    /// Drawn as a name field: the entry being renamed, or the placeholder
+    /// row of a new entry (its `name` is empty, its `path` the parent).
+    pub edit: bool,
+}
+
+/// What the inline name field is for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditTarget {
+    NewFile { parent: PathBuf },
+    NewFolder { parent: PathBuf },
+    Rename { path: PathBuf },
+}
+
+impl EditTarget {
+    /// The folder the typed name goes in.
+    fn dir(&self) -> &Path {
+        match self {
+            EditTarget::NewFile { parent } | EditTarget::NewFolder { parent } => parent,
+            EditTarget::Rename { path } => path.parent().unwrap_or(path),
+        }
+    }
+}
+
+/// The name being typed in the tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlineEdit {
+    pub target: EditTarget,
+    pub name: String,
+    /// Why the last Enter was refused; shown below the row.
+    pub error: Option<NameError>,
+    /// Focus the field (and, for a rename, select the name before its
+    /// extension) on the next frame it is drawn.
+    focus: bool,
+}
+
+/// A file operation the Explorer asks the app to run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExplorerAction {
+    Create { dir: PathBuf, name: String, folder: bool },
+    Rename { from: PathBuf, name: String },
+    Delete(PathBuf),
+    Reveal(PathBuf),
 }
 
 /// The tree under one root folder.
@@ -154,6 +197,8 @@ pub struct Explorer {
     index: Option<FileIndex>,
     /// The last filter applied, and what it matched.
     found: Option<Found>,
+    /// The name field open in the tree, if any.
+    editing: Option<InlineEdit>,
     /// How many times the visible tree was worked out.
     #[cfg(test)]
     row_builds: usize,
@@ -263,6 +308,7 @@ impl Explorer {
             query: String::new(),
             index: None,
             found: None,
+            editing: None,
             #[cfg(test)]
             row_builds: 0,
         }
@@ -291,6 +337,7 @@ impl Explorer {
 
     /// Collapses every folder; the section stays open.
     pub fn collapse_all(&mut self) {
+        self.editing = None;
         self.expanded.clear();
         self.rows = None;
     }
@@ -299,6 +346,7 @@ impl Explorer {
     /// [`Self::matches`] read them from disk again. Expanded folders stay
     /// expanded.
     pub fn refresh(&mut self) {
+        self.editing = None;
         self.children.clear();
         self.rows = None;
         self.index = None;
@@ -397,7 +445,144 @@ impl Explorer {
         self.rows.as_deref().unwrap_or_default()
     }
 
+    /// Expands `dir` if it is collapsed.
+    pub fn expand(&mut self, dir: &Path) {
+        if self.expanded.insert(dir.to_path_buf()) {
+            self.rows = None;
+        }
+    }
+
+    /// Opens a name field for a new file (or `folder`) as the first entry
+    /// of `parent`, expanding it. Replaces any field already open.
+    pub fn begin_new(&mut self, parent: PathBuf, folder: bool) {
+        if parent != self.root {
+            self.expanded.insert(parent.clone());
+        }
+        let target = if folder {
+            EditTarget::NewFolder { parent }
+        } else {
+            EditTarget::NewFile { parent }
+        };
+        self.start_edit(target, String::new());
+    }
+
+    /// Turns the row of `path` into a name field holding its current name.
+    pub fn begin_rename(&mut self, path: PathBuf) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.start_edit(EditTarget::Rename { path }, name);
+    }
+
+    fn start_edit(&mut self, target: EditTarget, name: String) {
+        self.editing = Some(InlineEdit {
+            target,
+            name,
+            error: None,
+            focus: true,
+        });
+        self.rows = None;
+    }
+
+    pub fn cancel_edit(&mut self) {
+        if self.editing.take().is_some() {
+            self.rows = None;
+        }
+    }
+
+    pub fn editing(&self) -> Option<&InlineEdit> {
+        self.editing.as_ref()
+    }
+
+    /// The text of the open name field.
+    pub fn edit_name_mut(&mut self) -> Option<&mut String> {
+        self.editing.as_mut().map(|edit| &mut edit.name)
+    }
+
+    /// Closes the name field and returns what it asks for. An empty or
+    /// unchanged name just closes it; a name that cannot be used keeps it
+    /// open with [`InlineEdit::error`] set.
+    pub fn commit_edit(&mut self) -> Option<ExplorerAction> {
+        let edit = self.editing.as_ref()?;
+        let current = match &edit.target {
+            EditTarget::Rename { path } => Some(path.as_path()),
+            _ => None,
+        };
+        let action = match file_ops::validate_name(edit.target.dir(), &edit.name, current) {
+            Err(NameError::Empty) => None,
+            Err(error) => {
+                if let Some(edit) = self.editing.as_mut() {
+                    edit.error = Some(error);
+                    edit.focus = true;
+                }
+                return None;
+            }
+            Ok(name) => match &edit.target {
+                EditTarget::NewFile { parent } => Some(ExplorerAction::Create {
+                    dir: parent.clone(),
+                    name,
+                    folder: false,
+                }),
+                EditTarget::NewFolder { parent } => Some(ExplorerAction::Create {
+                    dir: parent.clone(),
+                    name,
+                    folder: true,
+                }),
+                EditTarget::Rename { path } => (path.file_name() != Some(std::ffi::OsStr::new(&name)))
+                    .then(|| ExplorerAction::Rename {
+                        from: path.clone(),
+                        name,
+                    }),
+            },
+        };
+        self.cancel_edit();
+        action
+    }
+
+    /// After `from` was renamed to `to`: folders that were expanded at or
+    /// under `from` stay expanded under `to`.
+    pub fn rebase_expanded(&mut self, from: &Path, to: &Path) {
+        self.expanded = self
+            .expanded
+            .drain()
+            .map(|dir| file_ops::rebase(&dir, from, to).unwrap_or(dir))
+            .collect();
+        self.rows = None;
+    }
+
+    /// Whether a new entry's field goes first in `dir`, and if so whether
+    /// it is a folder.
+    fn new_entry_in(&self, dir: &Path) -> Option<bool> {
+        match &self.editing.as_ref()?.target {
+            EditTarget::NewFile { parent } if parent == dir => Some(false),
+            EditTarget::NewFolder { parent } if parent == dir => Some(true),
+            _ => None,
+        }
+    }
+
+    /// The entry being renamed.
+    fn renaming(&self) -> Option<&Path> {
+        match &self.editing.as_ref()?.target {
+            EditTarget::Rename { path } => Some(path),
+            _ => None,
+        }
+    }
+
     fn push_rows(&mut self, dir: &Path, depth: usize, rows: &mut Vec<TreeRow>) {
+        if let Some(folder) = self.new_entry_in(dir) {
+            rows.push(TreeRow {
+                entry: FsEntry {
+                    path: dir.to_path_buf(),
+                    is_dir: folder,
+                    name: String::new(),
+                },
+                depth,
+                expanded: false,
+                edit: true,
+            });
+        }
+        let renaming = self.renaming().map(Path::to_path_buf);
         let entries = self
             .children
             .entry(dir.to_path_buf())
@@ -406,10 +591,12 @@ impl Explorer {
         for entry in entries {
             let expanded = entry.is_dir && self.expanded.contains(&entry.path);
             let path = entry.path.clone();
+            let edit = renaming.as_deref() == Some(path.as_path());
             rows.push(TreeRow {
                 entry,
                 depth,
                 expanded,
+                edit,
             });
             if expanded {
                 self.push_rows(&path, depth + 1, rows);
@@ -648,6 +835,7 @@ fn show_matches(
                     entry: entry.clone(),
                     depth: 0,
                     expanded: false,
+                    edit: false,
                 };
                 let folder = entry
                     .path
@@ -1778,6 +1966,141 @@ mod tests {
         assert!(
             name.pos.x + name.galley.size().x <= row.right(),
             "the name stays inside its row"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `(name, depth, edit)` of every visible row.
+    fn edit_outline(explorer: &mut Explorer) -> Vec<(String, usize, bool)> {
+        explorer
+            .rows()
+            .iter()
+            .map(|row| (row.entry.name.clone(), row.depth, row.edit))
+            .collect()
+    }
+
+    #[test]
+    fn test_new_file_edit_row_is_first_under_its_expanded_parent() {
+        let root = fixture("edit_new");
+        let mut explorer = Explorer::new(root.clone());
+        explorer.begin_new(root.join("src"), false);
+        assert_eq!(
+            edit_outline(&mut explorer),
+            vec![
+                ("docs".into(), 0, false),
+                ("src".into(), 0, false),
+                ("".into(), 1, true),
+                ("nested".into(), 1, false),
+                ("main.rs".into(), 1, false),
+                ("Cargo.toml".into(), 0, false),
+            ]
+        );
+        explorer.cancel_edit();
+        assert!(explorer.editing().is_none());
+        assert!(edit_outline(&mut explorer).iter().all(|(_, _, edit)| !edit));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_new_entry_in_the_root_is_the_first_row() {
+        let root = fixture("edit_new_root");
+        let mut explorer = Explorer::new(root.clone());
+        explorer.begin_new(root.clone(), true);
+        let rows = explorer.rows();
+        assert!(rows[0].edit && rows[0].entry.is_dir && rows[0].depth == 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_rename_marks_the_row_and_fills_the_name() {
+        let root = fixture("edit_rename");
+        let mut explorer = Explorer::new(root.clone());
+        explorer.begin_rename(root.join("Cargo.toml"));
+        assert_eq!(explorer.editing().unwrap().name, "Cargo.toml");
+        let marked: Vec<_> = explorer.rows().iter().filter(|r| r.edit).map(|r| r.entry.name.clone()).collect();
+        assert_eq!(marked, vec!["Cargo.toml".to_string()]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_commit_edit_turns_a_valid_name_into_an_action() {
+        let root = fixture("edit_commit");
+        let mut explorer = Explorer::new(root.clone());
+
+        explorer.begin_new(root.join("src"), false);
+        explorer.edit_name_mut().unwrap().push_str(" lib.rs ");
+        assert_eq!(
+            explorer.commit_edit(),
+            Some(ExplorerAction::Create { dir: root.join("src"), name: "lib.rs".into(), folder: false })
+        );
+        assert!(explorer.editing().is_none());
+
+        explorer.begin_rename(root.join("Cargo.toml"));
+        *explorer.edit_name_mut().unwrap() = "Cargo.lock".into();
+        assert_eq!(
+            explorer.commit_edit(),
+            Some(ExplorerAction::Rename { from: root.join("Cargo.toml"), name: "Cargo.lock".into() })
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_commit_edit_keeps_the_edit_open_on_a_bad_name() {
+        let root = fixture("edit_bad");
+        let mut explorer = Explorer::new(root.clone());
+        explorer.begin_new(root.clone(), false);
+        explorer.edit_name_mut().unwrap().push_str("Cargo.toml");
+        assert_eq!(explorer.commit_edit(), None);
+        assert_eq!(explorer.editing().unwrap().error, Some(NameError::Exists));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_commit_edit_cancels_an_empty_or_unchanged_name() {
+        let root = fixture("edit_noop");
+        let mut explorer = Explorer::new(root.clone());
+        explorer.begin_new(root.clone(), true);
+        assert_eq!(explorer.commit_edit(), None);
+        assert!(explorer.editing().is_none(), "empty name cancels");
+
+        explorer.begin_rename(root.join("Cargo.toml"));
+        assert_eq!(explorer.commit_edit(), None);
+        assert!(explorer.editing().is_none(), "same name cancels");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_refresh_and_collapse_all_cancel_the_edit() {
+        let root = fixture("edit_refresh");
+        let mut explorer = Explorer::new(root.clone());
+        explorer.begin_rename(root.join("Cargo.toml"));
+        explorer.refresh();
+        assert!(explorer.editing().is_none());
+        explorer.begin_rename(root.join("Cargo.toml"));
+        explorer.collapse_all();
+        assert!(explorer.editing().is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_rebase_expanded_keeps_a_renamed_folder_open() {
+        let root = fixture("edit_rebase");
+        let mut explorer = Explorer::new(root.clone());
+        explorer.toggle(&root.join("src"));
+        explorer.toggle(&root.join("src/nested"));
+        fs::rename(root.join("src"), root.join("lib")).unwrap();
+        explorer.rebase_expanded(&root.join("src"), &root.join("lib"));
+        explorer.refresh();
+        assert_eq!(
+            outline(&mut explorer),
+            owned(&[
+                ("docs", 0),
+                ("lib", 0),
+                ("nested", 1),
+                ("deep.rs", 2),
+                ("main.rs", 1),
+                ("Cargo.toml", 0),
+            ])
         );
         let _ = fs::remove_dir_all(&root);
     }
