@@ -25,8 +25,9 @@ Last updated 2026-11-04.
   into three lines); brackets and quotes pair, wrap a selection, step over
   a typed closer; Backspace removes an empty pair. Later: step over only
   auto-inserted closers, as VS Code does.
-- [ ] **Bracket matching** — highlight the pair at the caret,
-  `Ctrl+Shift+\` jumps to the match.
+- [x] **Bracket matching** — done 2026-11-04 (`src/brackets.rs`): the pair
+  at the caret gets a thin box; `Ctrl+Shift+\\` (Edit → Go to Bracket) jumps
+  to it. Plain scan: brackets in strings and comments are not told apart.
 - [ ] **Code folding** — fold blocks by indentation (simpler than parsing
   syntax).
 - [ ] **Multi-cursor / column select** — `Ctrl+D` exists, but egui's
@@ -50,4 +51,4 @@ Last updated 2026-11-04.
 
 ## Suggested order
 
-Bracket matching → code folding → diff view.
+Code folding → diff view.
