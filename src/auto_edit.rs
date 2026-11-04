@@ -205,7 +205,13 @@ pub fn apply_events(
     events: &[egui::Event],
     language: Language,
 ) -> Option<(Edit, Vec<usize>)> {
-    if events.iter().any(|e| matches!(e, egui::Event::Ime(_))) {
+    // While an input method composes, its preedit text is not in the
+    // document yet: leave the frame to `TextEdit`. An empty preedit only
+    // marks the end of a composition; fcitx and ibus wrap plain typing in it.
+    let composing = events.iter().any(|e| {
+        matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if !text.is_empty())
+    });
+    if composing {
         return None;
     }
     let unit = indent_unit(text);
@@ -231,8 +237,11 @@ pub fn apply_events(
                     None => plain_backspace(&state.text, state.selection),
                 }
             }
-            // `TextEdit` leaves newlines in `Text` to its Enter handling.
-            egui::Event::Text(typed) if !typed.is_empty() && typed != "\n" && typed != "\r" => {
+            // `TextEdit` leaves newlines in `Text` to its Enter handling. An
+            // input method delivers typed text as a commit instead.
+            egui::Event::Text(typed) | egui::Event::Ime(egui::ImeEvent::Commit(typed))
+                if !typed.is_empty() && typed != "\n" && typed != "\r" =>
+            {
                 let mut one = typed.chars();
                 let rule = match (one.next(), one.next()) {
                     (Some(ch), None) => on_char(&state.text, state.selection, ch, language, &unit),
@@ -464,9 +473,35 @@ mod tests {
         assert_eq!(got, edit("a", caret(1)));
     }
 
+    fn preedit(s: &str) -> egui::Event {
+        egui::Event::Ime(egui::ImeEvent::Preedit { text: String::from(s), active_range_chars: None })
+    }
+
+    fn commit(s: &str) -> egui::Event {
+        egui::Event::Ime(egui::ImeEvent::Commit(String::from(s)))
+    }
+
     #[test]
-    fn test_apply_events_skips_a_frame_with_ime() {
-        let events = [egui::Event::Ime(egui::ImeEvent::Commit(String::from("x"))), typed("(")];
+    fn test_apply_events_skips_a_frame_while_composing() {
+        let events = [preedit("ni"), typed("(")];
         assert_eq!(apply_events("", caret(0), &events, Language::Rust), None);
+    }
+
+    /// With an input method running (fcitx, ibus), egui-winit delivers plain
+    /// typing as IME commits wrapped in empty preedits.
+    #[test]
+    fn test_apply_events_treats_an_ime_commit_as_typing() {
+        let events = [preedit(""), commit("("), preedit("")];
+        let (got, handled) = apply_events("", caret(0), &events, Language::Php).unwrap();
+        assert_eq!(got, edit("()", caret(1)));
+        assert_eq!(handled, vec![1]);
+    }
+
+    #[test]
+    fn test_apply_events_handles_enter_next_to_an_empty_preedit() {
+        let enter = key(egui::Key::Enter, egui::Modifiers::NONE);
+        let events = [preedit(""), enter];
+        let (got, _) = apply_events("{}", caret(1), &events, Language::Php).unwrap();
+        assert_eq!(got, edit("{\n    \n}", caret(6)));
     }
 }
