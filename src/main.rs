@@ -7,6 +7,7 @@ mod activity_bar;
 mod app;
 mod auto_edit;
 mod blame;
+mod brackets;
 mod bookmarks;
 mod console_panel;
 mod editor_view;
