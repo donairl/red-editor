@@ -199,6 +199,8 @@ pub struct Explorer {
     found: Option<Found>,
     /// The name field open in the tree, if any.
     editing: Option<InlineEdit>,
+    /// Where the tree scrolls next frame, to bring the name field into view.
+    scroll_to: Option<f32>,
     /// How many times the visible tree was worked out.
     #[cfg(test)]
     row_builds: usize,
@@ -309,6 +311,7 @@ impl Explorer {
             index: None,
             found: None,
             editing: None,
+            scroll_to: None,
             #[cfg(test)]
             row_builds: 0,
         }
@@ -491,11 +494,13 @@ impl Explorer {
         }
     }
 
+    #[cfg(test)]
     pub fn editing(&self) -> Option<&InlineEdit> {
         self.editing.as_ref()
     }
 
     /// The text of the open name field.
+    #[cfg(test)]
     pub fn edit_name_mut(&mut self) -> Option<&mut String> {
         self.editing.as_mut().map(|edit| &mut edit.name)
     }
@@ -722,7 +727,7 @@ pub fn show(
 
     let mut filter_rect = Rect::NOTHING;
     if explorer.is_section_open() {
-        filter_rect = egui::Frame::NONE
+        let filter = egui::Frame::NONE
             .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
                 ui.add(
@@ -731,9 +736,14 @@ pub fn show(
                         .hint_text(i18n.t("explorer.filter"))
                         .desired_width(f32::INFINITY),
                 )
-                .rect
             })
             .inner;
+        filter_rect = filter.rect;
+        // The filter swaps the tree for a flat list, where an open name
+        // field may have no row left to show in.
+        if filter.changed() {
+            explorer.cancel_edit();
+        }
     }
 
     let mut response = ExplorerResponse {
@@ -763,10 +773,14 @@ pub fn show(
     let mut toggled = None;
     let mut blank_top = None;
     let root = explorer.root().to_path_buf();
-    let rows = explorer.rows();
-    let scroll = egui::ScrollArea::vertical()
+    let mut area = egui::ScrollArea::vertical()
         .id_salt("explorer_tree")
-        .auto_shrink([false, false])
+        .auto_shrink([false, false]);
+    if let Some(offset) = explorer.scroll_to.take() {
+        area = area.vertical_scroll_offset(offset);
+    }
+    let rows = explorer.rows();
+    let scroll = area
         .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, range| {
             ui.spacing_mut().item_spacing = Vec2::ZERO;
             let last = range.end == rows.len();
@@ -805,6 +819,14 @@ pub fn show(
                 blank_top = Some(ui.min_rect().bottom());
             }
         });
+    // A field still waiting for focus was not drawn: its row is out of
+    // view (a new entry at the top of a scrolled tree). Scroll to it.
+    let unseen = edit.as_ref().is_some_and(|edit| edit.focus);
+    let edit_row = rows.iter().position(|row| row.edit);
+    if let (true, Some(index)) = (unseen, edit_row) {
+        explorer.scroll_to = Some(index as f32 * ROW_HEIGHT);
+        ui.ctx().request_repaint();
+    }
     // The empty space below the last row: New File / New Folder in the root.
     if let Some(top) = blank_top.filter(|top| *top < scroll.inner_rect.bottom()) {
         let blank = Rect::from_min_max(
@@ -1218,6 +1240,7 @@ fn show_edit_row(
     let name_x = paint_row(ui, palette, &shown, None, None, rect, false, true);
 
     let id = ui.scope_id().with("explorer_edit");
+    let requested = edit.focus;
     if edit.focus {
         edit.focus = false;
         ui.memory_mut(|m| m.request_focus(id));
@@ -1256,6 +1279,12 @@ fn show_edit_row(
         } else {
             EditOutcome::Commit
         };
+    }
+    // Focus can also go while the row is scrolled out of view, where no
+    // `lost_focus` is reported: a field drawn without it commits, as a
+    // click elsewhere would.
+    if !requested && !field.has_focus() {
+        return EditOutcome::Commit;
     }
     EditOutcome::Keep
 }

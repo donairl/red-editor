@@ -41,9 +41,15 @@ pub fn validate_name(dir: &Path, name: &str, current: Option<&Path>) -> Result<S
     Ok(name.to_string())
 }
 
-/// Whether `a` and `b` name the same file or folder, so a rename between
-/// them only changes letter case on a case-insensitive file system.
+/// Whether `a` and `b` name the same file or folder under names that differ
+/// at most in letter case, so a rename between them only changes case on a
+/// case-insensitive file system. A hard link has another name, so it is not
+/// the same entry: renaming onto it would do nothing on Linux.
 fn same_entry(a: &Path, b: &Path) -> bool {
+    let lower = |p: &Path| p.file_name().map(|n| n.to_string_lossy().to_lowercase());
+    if a.parent() != b.parent() || lower(a) != lower(b) {
+        return false;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -54,8 +60,7 @@ fn same_entry(a: &Path, b: &Path) -> bool {
     }
     #[cfg(not(unix))]
     {
-        let lower = |p: &Path| p.file_name().map(|n| n.to_string_lossy().to_lowercase());
-        a.parent() == b.parent() && lower(a) == lower(b)
+        true
     }
 }
 
@@ -241,6 +246,19 @@ mod tests {
         let err = rename(&dir.join("a.rs"), "b.rs").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read_to_string(dir.join("b.rs")).unwrap(), "b");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_name_refuses_a_hard_link_of_the_entry() {
+        let dir = temp("validate_hard_link");
+        fs::write(dir.join("a.rs"), "a").unwrap();
+        fs::hard_link(dir.join("a.rs"), dir.join("b.rs")).unwrap();
+        assert_eq!(
+            validate_name(&dir, "b.rs", Some(&dir.join("a.rs"))),
+            Err(NameError::Exists)
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

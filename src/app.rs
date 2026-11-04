@@ -1319,7 +1319,9 @@ impl TextEditorApp {
     fn show_delete_confirm(&mut self, ctx: &egui::Context) {
         let Some(path) = &self.pending_delete else { return };
         let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let key = if path.is_dir() {
+        // A link to a folder is removed as a link, not as a folder.
+        let folder = fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
+        let key = if folder {
             "explorer.delete_folder_message"
         } else {
             "explorer.delete_file_message"
