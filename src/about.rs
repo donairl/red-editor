@@ -46,11 +46,12 @@ pub fn info_text() -> String {
 
 /// The keyboard shortcuts the Shortcuts page lists: translation key and
 /// shortcut, in menu order.
-fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 23] {
+fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 28] {
     [
         ("file.new_tab", shortcuts::NEW_TAB),
         ("file.open_file", shortcuts::OPEN_FILE),
         ("file.open_folder", shortcuts::OPEN_FOLDER),
+        ("file.quick_open", shortcuts::QUICK_OPEN),
         ("file.save", shortcuts::SAVE),
         ("edit.find", shortcuts::FIND),
         ("edit.replace", shortcuts::REPLACE),
@@ -58,6 +59,7 @@ fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 23] {
         ("edit.goto_line", shortcuts::GOTO_LINE),
         ("edit.goto_symbol", shortcuts::GOTO_SYMBOL),
         ("edit.goto_definition", shortcuts::GOTO_DEFINITION),
+        ("edit.go_to_bracket", shortcuts::GO_TO_BRACKET),
         ("edit.prettify", shortcuts::PRETTIFY),
         ("edit.move_line_up", shortcuts::MOVE_LINE_UP),
         ("edit.move_line_down", shortcuts::MOVE_LINE_DOWN),
@@ -66,6 +68,9 @@ fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 23] {
         ("edit.delete_line", shortcuts::DELETE_LINE),
         ("edit.toggle_comment", shortcuts::TOGGLE_COMMENT),
         ("edit.select_next_match", shortcuts::SELECT_NEXT_MATCH),
+        ("view.command_palette", shortcuts::COMMAND_PALETTE),
+        ("view.fold", shortcuts::FOLD),
+        ("view.unfold", shortcuts::UNFOLD),
         ("view.markdown_preview", shortcuts::MARKDOWN_PREVIEW),
         ("view.source_control", shortcuts::SOURCE_CONTROL),
         ("view.blame", shortcuts::BLAME),
@@ -383,8 +388,9 @@ mod tests {
         let painted = texts(&ctx, &mut open, &mut state);
         assert!(painted.iter().any(|t| t == "Ctrl+S"), "{painted:?}");
         assert!(painted.iter().any(|t| t == "Simpan"));
-        assert!(painted.iter().any(|t| t == "F11"), "the last row is in view too: {painted:?}");
-        assert!(painted.iter().any(|t| t == "Tutup"), "and so is the footer");
+        // The list scrolls when it is taller than the window; the footer
+        // stays in view below it.
+        assert!(painted.iter().any(|t| t == "Tutup"), "the footer is in view: {painted:?}");
         // Every row names a real translation key.
         let i18n = I18n::builtin();
         for (key, _) in shortcut_rows() {

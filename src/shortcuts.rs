@@ -10,6 +10,7 @@ pub fn label(ctx: &Context, shortcut: &KeyboardShortcut) -> String {
     ctx.format_shortcut(shortcut)
         .replace("Slash", "/")
         .replace("Backtick", "`")
+        .replace("Backslash", "\\")
         .replace("OpenBracket", "[")
         .replace("CloseBracket", "]")
 }
