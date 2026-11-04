@@ -361,6 +361,9 @@ pub struct EditorRequest {
     pub reveal: Option<find::Range>,
     /// Paint this `char` range as the current find match. Set every frame.
     pub highlight: Option<find::Range>,
+    /// Auto-indent on Enter and auto-close brackets and quotes, by the rules
+    /// of this language. `None` leaves typing to `TextEdit`.
+    pub auto_edit: Option<Language>,
 }
 
 impl Default for TextEditorApp {
@@ -2502,6 +2505,7 @@ impl eframe::App for TextEditorApp {
             let hint = self.i18n.t("editor.placeholder");
             let active_idx = self.active_tab_index;
             let language = self.tabs[active_idx].effective_language();
+            request.auto_edit = Some(language);
 
             let scroll_to = if previewing { self.scroll_sync.take_editor_offset() } else { None };
             // Blame only speaks for the committed text: with unsaved edits

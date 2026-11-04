@@ -3,11 +3,12 @@
 use eframe::egui;
 
 use crate::app::{BlameColumn, CONTEXT_CHAR, EditorRequest};
+use crate::auto_edit;
 use crate::blame;
 use crate::bookmarks::Bookmarks;
 use crate::find;
 use crate::gutter;
-use crate::highlighter::HighlighterLayouter;
+use crate::highlighter::{HighlighterLayouter, Language};
 use crate::layout_cache::{self, LayoutCache};
 use crate::line_diff::LineMarks;
 use crate::markdown_preview::ScrollPos;
@@ -177,6 +178,46 @@ pub(crate) fn render_editor_with(
 /// Width of the column while it only carries a note.
 const BLAME_NOTE_WIDTH: f32 = 140.0;
 
+/// Auto-indent and auto-close: runs this frame's typing through
+/// [`auto_edit::apply_events`] before the `TextEdit` sees it. Only while
+/// the editor `id` has focus and a caret; the events it handles are taken
+/// out of the frame, so egui does not type them a second time.
+fn apply_auto_edit(ui: &egui::Ui, id: egui::Id, text: &mut String, language: Language) {
+    if !ui.memory(|m| m.has_focus(id)) {
+        return;
+    }
+    let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) else {
+        return;
+    };
+    let Some(range) = state.cursor.char_range() else {
+        return;
+    };
+    let (a, b) = (range.primary.index.0, range.secondary.index.0);
+    let n = text.chars().count();
+    let sel = (a.min(b).min(n), a.max(b).min(n));
+    let Some((edit, handled)) =
+        ui.input(|i| auto_edit::apply_events(text, sel, &i.events, language))
+    else {
+        return;
+    };
+    ui.ctx().input_mut(|i| {
+        let mut index = 0;
+        i.events.retain(|_| {
+            index += 1;
+            handled.binary_search(&(index - 1)).is_err()
+        });
+    });
+    *text = edit.text;
+    let (a, b) = edit.selection;
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(a),
+            egui::text::CCursor::new(b),
+        )));
+    state.store(ui.ctx(), id);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_editor_inner(
     ui: &mut egui::Ui,
@@ -223,20 +264,6 @@ fn render_editor_inner(
             let n = text.chars().count();
             (a.min(n), b.min(n))
         });
-        let text_edit = egui::TextEdit::multiline(text)
-            .font(egui::TextStyle::Monospace)
-            .lock_focus(true)
-            .desired_width(f32::INFINITY)
-            .min_size(ui.available_size())
-            .hint_text(hint.to_owned())
-            // No outline or rounded fill: the editor sits on the central
-            // panel's background, the same colour as the active tab.
-            .frame(egui::Frame::NONE.inner_margin(margin));
-
-        let text_edit = match id {
-            Some(id) => text_edit.id(id),
-            None => text_edit,
-        };
         if let Some(id) = id {
             if request.focus {
                 ui.memory_mut(|m| m.request_focus(id));
@@ -263,7 +290,26 @@ fn render_editor_inner(
                     });
                 });
             }
+            // After `select`, so it types at the selection the app asked for.
+            if let Some(language) = request.auto_edit {
+                apply_auto_edit(ui, id, text, language);
+            }
         }
+
+        let text_edit = egui::TextEdit::multiline(text)
+            .font(egui::TextStyle::Monospace)
+            .lock_focus(true)
+            .desired_width(f32::INFINITY)
+            .min_size(ui.available_size())
+            .hint_text(hint.to_owned())
+            // No outline or rounded fill: the editor sits on the central
+            // panel's background, the same colour as the active tab.
+            .frame(egui::Frame::NONE.inner_margin(margin));
+
+        let text_edit = match id {
+            Some(id) => text_edit.id(id),
+            None => text_edit,
+        };
 
         // egui moves the caret to any press, a right one included; a
         // right-click inside the selection must keep it for the menu.
@@ -938,5 +984,95 @@ mod tests {
         assert_eq!(painted_number(&shapes, 2).unwrap().1, palette.number_active);
         assert_eq!(painted_number(&shapes, 1).unwrap().1, palette.number);
         assert_eq!(painted_number(&shapes, 3).unwrap().1, palette.number);
+    }
+
+    /// One frame of a focusable editor `ed` over `text`, fed `events`.
+    fn auto_edit_frame(
+        ctx: &egui::Context,
+        text: &mut String,
+        events: Vec<egui::Event>,
+        request: EditorRequest,
+    ) {
+        let mut request = Some(request);
+        run_frame_with_events(ctx, events, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                super::render_editor_with(
+                    ui,
+                    text,
+                    None,
+                    false,
+                    false,
+                    "",
+                    Some(egui::Id::unique("ed")),
+                    request.take().unwrap_or_default(),
+                    None,
+                    &mut Bookmarks::default(),
+                    &LineMarks::default(),
+                    None,
+                    &mut LayoutCache::default(),
+                );
+            });
+        });
+    }
+
+    fn editor_caret(ctx: &egui::Context) -> Option<(usize, usize)> {
+        let range = egui::TextEdit::load_state(ctx, egui::Id::unique("ed"))?.cursor.char_range()?;
+        Some((range.primary.index.0, range.secondary.index.0))
+    }
+
+    /// A focused editor with its caret at the start, auto-edit as given.
+    fn focused_editor(ctx: &egui::Context, text: &mut String, auto_edit: Option<Language>) {
+        let request = EditorRequest { focus: true, select: Some((0, 0)), ..Default::default() };
+        auto_edit_frame(ctx, text, Vec::new(), request);
+        let request = EditorRequest { auto_edit, ..Default::default() };
+        auto_edit_frame(ctx, text, Vec::new(), request);
+    }
+
+    #[test]
+    fn test_auto_edit_closes_a_bracket_and_indents_inside_it() {
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let rust = Some(Language::Rust);
+        focused_editor(&ctx, &mut text, rust);
+        let request = || EditorRequest { auto_edit: rust, ..Default::default() };
+
+        let typed = vec![egui::Event::Text(String::from("{"))];
+        auto_edit_frame(&ctx, &mut text, typed, request());
+        assert_eq!(text, "{}");
+        assert_eq!(editor_caret(&ctx), Some((1, 1)));
+
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        auto_edit_frame(&ctx, &mut text, vec![enter], request());
+        assert_eq!(text, "{\n    \n}");
+        assert_eq!(editor_caret(&ctx), Some((6, 6)));
+    }
+
+    #[test]
+    fn test_without_auto_edit_typing_is_left_to_egui() {
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        focused_editor(&ctx, &mut text, None);
+
+        let typed = vec![egui::Event::Text(String::from("("))];
+        auto_edit_frame(&ctx, &mut text, typed, EditorRequest::default());
+        assert_eq!(text, "(");
+        assert_eq!(editor_caret(&ctx), Some((1, 1)));
+    }
+
+    /// An editor without focus does not act on the frame's typing.
+    #[test]
+    fn test_auto_edit_needs_focus() {
+        let ctx = egui::Context::default();
+        let mut text = String::from("x");
+        let typed = vec![egui::Event::Text(String::from("("))];
+        let request = EditorRequest { auto_edit: Some(Language::Rust), ..Default::default() };
+        auto_edit_frame(&ctx, &mut text, typed, request);
+        assert_eq!(text, "x");
     }
 }
