@@ -19,6 +19,7 @@ mod git_graph;
 mod git_log;
 mod git_worker;
 mod find;
+mod folding;
 mod gutter;
 mod highlighter;
 mod history;

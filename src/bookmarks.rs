@@ -76,7 +76,7 @@ fn newlines(bytes: &[u8]) -> usize {
 /// starting after it moves by the lines the span gained or lost, and one
 /// starting inside it (it was edited over) keeps its number, held within the
 /// lines that replaced the span. Bookmarks that meet are merged.
-fn follow_edit(lines: &BTreeSet<usize>, old: &str, new: &str) -> BTreeSet<usize> {
+pub(crate) fn follow_edit(lines: &BTreeSet<usize>, old: &str, new: &str) -> BTreeSet<usize> {
     // Bytes, not `str`: the span may split a character, and only `\n`
     // matters here.
     let (old, new) = (old.as_bytes(), new.as_bytes());
