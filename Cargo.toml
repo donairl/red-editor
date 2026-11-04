@@ -17,6 +17,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 portable-pty = "0.9"
 vt100 = "0.18"
 similar = "2"
+trash = "5"
 
 
 # winit 0.30.13 with a fix for moving the window onto a monitor with another
