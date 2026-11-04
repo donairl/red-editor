@@ -20,8 +20,11 @@ Last updated 2026-11-04.
 
 ## Editing experience
 
-- [ ] **Auto-indent and auto-close** — Enter keeps the previous line's
-  indentation; `{` inserts `{}`, same for `(`, `[`, quotes.
+- [x] **Auto-indent and auto-close** — done 2026-11-04 (`src/auto_edit.rs`):
+  Enter keeps the indentation (one level deeper after `{ ( [`, `{|}` splits
+  into three lines); brackets and quotes pair, wrap a selection, step over
+  a typed closer; Backspace removes an empty pair. Later: step over only
+  auto-inserted closers, as VS Code does.
 - [ ] **Bracket matching** — highlight the pair at the caret,
   `Ctrl+Shift+\` jumps to the match.
 - [ ] **Code folding** — fold blocks by indentation (simpler than parsing
@@ -47,4 +50,4 @@ Last updated 2026-11-04.
 
 ## Suggested order
 
-Auto-indent and auto-close → bracket matching → code folding.
+Bracket matching → code folding → diff view.
