@@ -5,6 +5,7 @@
 mod about;
 mod activity_bar;
 mod app;
+mod auto_edit;
 mod blame;
 mod bookmarks;
 mod console_panel;
