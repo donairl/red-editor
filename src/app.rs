@@ -687,6 +687,37 @@ impl TextEditorApp {
         }
     }
 
+    /// Fold: folds the innermost unfolded block holding the caret's line,
+    /// its header included. Unfold (`fold` false): unfolds the innermost
+    /// folded one. As VS Code's Fold and Unfold.
+    pub fn fold_at_caret(&mut self, ctx: &egui::Context, fold: bool) {
+        let (caret, _) = self.editor_selection(ctx).unwrap_or((0, 0));
+        let tab = self.active_tab_mut();
+        tab.sync_folds();
+        let line = find::line_col(&tab.text_content, caret).0 - 1;
+        let header = folding::enclosing(&tab.foldable, line)
+            .into_iter()
+            .find(|&header| tab.folds.is_folded(header) != fold);
+        match header {
+            Some(header) if fold => tab.folds.fold(header),
+            Some(header) => tab.folds.unfold(header),
+            None => return,
+        }
+        self.keep_caret_visible(ctx);
+    }
+
+    /// A caret that a fold just hid moves to the end of the fold's header,
+    /// as in VS Code; left there, the editor would unfold it again.
+    fn keep_caret_visible(&mut self, ctx: &egui::Context) {
+        let (caret, _) = self.editor_selection(ctx).unwrap_or((0, 0));
+        let hidden = self.active_tab_mut().hidden_ranges();
+        let at = hidden.partition_point(|&(_, end)| end < caret);
+        if let Some(&(start, _)) = hidden.get(at).filter(|&&(start, _)| start < caret) {
+            self.editor_request.focus = true;
+            self.editor_request.select = Some((start, start));
+        }
+    }
+
     fn saved_selection_id(&self) -> egui::Id {
         self.editor_id().with("saved_selection")
     }
@@ -1186,6 +1217,17 @@ impl TextEditorApp {
             ShortcutAction::ToggleComment => self.toggle_comment(ctx),
             ShortcutAction::SelectNextMatch => self.select_next_match(ctx),
             ShortcutAction::GoToBracket => self.go_to_bracket(ctx),
+            ShortcutAction::Fold => self.fold_at_caret(ctx, true),
+            ShortcutAction::Unfold => self.fold_at_caret(ctx, false),
+            ShortcutAction::FoldAll => {
+                let tab = self.active_tab_mut();
+                tab.sync_folds();
+                for (header, _) in tab.foldable.clone() {
+                    tab.folds.fold(header);
+                }
+                self.keep_caret_visible(ctx);
+            }
+            ShortcutAction::UnfoldAll => self.active_tab_mut().folds.clear(),
             ShortcutAction::PrevTab => {
                 self.active_tab_index =
                     (self.active_tab_index + self.tabs.len() - 1) % self.tabs.len();
@@ -2661,8 +2703,13 @@ impl eframe::App for TextEditorApp {
                 }
             })
             .inner;
+            let tab = &mut self.tabs[active_idx];
+            if let Some(line) = folds.reveal {
+                tab.folds.reveal_line(&tab.text_content, line);
+            }
             if let Some(header) = folds.toggle {
-                self.tabs[active_idx].folds.toggle(header);
+                tab.folds.toggle(header);
+                self.keep_caret_visible(&ctx);
             }
             self.show_editor_context_menu(&ctx, &editor);
             if editor.clicked() && ctx.input(|i| i.modifiers.command) {
@@ -3215,6 +3262,72 @@ mod tests {
         app.show_welcome = true;
         app.apply_shortcut(&ctx, ShortcutAction::DeleteLine);
         assert_eq!(app.active_tab().text_content, "two\none");
+    }
+
+    #[test]
+    fn test_fold_commands_change_the_folds() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        // Blocks: (0, 3), (1, 2), (4, 5).
+        app.active_tab_mut().text_content = String::from("a\n  b\n    c\n  d\ne\n  f\n");
+        let put_caret = |app: &TextEditorApp, at| {
+            let mut state = egui::TextEdit::load_state(&ctx, app.editor_id()).unwrap_or_default();
+            let caret = egui::text::CCursorRange::one(egui::text::CCursor::new(at));
+            state.cursor.set_char_range(Some(caret));
+            state.store(&ctx, app.editor_id());
+        };
+        let folded = |app: &TextEditorApp| -> Vec<usize> {
+            (0..6).filter(|&h| app.active_tab().folds.is_folded(h)).collect()
+        };
+        // On "    c": its innermost block is "  b"'s, which hides the caret,
+        // so the caret moves to the end of the header.
+        put_caret(&app, 8);
+        app.apply_shortcut(&ctx, ShortcutAction::Fold);
+        assert_eq!(folded(&app), vec![1]);
+        assert_eq!(app.editor_request.select, Some((5, 5)));
+        put_caret(&app, 5);
+        // Folding again folds the next block out.
+        app.apply_shortcut(&ctx, ShortcutAction::Fold);
+        assert_eq!(folded(&app), vec![0, 1]);
+        put_caret(&app, 1);
+        app.apply_shortcut(&ctx, ShortcutAction::Unfold);
+        assert_eq!(folded(&app), vec![1]);
+        app.apply_shortcut(&ctx, ShortcutAction::UnfoldAll);
+        assert!(folded(&app).is_empty());
+        app.apply_shortcut(&ctx, ShortcutAction::FoldAll);
+        assert_eq!(folded(&app), vec![0, 1, 4]);
+    }
+
+    #[test]
+    fn test_go_to_line_into_a_folded_block_unfolds_it() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.active_tab_mut().text_content = String::from("a {\n  b\n  c\n}\n");
+        app.active_tab_mut().folds.fold(0);
+        let frame = |app: &mut TextEditorApp| {
+            run_frame_with_events(&ctx, Vec::new(), |ui| {
+                eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
+            });
+        };
+        frame(&mut app);
+        assert!(app.active_tab().folds.is_folded(0), "a frame keeps the fold");
+        app.goto_line(2);
+        frame(&mut app);
+        assert!(app.active_tab().folds.is_empty());
+    }
+
+    #[test]
+    fn test_typing_on_a_folded_header_keeps_the_fold() {
+        let mut tab = DocumentTab::default_new();
+        tab.text_content = String::from("a {\n  b\n}\n");
+        tab.folds.fold(0);
+        assert_eq!(tab.hidden_ranges(), &[(3, 7)]);
+        tab.text_content.insert(0, 'x');
+        assert_eq!(tab.hidden_ranges(), &[(4, 8)]);
+        assert!(tab.folds.is_folded(0));
+        // Typing inside the hidden lines unfolds them.
+        tab.text_content.insert(6, 'z');
+        assert!(tab.hidden_ranges().is_empty());
     }
 
     #[test]

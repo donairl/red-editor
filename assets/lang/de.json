@@ -76,6 +76,10 @@
 
   "view.word_wrap": "Zeilenumbruch",
   "view.line_numbers": "Zeilennummern",
+  "view.fold": "Falten",
+  "view.unfold": "Entfalten",
+  "view.fold_all": "Alle falten",
+  "view.unfold_all": "Alle entfalten",
   "view.zen_mode": "Zen-Modus",
   "view.markdown_preview": "Markdown-Vorschau",
   "view.console": "Konsole",

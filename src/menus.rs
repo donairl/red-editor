@@ -112,6 +112,23 @@ impl TextEditorApp {
             self.i18n.t("view.line_numbers"),
         );
         let ctx = ui.ctx().clone();
+        // Folding acts on the editor, which the start page and the Git
+        // Graph hide.
+        let editing = !self.show_welcome && self.git_graph.is_none();
+        let fold_items = [
+            ("view.fold", shortcuts::label(&ctx, &shortcuts::FOLD), ShortcutAction::Fold),
+            ("view.unfold", shortcuts::label(&ctx, &shortcuts::UNFOLD), ShortcutAction::Unfold),
+            ("view.fold_all", String::new(), ShortcutAction::FoldAll),
+            ("view.unfold_all", String::new(), ShortcutAction::UnfoldAll),
+        ];
+        ui.separator();
+        for (key, shortcut, action) in fold_items {
+            let label = self.i18n.t(key);
+            if ui.add_enabled_ui(editing, |ui| menu_item(ui, label, &shortcut)).inner {
+                self.apply_shortcut(&ctx, action);
+            }
+        }
+        ui.separator();
         let blame = egui::Button::new(self.i18n.t("view.blame"))
             .selected(self.show_blame)
             .shortcut_text(shortcuts::label(&ctx, &shortcuts::BLAME));

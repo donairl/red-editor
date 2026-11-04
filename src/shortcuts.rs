@@ -10,6 +10,8 @@ pub fn label(ctx: &Context, shortcut: &KeyboardShortcut) -> String {
     ctx.format_shortcut(shortcut)
         .replace("Slash", "/")
         .replace("Backtick", "`")
+        .replace("OpenBracket", "[")
+        .replace("CloseBracket", "]")
 }
 
 const fn cmd(key: Key) -> KeyboardShortcut {
@@ -63,6 +65,12 @@ pub const GO_TO_BRACKET: KeyboardShortcut = cmd_shift(Key::Backslash);
 /// `GO_TO_BRACKET` as egui hears it on layouts where Shift turns `\` into
 /// `|` (US and others): it reports the shifted key.
 const GO_TO_BRACKET_SHIFTED: KeyboardShortcut = cmd_shift(Key::Pipe);
+pub const FOLD: KeyboardShortcut = cmd_shift(Key::OpenBracket);
+pub const UNFOLD: KeyboardShortcut = cmd_shift(Key::CloseBracket);
+/// `FOLD` and `UNFOLD` as egui hears them on layouts where Shift turns `[`
+/// and `]` into `{` and `}` (US and others).
+const FOLD_SHIFTED: KeyboardShortcut = cmd_shift(Key::OpenCurlyBracket);
+const UNFOLD_SHIFTED: KeyboardShortcut = cmd_shift(Key::CloseCurlyBracket);
 /// A second key for Prettify, the one other editors use.
 pub const FORMAT_DOCUMENT: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::SHIFT.plus(Modifiers::ALT), Key::F);
@@ -120,6 +128,14 @@ pub enum ShortcutAction {
     SelectNextMatch,
     /// Put the caret by the partner of the bracket it touches.
     GoToBracket,
+    /// Fold the innermost unfolded block holding the caret's line.
+    Fold,
+    /// Unfold the innermost folded block holding the caret's line.
+    Unfold,
+    /// Fold every foldable block (a menu and palette entry; no key).
+    FoldAll,
+    /// Unfold every block (a menu and palette entry; no key).
+    UnfoldAll,
     /// Open the Command Palette listing every command.
     CommandPalette,
     /// Open the Command Palette listing the folder's files.
@@ -194,9 +210,11 @@ impl ShortcutAction {
             ToggleComment => TOGGLE_COMMENT,
             SelectNextMatch => SELECT_NEXT_MATCH,
             GoToBracket => GO_TO_BRACKET,
+            Fold => FOLD,
+            Unfold => UNFOLD,
             CommandPalette => COMMAND_PALETTE,
             QuickOpen => QUICK_OPEN,
-            SelectTheme(_) => return None,
+            SelectTheme(_) | FoldAll | UnfoldAll => return None,
         })
     }
 
@@ -223,6 +241,10 @@ impl ShortcutAction {
                 | ToggleComment
                 | SelectNextMatch
                 | GoToBracket
+                | Fold
+                | Unfold
+                | FoldAll
+                | UnfoldAll
         )
     }
 }
@@ -249,6 +271,10 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (SELECT_NEXT_MATCH, SelectNextMatch),
         (GO_TO_BRACKET, GoToBracket),
         (GO_TO_BRACKET_SHIFTED, GoToBracket),
+        (FOLD, Fold),
+        (FOLD_SHIFTED, Fold),
+        (UNFOLD, Unfold),
+        (UNFOLD_SHIFTED, Unfold),
         (MARKDOWN_PREVIEW, MarkdownPreview),
         (TOGGLE_CONSOLE, ToggleConsole),
         (PRETTIFY, Prettify),
@@ -282,6 +308,13 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_fold_labels_show_the_bracket_keys() {
+        let ctx = egui::Context::default();
+        assert!(label(&ctx, &FOLD).ends_with('['), "{}", label(&ctx, &FOLD));
+        assert!(label(&ctx, &UNFOLD).ends_with(']'), "{}", label(&ctx, &UNFOLD));
+    }
 
     #[test]
     fn test_consume_shortcut_prefers_shift_variant() {
@@ -352,6 +385,11 @@ mod tests {
             (egui::Key::Backslash, ctrl_shift, ShortcutAction::GoToBracket),
             // What a US layout reports for Shift+\.
             (egui::Key::Pipe, ctrl_shift, ShortcutAction::GoToBracket),
+            (egui::Key::OpenBracket, ctrl_shift, ShortcutAction::Fold),
+            (egui::Key::CloseBracket, ctrl_shift, ShortcutAction::Unfold),
+            // What a US layout reports for Shift+[ and Shift+].
+            (egui::Key::OpenCurlyBracket, ctrl_shift, ShortcutAction::Fold),
+            (egui::Key::CloseCurlyBracket, ctrl_shift, ShortcutAction::Unfold),
             (
                 egui::Key::F,
                 egui::Modifiers::SHIFT | egui::Modifiers::ALT,

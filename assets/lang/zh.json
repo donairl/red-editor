@@ -76,6 +76,10 @@
 
   "view.word_wrap": "自动换行",
   "view.line_numbers": "行号",
+  "view.fold": "折叠",
+  "view.unfold": "展开",
+  "view.fold_all": "全部折叠",
+  "view.unfold_all": "全部展开",
   "view.zen_mode": "禅模式",
   "view.markdown_preview": "Markdown 预览",
   "view.console": "控制台",

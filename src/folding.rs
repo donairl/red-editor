@@ -191,6 +191,7 @@ fn changed_span(old: &str, new: &str) -> (usize, usize) {
 /// folded block `(header, last)`, from the `\n` ending the header line up
 /// to (not including) the `\n` ending line `last`, so the header row is
 /// followed directly by the next visible line.
+#[cfg(test)]
 pub fn hidden_ranges(text: &str, folds: &Folds) -> Vec<(usize, usize)> {
     hidden_ranges_of(text, &foldable(text), folds)
 }

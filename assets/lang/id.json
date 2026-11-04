@@ -76,6 +76,10 @@
 
   "view.word_wrap": "Bungkus Baris",
   "view.line_numbers": "Nomor Baris",
+  "view.fold": "Lipat",
+  "view.unfold": "Buka Lipatan",
+  "view.fold_all": "Lipat Semua",
+  "view.unfold_all": "Buka Semua Lipatan",
   "view.zen_mode": "Mode Zen",
   "view.markdown_preview": "Pratinjau Markdown",
   "view.console": "Konsol",

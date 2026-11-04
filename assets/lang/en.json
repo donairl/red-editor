@@ -76,6 +76,10 @@
 
   "view.word_wrap": "Word Wrap",
   "view.line_numbers": "Line Numbers",
+  "view.fold": "Fold",
+  "view.unfold": "Unfold",
+  "view.fold_all": "Fold All",
+  "view.unfold_all": "Unfold All",
   "view.zen_mode": "Zen Mode",
   "view.markdown_preview": "Markdown Preview",
   "view.console": "Console",

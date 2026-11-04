@@ -81,6 +81,46 @@ pub(crate) struct FoldOutput {
     /// Fold or unfold the block with this header (0-based line): its
     /// chevron or its `⋯` marker was clicked.
     pub toggle: Option<usize>,
+    /// Unfold whatever hides this line (0-based): the caret was put there
+    /// by other means than stepping over the fold (find, Go to Line, undo).
+    pub reveal: Option<usize>,
+}
+
+/// Keeps the caret of editor `id` out of the `hidden` ranges: one that
+/// ArrowUp, ArrowDown, PageUp, PageDown, ArrowLeft or ArrowRight moved into
+/// a fold steps over it, to the end of its header or the start of the line
+/// after it. A Shift selection keeps its other end. A caret put inside a
+/// fold otherwise is reported: returns its 0-based line, to be unfolded.
+fn skip_hidden(ui: &egui::Ui, id: egui::Id, text: &str, hidden: &[(usize, usize)]) -> Option<usize> {
+    let mut state = egui::TextEdit::load_state(ui.ctx(), id)?;
+    let range = state.cursor.char_range()?;
+    let caret = range.primary.index.0;
+    // A caret right after the header's `\n` up to the end of the last
+    // hidden line sits on a hidden row.
+    let at = hidden.partition_point(|&(_, end)| end < caret);
+    let &(start, end) = hidden.get(at).filter(|&&(start, _)| start < caret)?;
+    let (down, up) = ui.input(|i| {
+        use egui::Key::*;
+        let pressed = |keys: [egui::Key; 3]| keys.iter().any(|&k| i.key_pressed(k));
+        (pressed([ArrowDown, PageDown, ArrowRight]), pressed([ArrowUp, PageUp, ArrowLeft]))
+    });
+    let to = if down && end < text.chars().count() {
+        end + 1
+    } else if down || up {
+        start
+    } else {
+        return Some(text.chars().take(caret).filter(|&c| c == '\n').count());
+    };
+    let other = if range.is_empty() { to } else { range.secondary.index.0 };
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(other),
+            egui::text::CCursor::new(to),
+        )));
+    state.store(ui.ctx(), id);
+    ui.ctx().request_repaint();
+    None
 }
 
 /// Paints a small rounded `⋯` box after the end of each folded header line
@@ -544,6 +584,9 @@ fn render_editor_inner(
                 )));
             state.store(ui.ctx(), id);
             ui.ctx().request_repaint();
+        }
+        if let (Some(id), false) = (id, request.hidden.is_empty()) {
+            folds.reveal = skip_hidden(ui, id, text, &request.hidden);
         }
 
         // Rectangle of a `char` range, when it sits on one row.
@@ -1267,5 +1310,59 @@ mod tests {
         let on_text = egui::pos2(galley.left() + 2.0, number.center().y);
         let (folds, _) = fold_frame(&ctx, &mut text, click_events(on_text), &hidden, &foldable);
         assert_eq!(folds.toggle, None);
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// The caret steps over a folded block, and a caret put inside one by
+    /// other means asks for the block to be unfolded.
+    #[test]
+    fn test_arrow_down_from_a_folded_header_lands_after_the_block() {
+        let ctx = egui::Context::default();
+        let mut text = String::from("a {\n  b\n  c\n}\nz");
+        // "a {" ends at char 3, "  c" at char 11; "}" starts at 12.
+        let mut frame = |events, request: EditorRequest| {
+            let request = EditorRequest { hidden: vec![(3, 11)], ..request };
+            let mut folds = FoldOutput::default();
+            let mut request = Some(request);
+            run_frame_with_events(&ctx, events, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    folds = super::render_editor_with(
+                        ui,
+                        &mut text,
+                        None,
+                        false,
+                        false,
+                        "",
+                        Some(egui::Id::unique("ed")),
+                        request.take().unwrap_or_default(),
+                        None,
+                        &mut Bookmarks::default(),
+                        &LineMarks::default(),
+                        None,
+                        &mut LayoutCache::default(),
+                    )
+                    .2;
+                });
+            });
+            folds
+        };
+        frame(Vec::new(), EditorRequest { focus: true, select: Some((1, 1)), ..Default::default() });
+        let folds = frame(vec![key(egui::Key::ArrowDown)], EditorRequest::default());
+        assert_eq!(folds.reveal, None);
+        assert_eq!(editor_caret(&ctx), Some((12, 12)), "start of the line after the block");
+        frame(vec![key(egui::Key::ArrowUp)], EditorRequest::default());
+        assert_eq!(editor_caret(&ctx), Some((3, 3)), "end of the header");
+        // Go to Line puts the caret on line 2, inside the block.
+        let folds = frame(Vec::new(), EditorRequest { goto: Some(6), ..Default::default() });
+        assert_eq!(folds.reveal, Some(1));
     }
 }

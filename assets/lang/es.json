@@ -76,6 +76,10 @@
 
   "view.word_wrap": "Ajuste de línea",
   "view.line_numbers": "Números de línea",
+  "view.fold": "Plegar",
+  "view.unfold": "Desplegar",
+  "view.fold_all": "Plegar todo",
+  "view.unfold_all": "Desplegar todo",
   "view.zen_mode": "Modo Zen",
   "view.markdown_preview": "Vista previa de Markdown",
   "view.console": "Consola",
