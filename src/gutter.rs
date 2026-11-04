@@ -2,7 +2,7 @@
 //!
 //! The editor reserves room for the gutter through its left margin; this
 //! module only measures that room and paints the numbers, a marker on each
-//! bookmarked line, and git's change markers, into it.
+//! bookmarked line, git's change markers, and the fold chevrons, into it.
 
 use eframe::egui::{self, Align2, Color32, FontId, Galley, Rect, pos2};
 
@@ -29,6 +29,18 @@ const CHANGE_INSET: f32 = 5.0;
 const CHANGE_WIDTH: f32 = 3.0;
 /// Half the height of the triangle marking removed lines.
 const DELETED_SIZE: f32 = 4.0;
+/// Half the size of a fold chevron, which sits right of the change bar.
+const CHEVRON_SIZE: f32 = 3.0;
+
+/// The editor's folds, as the gutter needs them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Folding<'a> {
+    /// The `char` ranges folded away, sorted: their lines get no number.
+    pub hidden: &'a [(usize, usize)],
+    /// Line ranges `(header, last)` of the foldable blocks, 0-based, in
+    /// header order: their headers get a chevron.
+    pub foldable: &'a [(usize, usize)],
+}
 
 /// Number colours. `DARK` and `LIGHT` are VS Code's "Dark Modern" and
 /// "Light Modern"; the other themes derive theirs in `theme.rs`.
@@ -114,11 +126,14 @@ struct Number {
     active: bool,
     bookmarked: bool,
     change: Option<Mark>,
+    /// For the header of a foldable block, whether it is folded.
+    fold: Option<bool>,
 }
 
 /// The numbers of the lines whose first row overlaps `visible`.
 ///
 /// With word wrap a line spans several rows; only its first row is numbered.
+/// Lines folded away get no number.
 fn visible_numbers(
     galley: &Galley,
     galley_top: f32,
@@ -126,28 +141,47 @@ fn visible_numbers(
     active_line: Option<usize>,
     bookmarks: &Bookmarks,
     changes: &LineMarks,
+    folding: &Folding<'_>,
 ) -> Vec<Number> {
-    let mut numbers = Vec::new();
+    let mut numbers: Vec<Number> = Vec::new();
     let mut line = 1;
     let mut starts_line = true;
+    // The `char` index the row starts at.
+    let mut chars = 0;
+    let mut hidden = folding.hidden.iter().peekable();
+    let mut foldable = folding.foldable.iter().peekable();
     for row in &galley.rows {
+        let start = chars;
+        chars += row.char_count_including_newline().0;
         let rect = row.rect().translate(egui::vec2(0.0, galley_top));
-        if rect.top() > visible.max {
+        if starts_line && rect.top() > visible.max {
             break;
         }
-        if starts_line && rect.bottom() >= visible.min {
+        while hidden.next_if(|&&(_, end)| end < start).is_some() {}
+        let is_hidden = hidden.peek().is_some_and(|&&(a, b)| a < start && start <= b);
+        if starts_line && !is_hidden && rect.bottom() >= visible.min {
+            while foldable.next_if(|&&(header, _)| header + 1 < line).is_some() {}
+            let header = foldable.peek().is_some_and(|&&(header, _)| header + 1 == line);
             numbers.push(Number {
                 line,
                 row: rect.y_range(),
                 active: active_line == Some(line),
                 bookmarked: bookmarks.contains(line),
                 change: changes.get(line),
+                fold: header.then_some(false),
             });
         }
-        starts_line = row.ends_with_newline;
         if row.ends_with_newline {
+            // A fold hides the text from its header's `\n` on.
+            let newline = chars - 1;
+            if let Some(number) = numbers.last_mut().filter(|n| n.line == line && n.fold.is_some())
+                && folding.hidden.binary_search_by_key(&newline, |&(a, _)| a).is_ok()
+            {
+                number.fold = Some(true);
+            }
             line += 1;
         }
+        starts_line = row.ends_with_newline;
     }
     numbers
 }
@@ -156,6 +190,10 @@ fn visible_numbers(
 ///
 /// The gutter sticks to the left edge of the viewport: when the editor is
 /// scrolled sideways the text slides underneath it, as in VS Code.
+///
+/// A foldable line gets a chevron between its number and the text, as in
+/// VS Code: always while folded, only while the pointer is over the gutter
+/// otherwise. Returns the header (0-based line) whose chevron was clicked.
 pub fn paint(
     ui: &egui::Ui,
     output: &egui::text_edit::TextEditOutput,
@@ -163,7 +201,8 @@ pub fn paint(
     width: f32,
     bookmarks: &Bookmarks,
     changes: &LineMarks,
-) {
+    folding: &Folding<'_>,
+) -> Option<usize> {
     let palette = theme::active(ui.ctx()).gutter;
     let clip = ui.clip_rect();
     let left = output.response.response.rect.left().max(clip.left());
@@ -179,6 +218,8 @@ pub fn paint(
         .map(|range| line_of_char(&output.galley, range.primary.index.0));
 
     let x = rect.right() - PAD_RIGHT;
+    let hovered = ui.rect_contains_pointer(rect);
+    let mut toggled = None;
     for number in visible_numbers(
         &output.galley,
         output.galley_pos.y,
@@ -186,7 +227,26 @@ pub fn paint(
         active_line,
         bookmarks,
         changes,
+        folding,
     ) {
+        if let Some(folded) = number.fold {
+            let cell = Rect::from_x_y_ranges(x + CHANGE_INSET + CHANGE_WIDTH..=rect.right(), number.row);
+            let id = output.response.response.id.with(("fold_chevron", number.line));
+            let response = ui
+                .interact(cell, id, egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if response.clicked() {
+                toggled = Some(number.line - 1);
+            }
+            if folded || hovered {
+                let color = if response.hovered() {
+                    palette.number_active
+                } else {
+                    palette.number
+                };
+                paint_chevron(&painter, cell.center(), folded, color);
+            }
+        }
         if let Some(change) = number.change {
             paint_change(&painter, rect.right() - PAD_RIGHT + CHANGE_INSET, number.row, change, &palette);
         }
@@ -208,6 +268,19 @@ pub fn paint(
             color,
         );
     }
+    toggled
+}
+
+/// A fold chevron centred on `at`: pointing right (`▸`) while folded, down
+/// (`▾`) otherwise.
+fn paint_chevron(painter: &egui::Painter, at: egui::Pos2, folded: bool, color: Color32) {
+    let s = CHEVRON_SIZE;
+    let points = if folded {
+        vec![pos2(at.x - s * 0.6, at.y - s), pos2(at.x + s * 0.6, at.y), pos2(at.x - s * 0.6, at.y + s)]
+    } else {
+        vec![pos2(at.x - s, at.y - s * 0.6), pos2(at.x + s, at.y - s * 0.6), pos2(at.x, at.y + s * 0.6)]
+    };
+    painter.add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
 }
 
 /// A git change marker at `x`, beside the line spanning `row`: a bar for an
@@ -340,6 +413,7 @@ mod tests {
             Some(2),
             &Bookmarks::default(),
             &LineMarks::default(),
+            &Folding::default(),
         );
         let lines: Vec<usize> = numbers.iter().map(|n| n.line).collect();
         assert_eq!(lines, vec![1, 2]);
@@ -362,6 +436,7 @@ mod tests {
             None,
             &Bookmarks::default(),
             &LineMarks::default(),
+            &Folding::default(),
         );
         let lines: Vec<usize> = numbers.iter().map(|n| n.line).collect();
         assert_eq!(lines, vec![2, 3]);
@@ -384,6 +459,7 @@ mod tests {
             None,
             &bookmarks,
             &LineMarks::default(),
+            &Folding::default(),
         );
         let flagged: Vec<bool> = numbers.iter().map(|n| n.bookmarked).collect();
         assert_eq!(flagged, vec![false, true, false]);
@@ -401,8 +477,39 @@ mod tests {
             None,
             &Bookmarks::default(),
             &changes,
+            &Folding::default(),
         );
         let marks: Vec<Option<Mark>> = numbers.iter().map(|n| n.change).collect();
         assert_eq!(marks, vec![None, Some(Mark::Added), None]);
+    }
+
+    #[test]
+    fn test_folded_lines_get_no_number_and_headers_a_chevron() {
+        // Lines 1..=3 ("  b", "    c", "  d") are folded under "a".
+        let text = "a\n  b\n    c\n  d\ne\n  f\n  g";
+        let galley = with_ui(|ui| layout(ui, text, f32::INFINITY));
+        let bookmarks = {
+            let mut bookmarks = Bookmarks::default();
+            bookmarks.toggle(3, text);
+            bookmarks
+        };
+        let folding = Folding {
+            hidden: &[(1, 15)],
+            foldable: &[(0, 3), (1, 2), (4, 6)],
+        };
+        let numbers = visible_numbers(
+            &galley,
+            0.0,
+            egui::Rangef::new(0.0, 1e6),
+            None,
+            &bookmarks,
+            &LineMarks::default(),
+            &folding,
+        );
+        let lines: Vec<usize> = numbers.iter().map(|n| n.line).collect();
+        assert_eq!(lines, vec![1, 5, 6, 7]);
+        let folds: Vec<Option<bool>> = numbers.iter().map(|n| n.fold).collect();
+        assert_eq!(folds, vec![Some(true), Some(false), None, None]);
+        assert!(numbers.iter().all(|n| !n.bookmarked), "a hidden bookmark is not drawn");
     }
 }

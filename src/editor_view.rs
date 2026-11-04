@@ -74,6 +74,74 @@ pub(crate) fn render_editor(
     );
 }
 
+/// What the user did to the folds in a frame, for the app to apply to the
+/// document's folds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FoldOutput {
+    /// Fold or unfold the block with this header (0-based line): its
+    /// chevron or its `⋯` marker was clicked.
+    pub toggle: Option<usize>,
+}
+
+/// Paints a small rounded `⋯` box after the end of each folded header line
+/// in view; returns the header (0-based line) whose box was clicked.
+fn paint_fold_markers(
+    ui: &egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    hidden: &[(usize, usize)],
+) -> Option<usize> {
+    if hidden.is_empty() {
+        return None;
+    }
+    let clip = ui.clip_rect();
+    let color = ui
+        .visuals()
+        .override_text_color
+        .unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
+    let mut clicked = None;
+    let mut chars = 0;
+    let mut line = 0;
+    for row in &output.galley.rows {
+        let start = chars;
+        chars += row.char_count_including_newline().0;
+        let top = output.galley_pos.y + row.pos.y;
+        if top > clip.bottom() {
+            break;
+        }
+        if !row.ends_with_newline {
+            continue;
+        }
+        let newline = chars - 1;
+        if top + row.height() >= clip.top()
+            && hidden.binary_search_by_key(&newline, |&(a, _)| a).is_ok()
+        {
+            let end = output.galley_pos + row.pos.to_vec2()
+                + egui::vec2(row.x_offset(egui::text::CharIndex(newline - start)), row.height() * 0.5);
+            let size = egui::vec2(row.height() * 1.4, row.height() * 0.7);
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(end.x + 4.0, end.y - size.y * 0.5),
+                size,
+            );
+            let id = output.response.response.id.with(("fold_marker", line));
+            let response = ui
+                .interact(rect, id, egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if response.clicked() {
+                clicked = Some(line);
+            }
+            let fill = color.gamma_multiply(if response.hovered() { 0.3 } else { 0.15 });
+            let painter = ui.painter();
+            painter.rect_filled(rect, egui::CornerRadius::same(3), fill);
+            for dot in [-1.0, 0.0, 1.0] {
+                let at = rect.center() + egui::vec2(dot * size.x * 0.25, 0.0);
+                painter.circle_filled(at, 1.2, color.gamma_multiply(0.8));
+            }
+        }
+        line += 1;
+    }
+    clicked
+}
+
 /// Rectangles covering the `char` range `(start, end)` of `galley`, one per
 /// row, relative to the galley. Drawn the way egui draws a focused editor's
 /// selection, including the half-height nub for a selected newline.
@@ -108,7 +176,8 @@ fn selection_rects(galley: &egui::Galley, (start, end): find::Range) -> Vec<egui
 /// editor's state) and a one-shot `request` to act on. `bookmarks` follow
 /// the edits and are marked in the gutter. The text is laid out through
 /// `layout_cache`, which keeps the layout while nothing changes. Also
-/// returns the editor's response, for its right-click menu.
+/// returns the editor's response, for its right-click menu, and what the
+/// user did to the folds.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_editor_with(
     ui: &mut egui::Ui,
@@ -124,7 +193,7 @@ pub(crate) fn render_editor_with(
     changes: &LineMarks,
     blame: Option<BlameColumn<'_>>,
     layout_cache: &mut LayoutCache,
-) -> (ScrollPos, egui::Response) {
+) -> (ScrollPos, egui::Response, FoldOutput) {
     // The blame column is a strip left of the scroll area, painted after
     // it, once the text's rows are known.
     let Some(column) = blame else {
@@ -234,7 +303,7 @@ fn render_editor_inner(
     changes: &LineMarks,
     layout_cache: &mut LayoutCache,
     blame: Option<(egui::Rect, egui::Rect, &BlameColumn<'_>, egui::FontId)>,
-) -> (ScrollPos, egui::Response) {
+) -> (ScrollPos, egui::Response, FoldOutput) {
     let scroll_area = if word_wrap {
         egui::ScrollArea::vertical()
     } else {
@@ -341,6 +410,7 @@ fn render_editor_inner(
                         buf.as_str(),
                         layout_cache::Style::Highlighted(job),
                         wrap_width,
+                        &request.hidden,
                     )
                 };
                 text_edit.layouter(&mut lay).show(ui)
@@ -365,16 +435,22 @@ fn render_editor_inner(
                 };
                 let mut lay = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
                     let wrap_width = if word_wrap { wrap_width } else { f32::INFINITY };
-                    layout_cache.galley(ui, buf.as_str(), style.clone(), wrap_width)
+                    layout_cache.galley(ui, buf.as_str(), style.clone(), wrap_width, &request.hidden)
                 };
                 text_edit.layouter(&mut lay).show(ui)
             }
         };
 
         bookmarks.sync(text);
+        let mut folds = FoldOutput::default();
         if let Some(width) = gutter_width {
-            gutter::paint(ui, &output, &font_id, width, bookmarks, changes);
+            let folding = gutter::Folding {
+                hidden: &request.hidden,
+                foldable: &request.foldable,
+            };
+            folds.toggle = gutter::paint(ui, &output, &font_id, width, bookmarks, changes, &folding);
         }
+        folds.toggle = folds.toggle.or(paint_fold_markers(ui, &output, &request.hidden));
         if let Some((strip, clip, column, small)) = &blame {
             match column.blame {
                 Some(blame) => blame::paint_column(
@@ -517,9 +593,11 @@ fn render_editor_inner(
         if let Some(rect) = request.reveal.and_then(span) {
             ui.scroll_to_rect(rect, None);
         }
-        output.response.response.clone()
+        (output.response.response.clone(), folds)
     });
-    (ScrollPos::of(&output), output.inner)
+    let pos = ScrollPos::of(&output);
+    let (response, folds) = output.inner;
+    (pos, response, folds)
 }
 #[cfg(test)]
 mod tests {
@@ -1102,5 +1180,92 @@ mod tests {
         let request = EditorRequest { auto_edit: Some(Language::Rust), ..Default::default() };
         auto_edit_frame(&ctx, &mut text, typed, request);
         assert_eq!(text, "x");
+    }
+
+    /// One frame of an editor with line numbers over `text`, folded as
+    /// `hidden` says, fed `events`.
+    fn fold_frame(
+        ctx: &egui::Context,
+        text: &mut String,
+        events: Vec<egui::Event>,
+        hidden: &[(usize, usize)],
+        foldable: &[(usize, usize)],
+    ) -> (FoldOutput, Vec<egui::epaint::ClippedShape>) {
+        let mut folds = FoldOutput::default();
+        let shapes = run_frame_with_events(ctx, events, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let request = EditorRequest {
+                    hidden: hidden.to_vec(),
+                    foldable: foldable.to_vec(),
+                    ..Default::default()
+                };
+                folds = super::render_editor_with(
+                    ui,
+                    text,
+                    None,
+                    false,
+                    true,
+                    "",
+                    Some(egui::Id::unique("ed")),
+                    request,
+                    None,
+                    &mut Bookmarks::default(),
+                    &LineMarks::default(),
+                    None,
+                    &mut LayoutCache::default(),
+                )
+                .2;
+            });
+        });
+        (folds, shapes)
+    }
+
+    #[test]
+    fn test_a_folded_block_is_drawn_collapsed() {
+        let doc = String::from("a {\n  b\n  c\n}\nz");
+        let mut text = doc.clone();
+        let ctx = egui::Context::default();
+        // "a {" ends at char 3, "  c" at char 11.
+        let (hidden, foldable) = ([(3, 11)], [(0, 2)]);
+        let (_, open) = fold_frame(&ctx, &mut text, Vec::new(), &[], &foldable);
+        let (_, shapes) = fold_frame(&ctx, &mut text, Vec::new(), &hidden, &foldable);
+        let (open_galley, _) = painted_text(&open, &doc).expect("text painted");
+        let (galley, _) = painted_text(&shapes, &doc).expect("text painted");
+        let row_h = open_galley.height() / 5.0;
+        assert!((open_galley.height() - galley.height() - 2.0 * row_h).abs() < 1.0);
+        for (n, shown) in [(1, true), (2, false), (3, false), (4, true), (5, true)] {
+            assert_eq!(painted_number(&shapes, n).is_some(), shown, "line {n}");
+        }
+        // Line 4 sits right below the header.
+        let (header, _) = painted_number(&shapes, 1).unwrap();
+        let (after, _) = painted_number(&shapes, 4).unwrap();
+        assert!((after.center().y - header.center().y - row_h).abs() < 1.0);
+        assert_eq!(text, doc);
+    }
+
+    #[test]
+    fn test_clicking_the_marker_or_the_chevron_toggles_the_fold() {
+        let doc = String::from("a {\n  b\n  c\n}\nz");
+        let mut text = doc.clone();
+        let ctx = egui::Context::default();
+        let (hidden, foldable) = ([(3, 11)], [(0, 2)]);
+        let (_, shapes) = fold_frame(&ctx, &mut text, Vec::new(), &hidden, &foldable);
+        let (galley, _) = painted_text(&shapes, &doc).unwrap();
+        let (number, _) = painted_number(&shapes, 1).unwrap();
+        let char_width = galley.width() / 3.0;
+        // The `⋯` box starts 4 points after the end of "a {".
+        let marker = egui::pos2(galley.left() + 3.0 * char_width + 8.0, number.center().y);
+        let (folds, _) = fold_frame(&ctx, &mut text, click_events(marker), &hidden, &foldable);
+        assert_eq!(folds.toggle, Some(0), "marker");
+        fold_frame(&ctx, &mut text, Vec::new(), &hidden, &foldable);
+        // The chevron sits between the number and the text.
+        let chevron = egui::pos2(galley.left() - 4.0, number.center().y);
+        let (folds, _) = fold_frame(&ctx, &mut text, click_events(chevron), &hidden, &foldable);
+        assert_eq!(folds.toggle, Some(0), "chevron");
+        // A click on the text toggles nothing.
+        fold_frame(&ctx, &mut text, Vec::new(), &hidden, &foldable);
+        let on_text = egui::pos2(galley.left() + 2.0, number.center().y);
+        let (folds, _) = fold_frame(&ctx, &mut text, click_events(on_text), &hidden, &foldable);
+        assert_eq!(folds.toggle, None);
     }
 }

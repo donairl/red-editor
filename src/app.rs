@@ -29,6 +29,7 @@ use crate::markdown_preview::{MarkdownPreview, ScrollSync};
 use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
 use crate::prettify;
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
+use crate::folding::{self, Folds};
 use crate::search::{self, SearchAction, SearchState};
 use crate::session::{SESSION_KEY, Session};
 use crate::source_control::{self, DiffAction, ScmAction, ScmUi};
@@ -91,6 +92,14 @@ pub struct DocumentTab {
     pub line_marks: LineMarks,
     /// The text `line_marks` were computed for.
     marks_text: Option<String>,
+    /// The folded blocks; per tab, not saved.
+    pub folds: Folds,
+    /// The text `folds` and `foldable` were last checked against.
+    fold_text: Option<String>,
+    /// The foldable blocks of `fold_text`, as `folding::foldable` gives them.
+    foldable: Vec<(usize, usize)>,
+    /// The hidden `char` ranges of `fold_text`, and the folds they are for.
+    hidden: Option<(Folds, Vec<(usize, usize)>)>,
 }
 
 /// Modified time and size of a file: when either moves, the file changed.
@@ -138,6 +147,10 @@ impl DocumentTab {
             git_base: None,
             line_marks: LineMarks::default(),
             marks_text: None,
+            folds: Folds::default(),
+            fold_text: None,
+            foldable: Vec::new(),
+            hidden: None,
         }
     }
 
@@ -157,6 +170,10 @@ impl DocumentTab {
             git_base: None,
             line_marks: LineMarks::default(),
             marks_text: None,
+            folds: Folds::default(),
+            fold_text: None,
+            foldable: Vec::new(),
+            hidden: None,
         })
     }
 
@@ -189,6 +206,39 @@ impl DocumentTab {
     /// Moves the bookmarks along with the edits made since the last call.
     pub fn sync_bookmarks(&mut self) {
         self.bookmarks.sync(&self.text_content);
+    }
+
+    /// Moves the folds along with the edits made since the last call, and
+    /// finds the foldable blocks again. Folding is off, and every fold
+    /// dropped, in a document too large to highlight.
+    pub fn sync_folds(&mut self) {
+        if self.fold_text.as_ref() == Some(&self.text_content) {
+            return;
+        }
+        if text_content_exceeds_highlight_limit(&self.text_content) {
+            self.folds.clear();
+            self.foldable.clear();
+            self.fold_text = None;
+            self.hidden = None;
+            return;
+        }
+        if let Some(old) = &self.fold_text {
+            self.folds.follow_edit(old, &self.text_content);
+        }
+        self.foldable = folding::foldable(&self.text_content);
+        self.fold_text = Some(self.text_content.clone());
+        self.hidden = None;
+    }
+
+    /// The `char` ranges the folds hide, sorted and apart, worked out again
+    /// only when the text or the folds changed.
+    pub fn hidden_ranges(&mut self) -> &[(usize, usize)] {
+        self.sync_folds();
+        if self.hidden.as_ref().is_none_or(|(folds, _)| *folds != self.folds) {
+            let ranges = folding::hidden_ranges_of(&self.text_content, &self.foldable, &self.folds);
+            self.hidden = Some((self.folds.clone(), ranges));
+        }
+        self.hidden.as_ref().map_or(&[], |(_, ranges)| ranges)
     }
 
     pub fn is_pristine(&self) -> bool {
@@ -367,6 +417,12 @@ pub struct EditorRequest {
     pub auto_edit: Option<Language>,
     /// Box the bracket at the caret and its partner.
     pub match_brackets: bool,
+    /// The `char` ranges folded away (sorted, apart), laid out at zero
+    /// height. Set every frame.
+    pub hidden: Vec<(usize, usize)>,
+    /// Line ranges `(header, last)` of the foldable blocks, for the
+    /// gutter's chevrons. Empty while folding is off. Set every frame.
+    pub foldable: Vec<(usize, usize)>,
 }
 
 impl Default for TextEditorApp {
@@ -2522,6 +2578,11 @@ impl eframe::App for TextEditorApp {
             let language = self.tabs[active_idx].effective_language();
             request.auto_edit = Some(language);
             request.match_brackets = true;
+            if !too_large {
+                let tab = &mut self.tabs[active_idx];
+                request.hidden = tab.hidden_ranges().to_vec();
+                request.foldable = tab.foldable.clone();
+            }
 
             let scroll_to = if previewing { self.scroll_sync.take_editor_offset() } else { None };
             // Blame only speaks for the committed text: with unsaved edits
@@ -2550,7 +2611,7 @@ impl eframe::App for TextEditorApp {
             } else {
                 None
             };
-            let (editor_pos, editor) = ui.push_id(self.active_tab_index, |ui| {
+            let (editor_pos, editor, folds) = ui.push_id(self.active_tab_index, |ui| {
                 let tab = &mut self.tabs[active_idx];
                 if too_large {
                     render_editor_with(
@@ -2591,6 +2652,9 @@ impl eframe::App for TextEditorApp {
                 }
             })
             .inner;
+            if let Some(header) = folds.toggle {
+                self.tabs[active_idx].folds.toggle(header);
+            }
             self.show_editor_context_menu(&ctx, &editor);
             if editor.clicked() && ctx.input(|i| i.modifiers.command) {
                 self.goto_definition(&ctx, None);
@@ -3568,7 +3632,7 @@ mod tests {
             };
             let mut editor = None;
             let mut out = ctx.run_ui(input, |ui| {
-                let (_, response) = super::render_editor_with(
+                let (_, response, _) = super::render_editor_with(
                     ui,
                     &mut text,
                     None,
@@ -4281,7 +4345,7 @@ mod tests {
         let frame = |app: &mut TextEditorApp, events| {
             run_frame_with_events(&ctx, events, |ui| {
                 let tab = &mut app.tabs[0];
-                let (_, editor) = super::render_editor_with(
+                let (_, editor, _) = super::render_editor_with(
                     ui,
                     &mut tab.text_content,
                     None,
