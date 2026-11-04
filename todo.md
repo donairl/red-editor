@@ -1,15 +1,17 @@
 # Todo
 
 Improvement ideas for Red Text Editor, roughly in order of value per effort.
-Last updated 2026-11-03.
+Last updated 2026-11-04.
 
 ## High priority (daily use)
 
 - [x] **Command Palette** (`Ctrl+Shift+P`) and **Quick Open** (`Ctrl+P`) —
   done 2026-11-04 (`src/palette.rs`), hand-checked. Spec: `docs/superpowers/specs/2026-11-03-command-palette-design.md`,
   plan: `docs/superpowers/plans/2026-11-03-command-palette.md`.
-- [ ] **File operations in the Explorer** — right-click: New File, New Folder,
-  Rename, Delete, Reveal in Folder.
+- [x] **File operations in the Explorer** — done 2026-11-04
+  (`src/file_ops.rs`): right-click New File, New Folder, Rename, Delete
+  (to the Trash), Reveal in Folder; names typed inline. Later: F2 / Delete
+  keys (needs a selected row), New buttons in the header, `a/b.rs` names.
 - [x] **Restore session** — done 2026-11-03 (`src/session.rs`): folder,
   saved tabs and the active tab. Later: caret and scroll position per tab.
 - [x] **Reload when a file changes on disk** — already there:
@@ -45,5 +47,4 @@ Last updated 2026-11-03.
 
 ## Suggested order
 
-Command Palette → split `app.rs` → Explorer file operations → restore
-session → reload on disk change.
+Auto-indent and auto-close → bracket matching → code folding.
