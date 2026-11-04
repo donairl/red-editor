@@ -628,6 +628,8 @@ pub struct ExplorerResponse {
     pub file_history: Option<PathBuf>,
     /// The Search button was clicked: the caller opens Find in Files.
     pub find_in_files: bool,
+    /// A file operation picked from a menu or typed in a name field.
+    pub action: Option<ExplorerAction>,
     // Only the tests read where things were drawn.
     #[cfg_attr(not(test), allow(dead_code))]
     pub section_rect: Rect,
@@ -738,6 +740,7 @@ pub fn show(
         open_file: None,
         file_history: None,
         find_in_files: search.clicked(),
+        action: None,
         section_rect,
         search_rect,
         refresh_rect,
@@ -751,16 +754,32 @@ pub fn show(
     }
 
     // Only the rows in view are laid out: a folder can hold thousands.
-    let rows = explorer.rows();
+    // The rows are built first, while the name field is still in place,
+    // then the field is taken out so it can be edited as the rows draw.
+    explorer.rows();
+    let mut edit = explorer.editing.take();
+    let mut outcome = EditOutcome::Keep;
+    let mut choice = None;
     let mut toggled = None;
-    egui::ScrollArea::vertical()
+    let mut blank_top = None;
+    let root = explorer.root().to_path_buf();
+    let rows = explorer.rows();
+    let scroll = egui::ScrollArea::vertical()
         .id_salt("explorer_tree")
         .auto_shrink([false, false])
         .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, range| {
             ui.spacing_mut().item_spacing = Vec2::ZERO;
+            let last = range.end == rows.len();
             for row in &rows[range] {
                 let (rect, row_response) =
                     ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+                if let (true, Some(edit)) = (row.edit, edit.as_mut()) {
+                    outcome = show_edit_row(ui, &palette, row, rect, edit, i18n);
+                    if !row.entry.name.is_empty() {
+                        response.rows.push((row.entry.path.clone(), rect));
+                    }
+                    continue;
+                }
                 let selected = active_file == Some(row.entry.path.as_path());
                 paint_row(
                     ui,
@@ -779,14 +798,34 @@ pub fn show(
                         response.open_file = Some(row.entry.path.clone());
                     }
                 }
-                if !row.entry.is_dir {
-                    file_menu(&row_response, &row.entry.path, i18n, &mut response);
-                }
+                entry_menu(&row_response, &row.entry, true, i18n, &mut choice);
                 response.rows.push((row.entry.path.clone(), rect));
             }
+            if last {
+                blank_top = Some(ui.min_rect().bottom());
+            }
         });
+    // The empty space below the last row: New File / New Folder in the root.
+    if let Some(top) = blank_top.filter(|top| *top < scroll.inner_rect.bottom()) {
+        let blank = Rect::from_min_max(
+            pos2(scroll.inner_rect.left(), top),
+            scroll.inner_rect.max,
+        );
+        let blank = ui.interact(blank, ui.scope_id().with("explorer_blank"), Sense::click());
+        blank_menu(&blank, &root, i18n, &mut choice);
+    }
+
+    explorer.editing = edit;
+    match outcome {
+        EditOutcome::Commit => response.action = explorer.commit_edit(),
+        EditOutcome::Cancel => explorer.cancel_edit(),
+        EditOutcome::Keep => {}
+    }
     if let Some(dir) = toggled {
         explorer.toggle(&dir);
+    }
+    if let Some(choice) = choice {
+        apply_choice(explorer, choice, &mut response);
     }
     response
 }
@@ -805,6 +844,13 @@ fn show_matches(
 ) {
     let root = explorer.root().to_path_buf();
     explorer.update_matches(ui.ctx());
+    let mut edit = explorer.editing.take();
+    let mut outcome = EditOutcome::Keep;
+    let mut choice = None;
+    let renaming = edit.as_ref().and_then(|e| match &e.target {
+        EditTarget::Rename { path } => Some(path.clone()),
+        _ => None,
+    });
     let found = explorer.matches();
     if found.is_empty() {
         let message = if explorer.is_indexed() {
@@ -821,6 +867,7 @@ fn show_matches(
             FontId::proportional(13.0),
             palette.icon_inactive,
         );
+        explorer.editing = edit;
         return;
     }
     egui::ScrollArea::vertical()
@@ -835,8 +882,13 @@ fn show_matches(
                     entry: entry.clone(),
                     depth: 0,
                     expanded: false,
-                    edit: false,
+                    edit: renaming.as_ref() == Some(&entry.path),
                 };
+                if let (true, Some(edit)) = (row.edit, edit.as_mut()) {
+                    outcome = show_edit_row(ui, palette, &row, rect, edit, i18n);
+                    response.rows.push((entry.path.clone(), rect));
+                    continue;
+                }
                 let folder = entry
                     .path
                     .parent()
@@ -857,10 +909,19 @@ fn show_matches(
                 if row_response.clicked() {
                     response.open_file = Some(entry.path.clone());
                 }
-                file_menu(&row_response, &entry.path, i18n, response);
+                entry_menu(&row_response, entry, false, i18n, &mut choice);
                 response.rows.push((entry.path.clone(), rect));
             }
         });
+    explorer.editing = edit;
+    match outcome {
+        EditOutcome::Commit => response.action = explorer.commit_edit(),
+        EditOutcome::Cancel => explorer.cancel_edit(),
+        EditOutcome::Keep => {}
+    }
+    if let Some(choice) = choice {
+        apply_choice(explorer, choice, response);
+    }
 }
 
 /// `▾ NAME`, plus the Search, Refresh and Collapse All buttons while
@@ -921,16 +982,76 @@ fn paint_section_header(
     }
 }
 
-/// Background, indent guides, chevron or badge, and the name of one row,
-/// followed by `detail` in a dimmer colour.
-/// The right-click menu of a file row.
-fn file_menu(row: &egui::Response, path: &Path, i18n: &I18n, response: &mut ExplorerResponse) {
+/// A right-click menu entry, applied once the tree is drawn (the menus run
+/// while the rows still borrow the Explorer).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MenuChoice {
+    New { parent: PathBuf, folder: bool },
+    Rename(PathBuf),
+    Delete(PathBuf),
+    Reveal(PathBuf),
+    History(PathBuf),
+}
+
+/// The right-click menu of a file or folder row. `offer_new` is false in
+/// the flat list of filter matches, which has no obvious target folder.
+fn entry_menu(
+    row: &egui::Response,
+    entry: &FsEntry,
+    offer_new: bool,
+    i18n: &I18n,
+    choice: &mut Option<MenuChoice>,
+) {
     row.context_menu(|ui| {
-        if ui.button(i18n.t("history.file_history")).clicked() {
-            response.file_history = Some(path.to_path_buf());
-            ui.close();
+        let mut pick = |ui: &mut egui::Ui, key: &str, value: MenuChoice| {
+            if ui.button(i18n.t(key)).clicked() {
+                *choice = Some(value);
+                ui.close();
+            }
+        };
+        if offer_new {
+            let parent = if entry.is_dir {
+                entry.path.clone()
+            } else {
+                entry.path.parent().map(Path::to_path_buf).unwrap_or_default()
+            };
+            pick(ui, "explorer.new_file", MenuChoice::New { parent: parent.clone(), folder: false });
+            pick(ui, "explorer.new_folder", MenuChoice::New { parent, folder: true });
+            ui.separator();
+        }
+        pick(ui, "explorer.rename", MenuChoice::Rename(entry.path.clone()));
+        pick(ui, "explorer.delete", MenuChoice::Delete(entry.path.clone()));
+        ui.separator();
+        pick(ui, "explorer.reveal", MenuChoice::Reveal(entry.path.clone()));
+        if !entry.is_dir {
+            pick(ui, "history.file_history", MenuChoice::History(entry.path.clone()));
         }
     });
+}
+
+/// The right-click menu of the empty space below the tree: new entries in
+/// the root.
+fn blank_menu(blank: &egui::Response, root: &Path, i18n: &I18n, choice: &mut Option<MenuChoice>) {
+    blank.context_menu(|ui| {
+        for (key, folder) in [("explorer.new_file", false), ("explorer.new_folder", true)] {
+            if ui.button(i18n.t(key)).clicked() {
+                *choice = Some(MenuChoice::New { parent: root.to_path_buf(), folder });
+                ui.close();
+            }
+        }
+    });
+}
+
+/// Applies a menu entry: new and rename open a name field; the rest go to
+/// the app through `response`.
+fn apply_choice(explorer: &mut Explorer, choice: MenuChoice, response: &mut ExplorerResponse) {
+    match choice {
+        MenuChoice::New { parent, folder } => explorer.begin_new(parent, folder),
+        MenuChoice::Rename(path) => explorer.begin_rename(path),
+        MenuChoice::Delete(path) => response.action = Some(ExplorerAction::Delete(path)),
+        MenuChoice::Reveal(path) => response.action = Some(ExplorerAction::Reveal(path)),
+        MenuChoice::History(path) => response.file_history = Some(path),
+    }
 }
 
 /// The git change an Explorer entry is marked with.
@@ -943,6 +1064,8 @@ fn git_kind(git: Option<&Decorations>, entry: &FsEntry) -> Option<Kind> {
     }
 }
 
+/// Background, indent guides, chevron or badge, and the name of one row,
+/// followed by `detail` in a dimmer colour. Returns where the name starts.
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     ui: &egui::Ui,
@@ -953,7 +1076,7 @@ fn paint_row(
     rect: Rect,
     hovered: bool,
     selected: bool,
-) {
+) -> f32 {
     let painter = ui.painter();
     if selected {
         painter.rect_filled(rect, CornerRadius::ZERO, palette.row_selected);
@@ -993,6 +1116,7 @@ fn paint_row(
         );
         x += badge_width + BADGE_GAP;
     }
+    let name_x = x;
 
     // A changed file ends with its status letter, a folder holding one
     // with a dot, both in the change's colour, as is the name.
@@ -1049,6 +1173,134 @@ fn paint_row(
             );
         }
     }
+    name_x
+}
+
+/// How the name field ended this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditOutcome {
+    Keep,
+    Commit,
+    Cancel,
+}
+
+/// Characters of `name` before its extension: what a rename selects.
+/// Folders and dot-files (`.gitignore`) select the whole name.
+fn stem_chars(name: &str, is_dir: bool) -> usize {
+    let end = if is_dir { None } else { name.rfind('.').filter(|&i| i > 0) };
+    name[..end.unwrap_or(name.len())].chars().count()
+}
+
+/// Draws `row` with a single-line field over its name. Enter or a click
+/// elsewhere commits, Escape cancels; a refused name is shown below.
+fn show_edit_row(
+    ui: &mut egui::Ui,
+    palette: &SidebarPalette,
+    row: &TreeRow,
+    rect: Rect,
+    edit: &mut InlineEdit,
+    i18n: &I18n,
+) -> EditOutcome {
+    // Indent, chevron or badge as for a normal row, the badge after the
+    // typed name; the name itself is the field's.
+    let shown = TreeRow {
+        entry: FsEntry {
+            path: if row.entry.name.is_empty() {
+                row.entry.path.join(&edit.name)
+            } else {
+                row.entry.path.clone()
+            },
+            is_dir: row.entry.is_dir,
+            name: String::new(),
+        },
+        ..row.clone()
+    };
+    let name_x = paint_row(ui, palette, &shown, None, None, rect, false, true);
+
+    let id = ui.scope_id().with("explorer_edit");
+    if edit.focus {
+        edit.focus = false;
+        ui.memory_mut(|m| m.request_focus(id));
+        let end = if matches!(edit.target, EditTarget::Rename { .. }) {
+            stem_chars(&edit.name, row.entry.is_dir)
+        } else {
+            edit.name.chars().count()
+        };
+        let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(0),
+            egui::text::CCursor::new(end),
+        )));
+        state.store(ui.ctx(), id);
+    }
+    let field_rect = Rect::from_min_max(
+        pos2(name_x - 2.0, rect.top() + 1.0),
+        pos2(rect.right() - ROW_PADDING_X, rect.bottom() - 1.0),
+    );
+    let field = ui.put(
+        field_rect,
+        egui::TextEdit::singleline(&mut edit.name)
+            .id(id)
+            .font(FontId::proportional(13.0))
+            .margin(vec2(2.0, 1.0)),
+    );
+    if field.changed() {
+        edit.error = None;
+    }
+    if let Some(error) = edit.error {
+        paint_name_error(ui, palette, field_rect, &error_text(error, &edit.name, i18n));
+    }
+    if field.lost_focus() {
+        return if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            EditOutcome::Cancel
+        } else {
+            EditOutcome::Commit
+        };
+    }
+    EditOutcome::Keep
+}
+
+/// The message for a refused name.
+fn error_text(error: NameError, name: &str, i18n: &I18n) -> String {
+    let name = name.trim();
+    match error {
+        NameError::Empty => String::new(),
+        NameError::Reserved => i18n.tf("explorer.name_reserved", &[("name", name)]),
+        NameError::Separator => i18n.t("explorer.name_separator").to_owned(),
+        NameError::Exists => i18n.tf("explorer.name_exists", &[("name", name)]),
+    }
+}
+
+/// A red-bordered note just below `field`, over the rows beneath it.
+fn paint_name_error(ui: &egui::Ui, palette: &SidebarPalette, field: Rect, message: &str) {
+    field_outline(ui, field, palette.git_deleted);
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::unique("explorer_edit_error"),
+    ));
+    let galley = painter.layout(
+        message.to_owned(),
+        FontId::proportional(12.0),
+        palette.foreground,
+        field.width() - 8.0,
+    );
+    let note = Rect::from_min_size(
+        field.left_bottom(),
+        vec2(field.width(), galley.size().y + 8.0),
+    );
+    painter.rect(
+        note,
+        CornerRadius::ZERO,
+        palette.background,
+        Stroke::new(1.0, palette.git_deleted),
+        StrokeKind::Inside,
+    );
+    painter.galley(note.min + vec2(4.0, 4.0), galley, palette.foreground);
+}
+
+fn field_outline(ui: &egui::Ui, field: Rect, color: Color32) {
+    ui.painter()
+        .rect_stroke(field, CornerRadius::same(2), Stroke::new(1.0, color), StrokeKind::Outside);
 }
 
 /// `text` on one line, cut with `…` where it would pass `max_width`.
@@ -2103,5 +2355,70 @@ mod tests {
             ])
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn test_typing_a_name_and_enter_asks_to_create_it() {
+        let root = fixture("ui_new");
+        let ctx = egui::Context::default();
+        let mut explorer = Explorer::new(root.clone());
+        explorer.begin_new(root.clone(), false);
+
+        run(&ctx, Vec::new(), &mut explorer, None); // focuses the field
+        run(&ctx, vec![egui::Event::Text(String::from("notes.md"))], &mut explorer, None);
+        let (response, _) = run(&ctx, vec![key(egui::Key::Enter)], &mut explorer, None);
+        assert_eq!(
+            response.action,
+            Some(ExplorerAction::Create { dir: root.clone(), name: "notes.md".into(), folder: false })
+        );
+        assert!(explorer.editing().is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_escape_closes_the_name_field_without_an_action() {
+        let root = fixture("ui_escape");
+        let ctx = egui::Context::default();
+        let mut explorer = Explorer::new(root.clone());
+        explorer.begin_rename(root.join("Cargo.toml"));
+
+        run(&ctx, Vec::new(), &mut explorer, None);
+        run(&ctx, vec![egui::Event::Text("x".into())], &mut explorer, None);
+        let (response, _) = run(&ctx, vec![key(egui::Key::Escape)], &mut explorer, None);
+        assert_eq!(response.action, None);
+        assert!(explorer.editing().is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_rename_field_starts_with_the_stem_selected() {
+        let root = fixture("ui_stem");
+        let ctx = egui::Context::default();
+        let mut explorer = Explorer::new(root.clone());
+        explorer.begin_rename(root.join("Cargo.toml"));
+        run(&ctx, Vec::new(), &mut explorer, None);
+        // Typing replaces the selected stem and keeps `.toml`.
+        run(&ctx, vec![egui::Event::Text("Build".into())], &mut explorer, None);
+        assert_eq!(explorer.editing().unwrap().name, "Build.toml");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_stem_chars_stops_before_the_extension() {
+        assert_eq!(stem_chars("main.rs", false), 4);
+        assert_eq!(stem_chars("archive.tar.gz", false), 11);
+        assert_eq!(stem_chars(".gitignore", false), 10);
+        assert_eq!(stem_chars("src.old", true), 7);
+        assert_eq!(stem_chars("héllo.rs", false), 5);
     }
 }
