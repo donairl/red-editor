@@ -98,6 +98,14 @@ pub struct DocumentTab {
     pub line_marks: LineMarks,
     /// The text `line_marks` were computed for.
     marks_text: Option<String>,
+    /// The caret, as a `char` index, and the editor's vertical scroll offset
+    /// in points, as of the last frame the tab was drawn. Written to the
+    /// session, so the tab reopens where it was left.
+    pub caret: usize,
+    pub scroll: f32,
+    /// Set on a tab the session restored: its caret and scroll are put back
+    /// the first time the tab is drawn, then this is cleared.
+    pub restore_view: bool,
     /// The folded blocks; per tab, not saved.
     pub folds: Folds,
     /// The text `folds` and `foldable` were last checked against.
@@ -153,6 +161,9 @@ impl DocumentTab {
             git_base: None,
             line_marks: LineMarks::default(),
             marks_text: None,
+            caret: 0,
+            scroll: 0.0,
+            restore_view: false,
             folds: Folds::default(),
             fold_text: None,
             foldable: Vec::new(),
@@ -176,6 +187,9 @@ impl DocumentTab {
             git_base: None,
             line_marks: LineMarks::default(),
             marks_text: None,
+            caret: 0,
+            scroll: 0.0,
+            restore_view: false,
             folds: Folds::default(),
             fold_text: None,
             foldable: Vec::new(),
@@ -3036,7 +3050,27 @@ impl eframe::App for TextEditorApp {
                 request.foldable = tab.foldable.clone();
             }
 
-            let scroll_to = if previewing { self.scroll_sync.take_editor_offset() } else { None };
+            // A tab the session restored opens at the caret and the offset
+            // it was left at. Only on its first frame: egui keeps both from
+            // then on, and the user's own request for this frame wins.
+            let restored_view = if self.tabs[active_idx].restore_view
+                && request.select.is_none()
+                && request.goto.is_none()
+            {
+                self.tabs[active_idx].restore_view = false;
+                Some((self.tabs[active_idx].caret, self.tabs[active_idx].scroll))
+            } else {
+                None
+            };
+            if let Some((caret, _)) = restored_view {
+                request.select = Some((caret, caret));
+            }
+
+            let scroll_to = if previewing {
+                self.scroll_sync.take_editor_offset()
+            } else {
+                restored_view.map(|(_, scroll)| scroll)
+            };
             // Blame only speaks for the committed text: with unsaved edits
             // the lines would not line up, so a note takes its place.
             let blame_now = blame::now();
@@ -3105,6 +3139,15 @@ impl eframe::App for TextEditorApp {
             })
             .inner;
             let tab = &mut self.tabs[active_idx];
+            // Where the caret and the view are, for the session: egui keeps
+            // them in its memory, which does not outlive the process.
+            if let Some(caret) = egui::TextEdit::load_state(&ctx, editor_id)
+                .and_then(|state| state.cursor.char_range())
+                .map(|range| range.primary.index.0)
+            {
+                tab.caret = caret;
+            }
+            tab.scroll = editor_pos.offset;
             if let Some(line) = folds.reveal {
                 tab.folds.reveal_line(&tab.text_content, line);
             }
@@ -5638,15 +5681,103 @@ mod tests {
         let mut app = TextEditorApp::default();
         app.open_folder(dir.clone());
         app.open_file_in_tab(file.clone());
+        app.active_tab_mut().caret = 7;
+        app.active_tab_mut().scroll = 24.0;
         let mut storage = MemoryStorage::default();
         eframe::App::save(&mut app, &mut storage);
         assert!(eframe::Storage::get_string(&storage, SESSION_KEY).is_some());
 
         let session = saved_session(Some(&storage));
         assert_eq!(session.folder.as_ref(), Some(&dir));
-        assert_eq!(session.tabs, [file]);
+        let paths: Vec<&PathBuf> = session.tabs.iter().map(|tab| &tab.path).collect();
+        assert_eq!(paths, [&file]);
+        assert_eq!((session.tabs[0].caret, session.tabs[0].scroll), (7, 24.0));
         assert_eq!(saved_session(None), Session::default());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Three hundred lines, tall enough to scroll.
+    fn long_document() -> String {
+        (0..300).map(|i| format!("line {i}\n")).collect()
+    }
+
+    /// The frame records where the caret and the view are, so the session
+    /// saves the position the tab was left at.
+    #[test]
+    fn test_the_frame_records_the_caret_and_scroll_for_the_session() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        let text = long_document();
+        app.active_tab_mut().text_content = text.clone();
+        app.active_tab_mut().saved_content = text;
+        app.editor_request = EditorRequest { focus: true, select: Some((42, 42)), ..Default::default() };
+
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+        });
+
+        assert_eq!(app.active_tab().caret, 42, "the caret is not recorded");
+    }
+
+    /// A tab restored from the session puts its caret back and opens at the
+    /// offset it was left at, on its first frame only.
+    #[test]
+    fn test_a_restored_tab_opens_at_its_caret_and_scroll() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        let text = long_document();
+        app.active_tab_mut().text_content = text.clone();
+        app.active_tab_mut().saved_content = text;
+        app.active_tab_mut().caret = 42;
+        app.active_tab_mut().scroll = 600.0;
+        app.active_tab_mut().restore_view = true;
+
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+        });
+
+        let caret = egui::TextEdit::load_state(&ctx, app.editor_id())
+            .and_then(|state| state.cursor.char_range())
+            .map(|range| range.primary.index.0);
+        assert_eq!(caret, Some(42), "the caret did not come back");
+        assert!(!app.active_tab().restore_view, "the restore is applied once");
+        assert!(
+            (app.active_tab().scroll - 600.0).abs() < 1.0,
+            "the view did not come back: {}",
+            app.active_tab().scroll
+        );
+    }
+
+    /// Scrolling the editor is part of the position: what the frame shows is
+    /// what the session saves.
+    #[test]
+    fn test_scrolling_the_editor_is_recorded_for_the_session() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        let text = long_document();
+        app.active_tab_mut().text_content = text.clone();
+        app.active_tab_mut().saved_content = text;
+
+        // The pointer over the editor, then the wheel rolling down.
+        let events = vec![
+            egui::Event::PointerMoved(egui::pos2(400.0, 300.0)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -300.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        run_frame_with_events(&ctx, events, |ui| {
+            eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+        });
+
+        assert!(
+            app.active_tab().scroll > 0.0,
+            "the scroll was not recorded: {}",
+            app.active_tab().scroll
+        );
     }
 
     #[test]

@@ -14,8 +14,10 @@ Last updated 2026-11-06.
   keys (needs a selected row), New buttons in the header, `a/b.rs` names.
 - [x] **Restore session** — done 2026-11-03 (`src/session.rs`): folder,
   saved tabs and the active tab.
-- [ ] **Caret and scroll position per tab in the session** — reopen each
-  restored tab where it was left, not at line 1. Extends `src/session.rs`.
+- [x] **Caret and scroll position per tab in the session** — done 2026-11-06
+  (`src/session.rs`): each restored tab reopens at its caret and vertical
+  scroll offset; the frame records both, the session saves them per file.
+  A tab of an older session, saved without positions, opens at the top.
 - [x] **Reload when a file changes on disk** — already there:
   `check_files_on_disk` polls on focus and every few seconds, reloads clean
   tabs and flags dirty ones with a conflict prompt.
