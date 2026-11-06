@@ -91,8 +91,14 @@ Last updated 2026-11-06.
   kept in storage. Every dirty file with a path is written after a one
   second pause in the typing, and when the window loses focus; a file
   another program changed waits for the conflict dialog.
-- [ ] **Settings** — one place for tab size, spaces vs tabs, format on
-  save, trim trailing whitespace; a panel or a `settings.json`.
+- [x] **Settings** — done 2026-11-06 (`src/settings.rs`,
+  `src/settings_window.rs`): `Ctrl+,` / File → Settings… opens a window with
+  tab size, insert spaces, trim trailing whitespace and format on save
+  (explicit saves only, not auto-save), plus font size, theme, indent
+  guides, render whitespace, auto save and interface language. The
+  document's own indentation still wins; the setting is the fallback. Tab
+  / Shift+Tab indent and outdent the selected lines. egui draws a `\t`
+  four columns wide whatever the tab size.
 
 ## Tech debt
 
@@ -105,5 +111,4 @@ Last updated 2026-11-06.
 
 ## Suggested order
 
-Settings (one place for the toggles that piled up), then splitting
-`src/app.rs`, then the minimal LSP client.
+Splitting `src/app.rs`, then the minimal LSP client.

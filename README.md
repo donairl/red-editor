@@ -19,6 +19,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Word wrap** that can be toggled on or off (**View → Word Wrap**). When disabled, long lines scroll horizontally.
 - **Render whitespace** (**View → Render Whitespace**): a faint dot for every space and an arrow for every tab, to spot trailing whitespace and mixed indentation.
 - **Auto Save** (**File → Auto Save**, off by default): every file with a path saves itself once the typing pauses for a second, and when the window loses focus. Files another program changed are left to the conflict dialog.
+- **Settings** (**File → Settings…**, `Ctrl+,`): tab size, spaces or tabs, trimming trailing whitespace and formatting on save (explicit saves only), plus font size, theme, indent guides, render whitespace, auto save and the interface language, in one window. A change applies at once and is remembered.
 - **Font zoom** (**View → Zoom**, `Ctrl++` / `Ctrl+-` / `Ctrl+0`, or `Ctrl` + scroll): one font size for the editor, the gutter, the diff view and the terminal. The size is remembered across restarts, and the status bar shows it as a percentage when it is not the default one.
 - **Drag and drop**: drop files on the window to open them in tabs; a dropped folder becomes the workspace. While files hover over the window a hint says the drop will open them. On Linux this needs X11: winit, the window library, has no drag and drop on Wayland yet.
 - **VS Code-style Explorer and Activity Bar**: Open folders, browse tree hierarchy, click files to open in tabs. Includes **Refresh** and **Collapse All** actions in the folder header.
@@ -121,7 +122,7 @@ The editor opens on a **start page** with **New File**, **Open File…** and **O
 
 | Menu | Items |
 |---|---|
-| **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Quick Open…, Open Recent, Save, Save As…, Auto Save, Language, Exit |
+| **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Quick Open…, Open Recent, Save, Save As…, Auto Save, Settings…, Language, Exit |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line…, Prettify |
 | **View** | Word Wrap, Line Numbers, Indent Guides, Render Whitespace, Zen Mode, Split Editor, Markdown Preview, Command Palette…, Zoom, Theme, Language, Interface Language |
 | **Help** | About |
@@ -165,6 +166,8 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+P` | Quick Open (file by name) |
 | `Ctrl+G` | Go to line |
 | `Ctrl+\` | Split the editor into two views |
+| `Ctrl+,` | Settings window (tab size, spaces vs tabs, trim / format on save, theme, font size…) |
+| `Tab` / `Shift+Tab` | Indent / outdent the selected lines |
 | `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Zoom the text in / out / back to the default size |
 | `Ctrl` + scroll | Zoom the text in / out |
 | `Esc` | Close find bar, go-to-line bar, or Find in Files panel |
