@@ -16,6 +16,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Open Recent** (**File → Open Recent**): the last 20 files and folders you opened, newest first, kept across restarts. Click one to reopen it. If it no longer exists, the status bar says so and the entry is removed. **Clear Recently Opened** empties the list.
 - **Restore session**: the folder and the saved files open when you quit are reopened at the next start, with the same tab active. Untitled tabs are not kept; files that no longer exist are skipped.
 - **Word wrap** that can be toggled on or off (**View → Word Wrap**). When disabled, long lines scroll horizontally.
+- **Font zoom** (**View → Zoom**, `Ctrl++` / `Ctrl+-` / `Ctrl+0`, or `Ctrl` + scroll): one font size for the editor, the gutter, the diff view and the terminal. The size is remembered across restarts, and the status bar shows it as a percentage when it is not the default one.
 - **VS Code-style Explorer and Activity Bar**: Open folders, browse tree hierarchy, click files to open in tabs. Includes **Refresh** and **Collapse All** actions in the folder header.
 - **Find and Replace** (**Edit → Find**, **Edit → Replace**): Toolbar above the editor with highlighted search matches, case sensitivity option, and Replace All. Also includes **Go to Line…** to jump directly to a line number.
 - **Find in Files** (**Edit → Find in Files**, `Ctrl+Shift+F`): Asynchronous background text search across the opened folder. Results are grouped by file in the bottom panel, with the match highlighted on each line; click a file header to fold it, a result to open that line, or walk the results with `Up`/`Down` and `Enter` from the search field. A **files to include** field takes comma-separated globs (`*.rs`, `src/**`). Hidden files and folders, `target`, `node_modules`, files over 2 MB, and non-UTF-8 files are ignored; results are capped at 2,000 matches.
@@ -116,7 +117,7 @@ The editor opens on a **start page** with **New File**, **Open File…** and **O
 |---|---|
 | **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Quick Open…, Open Recent, Save, Save As…, Language, Exit |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line…, Prettify |
-| **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Command Palette…, Theme, Language, Interface Language |
+| **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Command Palette…, Zoom, Theme, Language, Interface Language |
 | **Help** | About |
 
 ### Keyboard Shortcuts
@@ -157,6 +158,8 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+Shift+P` | Command Palette |
 | `Ctrl+P` | Quick Open (file by name) |
 | `Ctrl+G` | Go to line |
+| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Zoom the text in / out / back to the default size |
+| `Ctrl` + scroll | Zoom the text in / out |
 | `Esc` | Close find bar, go-to-line bar, or Find in Files panel |
 
 Shortcuts are also displayed alongside their corresponding menu items.

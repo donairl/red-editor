@@ -6,6 +6,7 @@ use crate::app::TextEditorApp;
 use crate::find;
 use crate::git_worker::Op;
 use crate::theme;
+use crate::zoom;
 
 impl TextEditorApp {
     /// The document name and the latest status message, and the caret's
@@ -39,6 +40,16 @@ impl TextEditorApp {
                     egui::Color32::from_rgb(60, 180, 60)
                 };
                 ui.colored_label(color, msg);
+            }
+
+            // The font size, as a percentage of the default. Only when it is
+            // not the default: at 100% there is nothing to say.
+            let percent = zoom::percent(self.font_size);
+            if percent != 100 {
+                ui.separator();
+                let size = percent.to_string();
+                let label = self.i18n.tf("view.zoom_size", &[("size", &size)]);
+                ui.label(egui::RichText::new(label).small().weak());
             }
 
             if self.status_position.is_some() || self.status_bookmarks > 0 {

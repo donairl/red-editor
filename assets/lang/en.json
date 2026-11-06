@@ -7,6 +7,7 @@
   "menu.syntax": "Language",
   "menu.ui_language": "Interface Language",
   "menu.theme": "Theme",
+  "menu.zoom": "Zoom",
   "theme.system": "System",
 
   "file.new_tab": "New Tab",
@@ -296,6 +297,10 @@
   "git_log.hide": "Hide",
   "git_log.empty": "No git commands yet.",
   "view.command_palette": "Command Palette...",
+  "view.zoom_in": "Zoom In",
+  "view.zoom_out": "Zoom Out",
+  "view.zoom_reset": "Reset Zoom",
+  "view.zoom_size": "Font size: {size}%",
   "file.quick_open": "Quick Open...",
   "palette.commands_hint": "Type a command name",
   "palette.files_hint": "Type a file name",

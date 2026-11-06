@@ -7,6 +7,7 @@
   "menu.syntax": "Bahasa",
   "menu.ui_language": "Bahasa Antarmuka",
   "menu.theme": "Tema",
+  "menu.zoom": "Perbesar",
   "theme.system": "Sistem",
 
   "file.new_tab": "Tab Baru",
@@ -296,6 +297,10 @@
   "git_log.hide": "Sembunyikan",
   "git_log.empty": "Belum ada perintah git.",
   "view.command_palette": "Palet Perintah...",
+  "view.zoom_in": "Perbesar Teks",
+  "view.zoom_out": "Perkecil Teks",
+  "view.zoom_reset": "Kembalikan Ukuran Teks",
+  "view.zoom_size": "Ukuran teks: {size}%",
   "file.quick_open": "Buka Cepat...",
   "palette.commands_hint": "Ketik nama perintah",
   "palette.files_hint": "Ketik nama file",

@@ -16,6 +16,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Buka Terbaru** (**File → Buka Terbaru**): 20 file dan folder terakhir yang dibuka, yang terbaru di atas, tetap tersimpan setelah aplikasi ditutup. Klik salah satunya untuk membukanya lagi. Kalau sudah tidak ada, status bar memberi tahu dan entri itu dihapus. **Hapus Riwayat** mengosongkan daftar.
 - **Pulihkan sesi**: folder dan file tersimpan yang terbuka saat keluar dibuka lagi saat editor dijalankan berikutnya, dengan tab aktif yang sama. Tab tanpa nama tidak disimpan; file yang sudah tidak ada dilewati.
 - **Bungkus baris** (word wrap) yang bisa dinyalakan atau dimatikan (**Tampilan → Bungkus Baris**). Saat mati, baris panjang bisa digeser ke samping.
+- **Perbesar teks** (**Tampilan → Perbesar**, `Ctrl++` / `Ctrl+-` / `Ctrl+0`, atau `Ctrl` + scroll): satu ukuran huruf untuk editor, nomor baris, tampilan diff, dan terminal. Ukurannya diingat saat aplikasi ditutup, dan bar status menampilkannya sebagai persen kalau bukan ukuran bawaan.
 - **Explorer dan Activity Bar** seperti VS Code: buka folder, jelajahi isinya sebagai tree, klik file untuk membukanya di tab. Ada tombol **Refresh** dan **Collapse All** di header folder.
 - **Cari dan ganti** (**Edit → Cari**, **Edit → Ganti**): bar di atas editor dengan hasil yang disorot, opsi huruf besar/kecil, dan Ganti Semua. Ada juga **Ke Baris…** untuk melompat ke nomor baris.
 - **Cari di File** (**Edit → Cari di File**, `Ctrl+Shift+F`): mencari teks di seluruh folder yang sedang dibuka, di thread terpisah. Hasil dikelompokkan per file di panel bawah dengan bagian yang cocok disorot; klik header file untuk melipatnya, klik hasil untuk membuka baris itu, atau telusuri hasil dengan `Up`/`Down` dan `Enter` dari kolom pencarian. Kolom **file yang disertakan** menerima pola glob dipisah koma (`*.rs`, `src/**`). File dan folder tersembunyi, `target`, `node_modules`, file di atas 2 MB, dan file non-UTF-8 dilewati; hasil dibatasi 2000.
@@ -116,7 +117,7 @@ Editor dibuka dengan **halaman awal** berisi **File Baru**, **Buka File…**, **
 |---|---|
 | **File** | Tab Baru, Tutup Tab, Jendela Baru, Buka File…, Buka Folder…, Buka Cepat…, Buka Terbaru, Simpan, Simpan Sebagai…, Bahasa, Keluar |
 | **Edit** | Urungkan, Ulangi, Potong, Salin, Tempel, Cari, Ganti, Cari di File, Ke Baris… |
-| **Tampilan** | Bungkus Baris, Nomor Baris, Zen Mode, Pratinjau Markdown, Palet Perintah…, Tema, Bahasa, Bahasa Antarmuka |
+| **Tampilan** | Bungkus Baris, Nomor Baris, Zen Mode, Pratinjau Markdown, Palet Perintah…, Perbesar, Tema, Bahasa, Bahasa Antarmuka |
 | **Help** | About |
 
 ### Shortcut keyboard
@@ -151,6 +152,8 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | `Ctrl+Shift+P` | Palet Perintah |
 | `Ctrl+P` | Buka Cepat (file berdasarkan nama) |
 | `Ctrl+G` | Ke baris |
+| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Perbesar / perkecil / kembalikan ukuran teks |
+| `Ctrl` + scroll | Perbesar / perkecil teks |
 | `Esc` | Tutup bar cari, bar ke baris, atau panel Cari di File |
 
 Shortcut juga tampil di sebelah item menu yang bersangkutan.

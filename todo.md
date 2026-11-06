@@ -19,9 +19,10 @@ Last updated 2026-11-06.
 - [x] **Reload when a file changes on disk** — already there:
   `check_files_on_disk` polls on focus and every few seconds, reloads clean
   tabs and flags dirty ones with a conflict prompt.
-- [ ] **Font zoom** (`Ctrl +` / `Ctrl -` / `Ctrl+0`, `Ctrl` + scroll) — one
-  editor font size, kept in storage; feeds `FontId::monospace` and the
-  layout cache.
+- [x] **Font zoom** — done 2026-11-06 (`src/zoom.rs`): `Ctrl +` / `Ctrl -` /
+  `Ctrl+0`, `Ctrl` + scroll, and View → Zoom. One editor font size, kept in
+  storage; it feeds `FontId::monospace` and the layout cache. The status bar
+  shows the size as a percentage when it is not the default one.
 - [ ] **Drag and drop** — files dropped on the window open in tabs, a
   folder opens as the workspace (`ctx.input(|i| i.raw.dropped_files)`).
 
@@ -91,5 +92,5 @@ Last updated 2026-11-06.
 
 ## Suggested order
 
-Font zoom → indent guides → drag and drop (quick wins), then split editor,
-then the minimal LSP client.
+Indent guides → drag and drop (quick wins), then split editor, then the
+minimal LSP client.

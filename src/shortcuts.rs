@@ -13,6 +13,8 @@ pub fn label(ctx: &Context, shortcut: &KeyboardShortcut) -> String {
         .replace("Backslash", "\\")
         .replace("OpenBracket", "[")
         .replace("CloseBracket", "]")
+        .replace("Plus", "+")
+        .replace("Minus", "-")
 }
 
 const fn cmd(key: Key) -> KeyboardShortcut {
@@ -81,6 +83,16 @@ pub const GOTO_DEFINITION: KeyboardShortcut = KeyboardShortcut::new(Modifiers::N
 pub const FIND_REFERENCES: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::F12);
 pub const COMMAND_PALETTE: KeyboardShortcut = cmd_shift(Key::P);
 pub const QUICK_OPEN: KeyboardShortcut = cmd(Key::P);
+/// `Ctrl+0` returns the font to its default size.
+pub const ZOOM_RESET: KeyboardShortcut = cmd(Key::Num0);
+/// `Ctrl++` makes the font bigger. On most keyboards the `+` key is
+/// `Shift` and `=`, so both are accepted.
+pub const ZOOM_IN: KeyboardShortcut = cmd(Key::Plus);
+/// `Ctrl+=` as egui hears it on a US keyboard, where the `+` key is
+/// `Shift` and `=`.
+pub const ZOOM_IN_SHIFTED: KeyboardShortcut = cmd(Key::Equals);
+/// `Ctrl+-` makes the font smaller.
+pub const ZOOM_OUT: KeyboardShortcut = cmd(Key::Minus);
 // Shown in the Edit menu only: the focused text editor handles these
 // keys itself.
 pub const UNDO: KeyboardShortcut = cmd(Key::Z);
@@ -147,6 +159,12 @@ pub enum ShortcutAction {
     CommandPalette,
     /// Open the Command Palette listing the folder's files.
     QuickOpen,
+    /// Make the editor's font bigger.
+    ZoomIn,
+    /// Make the editor's font smaller.
+    ZoomOut,
+    /// Return the editor's font to its default size.
+    ZoomReset,
     /// Switch to this color theme (a Command Palette entry; no key).
     SelectTheme(ThemeId),
 }
@@ -224,6 +242,9 @@ impl ShortcutAction {
             Unfold => UNFOLD,
             CommandPalette => COMMAND_PALETTE,
             QuickOpen => QUICK_OPEN,
+            ZoomIn => ZOOM_IN,
+            ZoomOut => ZOOM_OUT,
+            ZoomReset => ZOOM_RESET,
             SelectTheme(_) | FoldAll | UnfoldAll | DiffWithFile => return None,
         })
     }
@@ -310,6 +331,10 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (GOTO_SYMBOL, GotoSymbol),
         (GOTO_DEFINITION, GotoDefinition),
         (QUICK_OPEN, QuickOpen),
+        (ZOOM_IN, ZoomIn),
+        (ZOOM_IN_SHIFTED, ZoomIn),
+        (ZOOM_OUT, ZoomOut),
+        (ZOOM_RESET, ZoomReset),
     ]
     .into_iter()
     .find(|(shortcut, _)| input.consume_shortcut(shortcut))
@@ -325,6 +350,16 @@ mod tests {
         let ctx = egui::Context::default();
         assert!(label(&ctx, &FOLD).ends_with('['), "{}", label(&ctx, &FOLD));
         assert!(label(&ctx, &UNFOLD).ends_with(']'), "{}", label(&ctx, &UNFOLD));
+    }
+
+    /// The zoom keys are shown as the user pressed them: `Ctrl++`,
+    /// `Ctrl+-` and `Ctrl+0`.
+    #[test]
+    fn test_the_zoom_labels_show_the_keys() {
+        let ctx = egui::Context::default();
+        assert!(label(&ctx, &ZOOM_IN).ends_with('+'), "{}", label(&ctx, &ZOOM_IN));
+        assert!(label(&ctx, &ZOOM_OUT).ends_with('-'), "{}", label(&ctx, &ZOOM_OUT));
+        assert!(label(&ctx, &ZOOM_RESET).ends_with('0'), "{}", label(&ctx, &ZOOM_RESET));
     }
 
     #[test]
@@ -420,6 +455,11 @@ mod tests {
                 egui::Modifiers::SHIFT,
                 ShortcutAction::FindReferences,
             ),
+            (egui::Key::Plus, ctrl, ShortcutAction::ZoomIn),
+            // What a US layout reports for Ctrl+Shift+=.
+            (egui::Key::Equals, ctrl, ShortcutAction::ZoomIn),
+            (egui::Key::Minus, ctrl, ShortcutAction::ZoomOut),
+            (egui::Key::Num0, ctrl, ShortcutAction::ZoomReset),
         ] {
             let mut got = None;
             let mut output = ctx.run_ui(press(key, mods), |ui| {

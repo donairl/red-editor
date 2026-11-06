@@ -42,6 +42,7 @@ use crate::terminal::{self, Terminal};
 use crate::theme::{self, ThemeId};
 use crate::shortcuts::{self, ShortcutAction, consume_shortcut};
 use crate::welcome::{self, WelcomeAction};
+use crate::zoom;
 
 /// Storage key under which eframe remembers the interface language.
 const UI_LANGUAGE_KEY: &str = "ui_language";
@@ -52,6 +53,9 @@ const HISTORY_KEY: &str = "recent_paths";
 
 /// Storage key under which eframe remembers the chosen color theme.
 const THEME_KEY: &str = "theme";
+
+/// Storage key under which eframe remembers the editor's font size.
+const FONT_SIZE_KEY: &str = "font_size";
 
 /// Seconds between checks for open files changed by other programs.
 const DISK_CHECK_SECS: f64 = 2.0;
@@ -375,6 +379,9 @@ pub struct TextEditorApp {
     pub history: History,
     /// The color theme picked in View > Theme; `System` follows the OS.
     pub theme: ThemeId,
+    /// The size of the editor's font, in points. One number for the editor,
+    /// the gutter, the diff view and the terminal.
+    pub font_size: f32,
     /// Git status of the open folder, or of the active file's folder.
     pub git: GitState,
     /// The name typed in the status bar's branch menu.
@@ -490,6 +497,7 @@ impl Default for TextEditorApp {
             palette: Palette::default(),
             history: History::default(),
             theme: ThemeId::System,
+            font_size: zoom::DEFAULT_SIZE,
             git: GitState::default(),
             new_branch_name: String::new(),
             scm: ScmUi::default(),
@@ -533,6 +541,10 @@ impl TextEditorApp {
     /// or the system interface language.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_cjk_fallback_font(&cc.egui_ctx);
+        // egui zooms the whole window on `Ctrl++` and `Ctrl+-` by itself.
+        // The editor has its own font size, which those keys drive instead,
+        // so egui's zoom is turned off.
+        cc.egui_ctx.options_mut(|options| options.zoom_with_keyboard = false);
         let (mut i18n, errors) = I18n::load(&i18n::search_dirs());
         let saved = cc
             .storage
@@ -550,6 +562,7 @@ impl TextEditorApp {
             status_message,
             history: saved_history(cc.storage),
             theme: saved_theme(cc.storage),
+            font_size: saved_font_size(cc.storage),
             ..Default::default()
         };
         saved_session(cc.storage).restore(&mut app);
@@ -1040,6 +1053,70 @@ impl TextEditorApp {
         self.editor_request.focus = true;
     }
 
+    /// Writes the font size into egui's monospace text style, so the editor,
+    /// the gutter, the diff view and the terminal all use it.
+    ///
+    /// Both styles are written, so the size survives a switch between the
+    /// light and the dark theme. The style is only written when the size
+    /// changed: writing it every frame would rebuild egui's font atlas for
+    /// nothing.
+    fn apply_font_size(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let size = zoom::clamp(self.font_size);
+        if ctx.data(|d| d.get_temp::<f32>(font_size_id())) == Some(size) {
+            return;
+        }
+        self.font_size = size;
+        ctx.data_mut(|d| d.insert_temp(font_size_id(), size));
+        ctx.all_styles_mut(|style| zoom::apply_to_style(style, size));
+        // The window was built before the style changed, and keeps the style
+        // it was made with. Give it the new size too, so the change shows
+        // in this frame and not in the next one.
+        zoom::apply_to_style(ui.style_mut(), size);
+    }
+
+    /// Makes the editor's font bigger or smaller.
+    ///
+    /// `steps` is how many steps to move: positive makes the font bigger.
+    pub fn zoom(&mut self, steps: i32) {
+        self.font_size = zoom::by(self.font_size, steps);
+    }
+
+    /// Returns the editor's font to its default size.
+    pub fn reset_zoom(&mut self) {
+        self.font_size = zoom::reset();
+    }
+
+    /// Zooms with the mouse wheel: `Ctrl` + scroll makes the text bigger or
+    /// smaller, as in a browser.
+    ///
+    /// The scroll is taken out of the input, so the same gesture never
+    /// scrolls the editor as well. egui leaves the scroll alone while the
+    /// command key is down, so nothing else would have used it.
+    fn zoom_with_wheel(&mut self, ctx: &egui::Context) {
+        let points = ctx.input_mut(|i| {
+            let mut points = 0.0;
+            i.events.retain(|event| {
+                let egui::Event::MouseWheel { unit, delta, modifiers, .. } = event else {
+                    return true;
+                };
+                // Only the wheel with the command key down zooms.
+                if !modifiers.command {
+                    return true;
+                }
+                // A positive delta moves the content down, which is the
+                // wheel rolling away from the user: that zooms in.
+                points += zoom::wheel_points(*unit, delta.y);
+                false
+            });
+            points
+        });
+        if points == 0.0 {
+            return;
+        }
+        self.font_size = zoom::scrolled(self.font_size, points);
+    }
+
     /// Edit > Go to Symbol: the bar listing what the active document
     /// defines. Does nothing for languages code navigation does not know.
     pub fn open_symbol_picker(&mut self) {
@@ -1344,6 +1421,9 @@ impl TextEditorApp {
             ShortcutAction::GotoSymbol => self.open_symbol_picker(),
             ShortcutAction::CommandPalette => self.open_palette(PaletteMode::Commands),
             ShortcutAction::QuickOpen => self.open_palette(PaletteMode::Files),
+            ShortcutAction::ZoomIn => self.zoom(1),
+            ShortcutAction::ZoomOut => self.zoom(-1),
+            ShortcutAction::ZoomReset => self.reset_zoom(),
             ShortcutAction::SelectTheme(id) => self.theme = id,
             ShortcutAction::GotoDefinition => self.goto_definition(ctx, None),
             ShortcutAction::FindReferences => self.find_references(ctx, None),
@@ -2442,6 +2522,21 @@ fn saved_theme(storage: Option<&dyn eframe::Storage>) -> ThemeId {
         .unwrap_or_default()
 }
 
+/// The font size eframe kept from the last run; the default on the first.
+fn saved_font_size(storage: Option<&dyn eframe::Storage>) -> f32 {
+    zoom::from_storage(
+        storage
+            .and_then(|storage| storage.get_string(FONT_SIZE_KEY))
+            .as_deref(),
+    )
+}
+
+/// Where egui's memory keeps the font size the app last wrote, so it is
+/// only written when it changed.
+fn font_size_id() -> egui::Id {
+    egui::Id::unique("rred_font_size")
+}
+
 /// Asks the user where to save `tab`, starting in its current folder.
 /// `None` means the dialog was cancelled.
 fn pick_save_path(tab: &DocumentTab) -> Option<PathBuf> {
@@ -2468,6 +2563,7 @@ impl eframe::App for TextEditorApp {
         storage.set_string(UI_LANGUAGE_KEY, self.i18n.code().to_owned());
         storage.set_string(HISTORY_KEY, self.history.to_storage());
         storage.set_string(THEME_KEY, self.theme.slug().to_owned());
+        storage.set_string(FONT_SIZE_KEY, zoom::to_storage(self.font_size));
         storage.set_string(SESSION_KEY, Session::from_app(self).to_storage());
     }
 
@@ -2475,6 +2571,10 @@ impl eframe::App for TextEditorApp {
         let ctx = ui.ctx().clone();
         let theme = theme::apply(&ctx, self.theme);
         self.highlighter.set_theme(theme.syntax);
+        // `Ctrl` + scroll zooms the text. Taken before the editor is drawn,
+        // so the new size is used in this very frame.
+        self.zoom_with_wheel(&ctx);
+        self.apply_font_size(ui);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         self.poll_disk(&ctx);
         self.poll_git(&ctx);
@@ -5031,6 +5131,25 @@ mod tests {
         assert!(painted_text(&shapes, "Document: [New Document]").is_some());
     }
 
+    /// The View menu offers the zoom commands, and the status bar shows the
+    /// size when it is not the default one.
+    #[test]
+    fn test_the_view_menu_offers_the_zoom_commands() {
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        assert!(app.i18n.select("en"));
+        let ctx = egui::Context::default();
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_view_menu(ui));
+        assert!(painted_text(&shapes, "Zoom").is_some(), "View menu lacks Zoom");
+
+        // The size is only shown when it is not the default one.
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_status_bar(ui));
+        assert!(painted_text(&shapes, "Font size: 100%").is_none());
+
+        app.font_size = 20.0;
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_status_bar(ui));
+        assert!(painted_text(&shapes, "Font size: 154%").is_some());
+    }
+
     #[test]
     fn test_plain_text_label_is_translated() {
         let mut app = TextEditorApp::default();
@@ -5212,6 +5331,177 @@ mod tests {
         );
         assert_eq!(saved_theme(Some(&storage)), ThemeId::SolarizedDark);
         assert_eq!(saved_theme(None), ThemeId::System);
+    }
+
+    #[test]
+    fn test_the_font_size_is_saved_and_restored() {
+        let mut app = TextEditorApp::default();
+        assert_eq!(app.font_size, zoom::DEFAULT_SIZE);
+        app.font_size = 18.0;
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        assert_eq!(
+            eframe::Storage::get_string(&storage, super::FONT_SIZE_KEY).as_deref(),
+            Some("18.0")
+        );
+        assert_eq!(saved_font_size(Some(&storage)), 18.0);
+        assert_eq!(saved_font_size(None), zoom::DEFAULT_SIZE);
+    }
+
+    /// A size that is out of range in the setting is brought back in, so a
+    /// corrupt setting cannot make the text unreadable.
+    #[test]
+    fn test_a_saved_font_size_out_of_range_is_clamped() {
+        let mut storage = MemoryStorage::default();
+        eframe::Storage::set_string(&mut storage, super::FONT_SIZE_KEY, "1000".into());
+        assert_eq!(saved_font_size(Some(&storage)), zoom::MAX_SIZE);
+        eframe::Storage::set_string(&mut storage, super::FONT_SIZE_KEY, "not a number".into());
+        assert_eq!(saved_font_size(Some(&storage)), zoom::DEFAULT_SIZE);
+    }
+
+    #[test]
+    fn test_zooming_makes_the_font_bigger_and_smaller() {
+        let mut app = TextEditorApp::default();
+        app.zoom(1);
+        assert_eq!(app.font_size, zoom::DEFAULT_SIZE + zoom::STEP as f32);
+        app.zoom(-1);
+        assert_eq!(app.font_size, zoom::DEFAULT_SIZE);
+        app.zoom(5);
+        assert_eq!(app.font_size, zoom::DEFAULT_SIZE + 5.0 * zoom::STEP as f32);
+    }
+
+    #[test]
+    fn test_zooming_stops_at_the_ends() {
+        let mut app = TextEditorApp { font_size: zoom::MAX_SIZE, ..Default::default() };
+        app.zoom(1);
+        assert_eq!(app.font_size, zoom::MAX_SIZE);
+        app.font_size = zoom::MIN_SIZE;
+        app.zoom(-1);
+        assert_eq!(app.font_size, zoom::MIN_SIZE);
+    }
+
+    #[test]
+    fn test_resetting_the_zoom_returns_to_the_default_size() {
+        let mut app = TextEditorApp::default();
+        app.zoom(10);
+        app.reset_zoom();
+        assert_eq!(app.font_size, zoom::DEFAULT_SIZE);
+    }
+
+    /// The font size reaches egui's monospace text style, so every part of
+    /// the editor that draws code uses it.
+    #[test]
+    fn test_a_frame_writes_the_font_size_into_the_style() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { font_size: 20.0, ..Default::default() };
+        run_frame_with_events(&ctx, Vec::new(), |ui| app.apply_font_size(ui));
+        let font = ctx.global_style().text_styles[&egui::TextStyle::Monospace].clone();
+        assert_eq!(font.size, 20.0);
+    }
+
+    /// `Ctrl` + scroll makes the text bigger, and the scroll is taken out of
+    /// the input so the editor does not scroll as well.
+    #[test]
+    fn test_ctrl_scroll_makes_the_text_bigger() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        run_frame_with_events(&ctx, vec![wheel], |ui| app.zoom_with_wheel(ui.ctx()));
+        assert!(app.font_size > zoom::DEFAULT_SIZE, "{}", app.font_size);
+    }
+
+    /// A scroll without the command key is left alone: it scrolls.
+    #[test]
+    fn test_scroll_without_the_command_key_does_not_zoom() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run_frame_with_events(&ctx, vec![wheel], |ui| app.zoom_with_wheel(ui.ctx()));
+        assert_eq!(app.font_size, zoom::DEFAULT_SIZE);
+    }
+
+    /// The zoom shortcuts reach the app and change the font size.
+    #[test]
+    fn test_the_zoom_shortcuts_change_the_font_size() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        let press = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        for (key, want) in [
+            (egui::Key::Plus, zoom::DEFAULT_SIZE + zoom::STEP as f32),
+            (egui::Key::Minus, zoom::DEFAULT_SIZE),
+            (egui::Key::Num0, zoom::DEFAULT_SIZE),
+        ] {
+            let mut action = None;
+            run_frame_with_events(&ctx, vec![press(key)], |ui| {
+                action = ui.ctx().input_mut(crate::shortcuts::consume_shortcut);
+            });
+            assert_eq!(action, Some(match key {
+                egui::Key::Plus => ShortcutAction::ZoomIn,
+                egui::Key::Minus => ShortcutAction::ZoomOut,
+                _ => ShortcutAction::ZoomReset,
+            }));
+            app.apply_shortcut(&ctx, action.expect("a shortcut"));
+            assert_eq!(app.font_size, want, "{key:?}");
+        }
+    }
+
+    /// The whole point of the font size: the text the editor paints grows
+    /// and shrinks with it.
+    #[test]
+    fn test_the_editor_text_grows_with_the_font_size() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.active_tab_mut().text_content = "hello".into();
+        let frame = |app: &mut TextEditorApp| {
+            run_frame_with_events(&ctx, Vec::new(), |ui| {
+                eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
+            })
+        };
+        let width = |app: &mut TextEditorApp| {
+            let shapes = frame(app);
+            painted_text(&shapes, "hello")
+                .expect("the editor painted its text")
+                .0
+                .width()
+        };
+
+        let small = width(&mut app);
+        app.zoom(6);
+        let big = width(&mut app);
+        assert!(big > small, "the text did not grow: {small} vs {big}");
+    }
+
+    /// The gutter, the diff view and the terminal draw their text in the
+    /// monospace font, so one size moves all of them.
+    #[test]
+    fn test_the_font_size_reaches_every_part_that_draws_code() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { font_size: 20.0, ..Default::default() };
+        run_frame_with_events(&ctx, Vec::new(), |ui| app.apply_font_size(ui));
+        let font = ctx.global_style().text_styles[&egui::TextStyle::Monospace].clone();
+        assert_eq!(font.size, 20.0);
+        // The style every one of them resolves its monospace font from.
+        let resolved = egui::TextStyle::Monospace.resolve(&ctx.global_style());
+        assert_eq!(resolved.size, 20.0);
+        assert_eq!(resolved.family, font.family);
     }
 
     #[test]

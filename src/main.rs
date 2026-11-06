@@ -44,6 +44,7 @@ mod tab_bar;
 mod terminal;
 mod theme;
 mod welcome;
+mod zoom;
 
 use app::TextEditorApp;
 use eframe::egui;

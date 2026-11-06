@@ -145,6 +145,9 @@ pub const COMMANDS: &[Command] = &[
     command("view.git_graph", ShortcutAction::GitGraph),
     command("view.diff_head", ShortcutAction::DiffWithHead),
     command("view.diff_file", ShortcutAction::DiffWithFile),
+    command("view.zoom_in", ShortcutAction::ZoomIn),
+    command("view.zoom_out", ShortcutAction::ZoomOut),
+    command("view.zoom_reset", ShortcutAction::ZoomReset),
     command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::System)),
     command(
         "cmd.theme",

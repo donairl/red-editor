@@ -13,6 +13,7 @@ use crate::shortcuts;
 use crate::shortcuts::ShortcutAction;
 use crate::symbols;
 use crate::theme::ThemeId;
+use crate::zoom;
 
 /// A menu entry with its shortcut on the right; closes the menu when clicked.
 fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> bool {
@@ -219,10 +220,39 @@ impl TextEditorApp {
         ) {
             self.open_palette(PaletteMode::Commands);
         }
+        self.show_zoom_menu(ui);
         self.show_theme_menu(ui);
         ui.separator();
         self.show_language_menu(ui);
         self.show_ui_language_menu(ui);
+    }
+
+    /// Lists the zoom commands: a bigger font, a smaller one, the default
+    /// size, and the size the text is at now.
+    pub fn show_zoom_menu(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let label = self.i18n.t("menu.zoom").to_owned();
+        ui.menu_button(label, |ui| {
+            let percent = zoom::percent(self.font_size);
+            let size = percent.to_string();
+            ui.label(
+                egui::RichText::new(self.i18n.tf("view.zoom_size", &[("size", &size)]))
+                    .small()
+                    .weak(),
+            );
+            ui.separator();
+            let items = [
+                ("view.zoom_in", &shortcuts::ZOOM_IN, ShortcutAction::ZoomIn),
+                ("view.zoom_out", &shortcuts::ZOOM_OUT, ShortcutAction::ZoomOut),
+                ("view.zoom_reset", &shortcuts::ZOOM_RESET, ShortcutAction::ZoomReset),
+            ];
+            for (key, shortcut, action) in items {
+                let label = shortcuts::label(&ctx, shortcut);
+                if menu_item(ui, self.i18n.t(key), &label) {
+                    self.apply_shortcut(&ctx, action);
+                }
+            }
+        });
     }
 
     /// Lists every color theme; picking one switches to it at once.
