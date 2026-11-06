@@ -9,11 +9,13 @@ use eframe::egui;
 
 use crate::highlighter::Language;
 use crate::line_ops::{Edit, Range};
+use crate::settings::EditorSettings;
 
 /// One level of indentation in `text`: the leading whitespace of the first
 /// indented line decides — a tab gives "\t", spaces give that many spaces
-/// clamped to 2..=8. A document with no indented line gives 4 spaces.
-pub fn indent_unit(text: &str) -> String {
+/// clamped to 2..=8. A document with no indented line gives `fallback`
+/// (the user's setting).
+pub fn indent_unit(text: &str, fallback: &str) -> String {
     for line in text.split('\n') {
         let body = line.trim_start_matches([' ', '\t']);
         // A line of nothing but whitespace says nothing about indentation.
@@ -26,7 +28,7 @@ pub fn indent_unit(text: &str) -> String {
         let spaces = line.len() - line.trim_start_matches(' ').len();
         return " ".repeat(spaces.clamp(2, 8));
     }
-    "    ".to_owned()
+    fallback.to_owned()
 }
 
 /// The partner of an opening bracket.
@@ -204,6 +206,7 @@ pub fn apply_events(
     sel: Range,
     events: &[egui::Event],
     language: Language,
+    settings: &EditorSettings,
 ) -> Option<(Edit, Vec<usize>)> {
     // While an input method composes, its preedit text is not in the
     // document yet: leave the frame to `TextEdit`. An empty preedit only
@@ -214,7 +217,7 @@ pub fn apply_events(
     if composing {
         return None;
     }
-    let unit = indent_unit(text);
+    let unit = indent_unit(text, &settings.indent_unit());
     let mut state = Edit { text: text.to_owned(), selection: sel };
     let mut handled = Vec::new();
     let mut special = false;
@@ -287,15 +290,18 @@ mod tests {
 
     #[test]
     fn test_indent_unit_follows_the_first_indented_line() {
-        assert_eq!(indent_unit("fn f() {\n\tx;\n}"), "\t");
-        assert_eq!(indent_unit("a:\n  b:\n    c"), "  ");
-        assert_eq!(indent_unit("a\nb\n"), "    ");
-        assert_eq!(indent_unit(""), "    ");
-        // Clamped to 2..=8.
-        assert_eq!(indent_unit("a\n b"), "  ");
-        assert_eq!(indent_unit("a\n            b"), "        ");
-        // A line of nothing but whitespace is not indentation.
-        assert_eq!(indent_unit("a\n \nb\n\tc"), "\t");
+        assert_eq!(indent_unit("fn f() {\n\tx;\n}", "  "), "\t");
+        assert_eq!(indent_unit("a:\n  b:\n    c", "\t"), "  ");
+        assert_eq!(indent_unit("a\n b", "    "), "  ");
+        assert_eq!(indent_unit("a\n            b", "    "), "        ");
+        assert_eq!(indent_unit("a\n \nb\n\tc", "    "), "\t");
+    }
+
+    #[test]
+    fn test_indent_unit_falls_back_only_without_an_indented_line() {
+        assert_eq!(indent_unit("a\nb\n", "\t"), "\t");
+        assert_eq!(indent_unit("", "  "), "  ");
+        assert_eq!(indent_unit("a\n  b", "\t"), "  ", "the document wins");
     }
 
     #[test]
@@ -435,7 +441,7 @@ mod tests {
     #[test]
     fn test_apply_events_leaves_plain_typing_to_the_editor() {
         let events = [typed("a"), key(egui::Key::Backspace, egui::Modifiers::NONE)];
-        assert_eq!(apply_events("x", caret(1), &events, Language::Rust), None);
+        assert_eq!(apply_events("x", caret(1), &events, Language::Rust, &EditorSettings::default()), None);
     }
 
     #[test]
@@ -447,7 +453,7 @@ mod tests {
             typed("x"),
             typed(")"),
         ];
-        let (got, handled) = apply_events("", caret(0), &events, Language::Rust).unwrap();
+        let (got, handled) = apply_events("", caret(0), &events, Language::Rust, &EditorSettings::default()).unwrap();
         assert_eq!(got, edit("f(x)", caret(4)));
         assert_eq!(handled, vec![0, 1, 3, 4]);
     }
@@ -455,21 +461,21 @@ mod tests {
     #[test]
     fn test_apply_events_enter_and_backspace() {
         let enter = key(egui::Key::Enter, egui::Modifiers::NONE);
-        let (got, handled) = apply_events("  {}", caret(3), &[enter], Language::Rust).unwrap();
+        let (got, handled) = apply_events("  {}", caret(3), &[enter], Language::Rust, &EditorSettings::default()).unwrap();
         // The document's own two-space indent is the unit.
         assert_eq!(got, edit("  {\n    \n  }", caret(8)));
         assert_eq!(handled, vec![0]);
 
         // Shift+Enter is an Enter too; Ctrl+Enter is not ours.
         let shift_enter = key(egui::Key::Enter, egui::Modifiers::SHIFT);
-        assert!(apply_events("x", caret(1), &[shift_enter], Language::Rust).is_some());
+        assert!(apply_events("x", caret(1), &[shift_enter], Language::Rust, &EditorSettings::default()).is_some());
         let ctrl_enter = key(egui::Key::Enter, egui::Modifiers::COMMAND);
-        assert_eq!(apply_events("x", caret(1), &[ctrl_enter], Language::Rust), None);
+        assert_eq!(apply_events("x", caret(1), &[ctrl_enter], Language::Rust, &EditorSettings::default()), None);
 
         // A plain backspace in a handled frame deletes as egui would.
         let backspace = key(egui::Key::Backspace, egui::Modifiers::NONE);
         let events = [typed("("), backspace.clone(), backspace];
-        let (got, _) = apply_events("ab", caret(2), &events, Language::Rust).unwrap();
+        let (got, _) = apply_events("ab", caret(2), &events, Language::Rust, &EditorSettings::default()).unwrap();
         assert_eq!(got, edit("a", caret(1)));
     }
 
@@ -484,7 +490,7 @@ mod tests {
     #[test]
     fn test_apply_events_skips_a_frame_while_composing() {
         let events = [preedit("ni"), typed("(")];
-        assert_eq!(apply_events("", caret(0), &events, Language::Rust), None);
+        assert_eq!(apply_events("", caret(0), &events, Language::Rust, &EditorSettings::default()), None);
     }
 
     /// With an input method running (fcitx, ibus), egui-winit delivers plain
@@ -492,7 +498,7 @@ mod tests {
     #[test]
     fn test_apply_events_treats_an_ime_commit_as_typing() {
         let events = [preedit(""), commit("("), preedit("")];
-        let (got, handled) = apply_events("", caret(0), &events, Language::Php).unwrap();
+        let (got, handled) = apply_events("", caret(0), &events, Language::Php, &EditorSettings::default()).unwrap();
         assert_eq!(got, edit("()", caret(1)));
         assert_eq!(handled, vec![1]);
     }
@@ -501,7 +507,7 @@ mod tests {
     fn test_apply_events_handles_enter_next_to_an_empty_preedit() {
         let enter = key(egui::Key::Enter, egui::Modifiers::NONE);
         let events = [preedit(""), enter];
-        let (got, _) = apply_events("{}", caret(1), &events, Language::Php).unwrap();
+        let (got, _) = apply_events("{}", caret(1), &events, Language::Php, &EditorSettings::default()).unwrap();
         assert_eq!(got, edit("{\n    \n}", caret(6)));
     }
 }

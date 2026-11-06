@@ -511,6 +511,8 @@ pub struct EditorRequest {
     /// Auto-indent on Enter and auto-close brackets and quotes, by the rules
     /// of this language. `None` leaves typing to `TextEdit`.
     pub auto_edit: Option<Language>,
+    /// Indentation settings for auto-indent and Tab / Shift+Tab.
+    pub editor_settings: EditorSettings,
     /// Box the bracket at the caret and its partner.
     pub match_brackets: bool,
     /// The `char` ranges folded away (sorted, apart), laid out at zero
@@ -2761,6 +2763,7 @@ fn quiet_request(request: &EditorRequest) -> EditorRequest {
         reveal: None,
         highlight: request.highlight,
         auto_edit: None,
+        editor_settings: request.editor_settings,
         match_brackets: request.match_brackets,
         hidden: request.hidden.clone(),
         foldable: request.foldable.clone(),
@@ -3253,6 +3256,7 @@ impl eframe::App for TextEditorApp {
             let active_idx = self.active_tab_index;
             let language = self.tabs[active_idx].effective_language();
             request.auto_edit = Some(language);
+            request.editor_settings = self.editor_settings;
             request.match_brackets = true;
             if !too_large {
                 let tab = &mut self.tabs[active_idx];

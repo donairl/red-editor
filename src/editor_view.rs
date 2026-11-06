@@ -15,6 +15,7 @@ use crate::whitespace;
 use crate::layout_cache::{self, LayoutCache};
 use crate::line_diff::LineMarks;
 use crate::markdown_preview::ScrollPos;
+use crate::settings::EditorSettings;
 
 /// Documents above this size skip syntax highlighting and render plain.
 ///
@@ -324,7 +325,13 @@ const BLAME_NOTE_WIDTH: f32 = 140.0;
 /// [`auto_edit::apply_events`] before the `TextEdit` sees it. Only while
 /// the editor `id` has focus and a caret; the events it handles are taken
 /// out of the frame, so egui does not type them a second time.
-fn apply_auto_edit(ui: &egui::Ui, id: egui::Id, text: &mut String, language: Language) {
+fn apply_auto_edit(
+    ui: &egui::Ui,
+    id: egui::Id,
+    text: &mut String,
+    language: Language,
+    settings: &EditorSettings,
+) {
     if !ui.memory(|m| m.has_focus(id)) {
         return;
     }
@@ -338,7 +345,7 @@ fn apply_auto_edit(ui: &egui::Ui, id: egui::Id, text: &mut String, language: Lan
     let n = text.chars().count();
     let sel = (a.min(b).min(n), a.max(b).min(n));
     let Some((edit, handled)) =
-        ui.input(|i| auto_edit::apply_events(text, sel, &i.events, language))
+        ui.input(|i| auto_edit::apply_events(text, sel, &i.events, language, settings))
     else {
         return;
     };
@@ -434,7 +441,7 @@ fn render_editor_inner(
             }
             // After `select`, so it types at the selection the app asked for.
             if let Some(language) = request.auto_edit {
-                apply_auto_edit(ui, id, text, language);
+                apply_auto_edit(ui, id, text, language, &request.editor_settings);
             }
         }
 
