@@ -34,6 +34,7 @@ use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::folding::{self, Folds};
 use crate::search::{self, SearchAction, SearchState};
 use crate::session::{SESSION_KEY, Session};
+use crate::settings::EditorSettings;
 use crate::source_control::{self, DiffAction, ScmAction, ScmUi};
 use crate::symbols::{self, PickerAction, SymbolPicker};
 use crate::tab_bar;
@@ -60,6 +61,8 @@ const FONT_SIZE_KEY: &str = "font_size";
 
 /// Storage key under which eframe remembers whether auto-save is on.
 const AUTO_SAVE_KEY: &str = "auto_save";
+/// eframe storage key of the editor settings (a JSON object).
+const EDITOR_SETTINGS_KEY: &str = "editor_settings";
 
 /// Seconds between checks for open files changed by other programs.
 const DISK_CHECK_SECS: f64 = 2.0;
@@ -395,6 +398,8 @@ pub struct TextEditorApp {
     /// Save every dirty file with a path of its own once the typing pauses,
     /// and when the window loses focus. Off by default.
     pub auto_save: bool,
+    /// Indentation and on-save settings, edited in the Settings window.
+    pub editor_settings: EditorSettings,
     /// egui's clock when auto-save fires; `None` while nothing waits.
     pub(crate) autosave_due: Option<f64>,
     /// Whether any tab was dirty last frame, to notice an edit that did not
@@ -542,6 +547,7 @@ impl Default for TextEditorApp {
             show_indent_guides: true,
             show_whitespace: false,
             auto_save: false,
+            editor_settings: EditorSettings::default(),
             autosave_due: None,
             autosave_dirty: false,
             was_focused: true,
@@ -631,6 +637,7 @@ impl TextEditorApp {
             theme: saved_theme(cc.storage),
             font_size: saved_font_size(cc.storage),
             auto_save: saved_auto_save(cc.storage),
+            editor_settings: saved_editor_settings(cc.storage),
             ..Default::default()
         };
         saved_session(cc.storage).restore(&mut app);
@@ -2730,6 +2737,12 @@ fn saved_auto_save(storage: Option<&dyn eframe::Storage>) -> bool {
         .is_some_and(|text| text == "true")
 }
 
+/// The editor settings eframe last saved; the defaults on the first run.
+fn saved_editor_settings(storage: Option<&dyn eframe::Storage>) -> EditorSettings {
+    let text = storage.and_then(|storage| storage.get_string(EDITOR_SETTINGS_KEY));
+    EditorSettings::from_storage(text.as_deref())
+}
+
 /// Where egui's memory keeps the font size the app last wrote, so it is
 /// only written when it changed.
 fn font_size_id() -> egui::Id {
@@ -2782,6 +2795,7 @@ impl eframe::App for TextEditorApp {
         storage.set_string(THEME_KEY, self.theme.slug().to_owned());
         storage.set_string(FONT_SIZE_KEY, zoom::to_storage(self.font_size));
         storage.set_string(AUTO_SAVE_KEY, self.auto_save.to_string());
+        storage.set_string(EDITOR_SETTINGS_KEY, self.editor_settings.to_storage());
         storage.set_string(SESSION_KEY, Session::from_app(self).to_storage());
     }
 
@@ -5557,6 +5571,17 @@ mod tests {
             eframe::Storage::get_string(&storage, super::UI_LANGUAGE_KEY).as_deref(),
             Some("en")
         );
+    }
+
+    #[test]
+    fn test_save_remembers_the_editor_settings() {
+        let mut app = TextEditorApp::default();
+        app.editor_settings.tab_size = 2;
+        app.editor_settings.format_on_save = true;
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        let text = eframe::Storage::get_string(&storage, super::EDITOR_SETTINGS_KEY);
+        assert_eq!(EditorSettings::from_storage(text.as_deref()), app.editor_settings);
     }
 
     fn history_of(app: &TextEditorApp) -> Vec<(PathBuf, EntryKind)> {

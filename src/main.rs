@@ -38,6 +38,7 @@ mod prettify;
 mod process;
 mod search;
 mod session;
+mod settings;
 mod shortcuts;
 mod status_bar;
 mod source_control;
