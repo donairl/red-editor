@@ -266,6 +266,25 @@ pub fn select_next_match(text: &str, (a, b): Range) -> Option<Range> {
     Some((start_char, start_char + (b - a)))
 }
 
+/// The text with spaces and tabs removed from the end of every line, `\r\n`
+/// endings kept; `None` when there is nothing to remove.
+pub fn trim_trailing_whitespace(text: &str) -> Option<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut lines = text.split('\n').peekable();
+    while let Some(line) = lines.next() {
+        let (body, cr) = match line.strip_suffix('\r') {
+            Some(body) => (body, "\r"),
+            None => (line, ""),
+        };
+        out.push_str(body.trim_end_matches([' ', '\t']));
+        out.push_str(cr);
+        if lines.peek().is_some() {
+            out.push('\n');
+        }
+    }
+    (out != text).then_some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,5 +463,14 @@ mod tests {
         assert_eq!(select_next_match(text, (6, 8)), Some((12, 14)));
         assert_eq!(select_next_match(text, (12, 14)), Some((0, 2)));
         assert_eq!(select_next_match(text, (3, 5)), Some((3, 5)));
+    }
+
+    #[test]
+    fn test_trim_trailing_whitespace() {
+        assert_eq!(trim_trailing_whitespace("a  \nb\t\n c \t"), Some("a\nb\n c".to_owned()));
+        assert_eq!(trim_trailing_whitespace("a \r\nb\r\n"), Some("a\r\nb\r\n".to_owned()));
+        assert_eq!(trim_trailing_whitespace("a\n  \n"), Some("a\n\n".to_owned()));
+        assert_eq!(trim_trailing_whitespace("a\nb\n"), None);
+        assert_eq!(trim_trailing_whitespace(""), None);
     }
 }

@@ -2072,9 +2072,10 @@ impl TextEditorApp {
                     Some((self.i18n.tf("msg.changed_on_disk", &[("name", &name)]), true));
                 return false;
             }
+            let warning = self.prepare_for_save(index);
             match self.tabs[index].save() {
                 Ok(_) => {
-                    self.status_message = Some((self.i18n.t("msg.saved").to_owned(), false));
+                    self.status_message = Some(self.saved_message(warning));
                     self.git.request_refresh();
                     true
                 }
@@ -2092,6 +2093,47 @@ impl TextEditorApp {
         }
     }
 
+    /// What an explicit save does to the text first, by the editor
+    /// settings: trim trailing whitespace, then run the formatter. The tab's
+    /// text is changed in place so the editor shows what gets written.
+    /// Returns a warning for the status bar when the formatter failed; the
+    /// file is then saved as it is. Auto-save never calls this: it would
+    /// strip a space the user just typed.
+    fn prepare_for_save(&mut self, index: usize) -> Option<String> {
+        let settings = self.editor_settings;
+        let tab = &mut self.tabs[index];
+        if settings.trim_trailing_whitespace
+            && let Some(text) = line_ops::trim_trailing_whitespace(&tab.text_content)
+        {
+            tab.text_content = text;
+        }
+        if !settings.format_on_save {
+            return None;
+        }
+        let language = tab.effective_language();
+        if !prettify::supports(language) {
+            return None;
+        }
+        match prettify::prettify(language, &tab.text_content) {
+            Ok(text) => {
+                if text != tab.text_content {
+                    tab.text_content = text;
+                }
+                None
+            }
+            Err(error) => Some(self.i18n.tf("msg.prettify_failed", &[("error", &error)])),
+        }
+    }
+
+    /// The status line after a successful write: the formatter's warning
+    /// when there is one, so it is not lost behind "Saved".
+    fn saved_message(&self, warning: Option<String>) -> (String, bool) {
+        match warning {
+            Some(warning) => (warning, true),
+            None => (self.i18n.t("msg.saved").to_owned(), false),
+        }
+    }
+
     pub fn save(&mut self) -> bool {
         self.save_tab(self.active_tab_index)
     }
@@ -2102,6 +2144,7 @@ impl TextEditorApp {
 
     fn save_as_with(&mut self, pick_path: impl FnOnce(&DocumentTab) -> Option<PathBuf>) -> bool {
         if let Some(path) = pick_path(self.active_tab()) {
+            let warning = self.prepare_for_save(self.active_tab_index);
             let text_to_save = self.active_tab().text_content.clone();
             match fs::write(&path, &text_to_save) {
                 Ok(_) => {
@@ -2111,7 +2154,7 @@ impl TextEditorApp {
                     active.disk_conflict = false;
                     active.active_language = Language::from_path(&path);
                     active.current_path = Some(path);
-                    self.status_message = Some((self.i18n.t("msg.saved").to_owned(), false));
+                    self.status_message = Some(self.saved_message(warning));
                     true
                 }
                 Err(err) => {
@@ -5752,6 +5795,68 @@ mod tests {
         autosave_frame(&ctx, &mut app, 11.1, true);
         assert_eq!(fs::read_to_string(&path).unwrap(), "edited");
         assert!(!app.active_tab().is_dirty(), "the tab is clean again");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_explicit_save_trims_and_formats_when_on() {
+        let dir = history_folder("save_trim_format");
+        let path = dir.join("a.json");
+        fs::write(&path, "{}").unwrap();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(path.clone());
+        app.editor_settings.trim_trailing_whitespace = true;
+        app.editor_settings.format_on_save = true;
+        app.active_tab_mut().text_content = "{\"a\":1}   ".to_owned();
+        assert!(app.save());
+        let expected = prettify::prettify(Language::Json, "{\"a\":1}").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+        assert_eq!(app.active_tab().text_content, expected, "the editor shows what was saved");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_explicit_save_leaves_the_text_alone_when_off() {
+        let dir = history_folder("save_plain");
+        let path = dir.join("a.json");
+        fs::write(&path, "{}").unwrap();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(path.clone());
+        app.active_tab_mut().text_content = "{\"a\":1}   ".to_owned();
+        assert!(app.save());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"a\":1}   ");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_a_failing_formatter_still_saves_and_reports() {
+        let dir = history_folder("save_bad_json");
+        let path = dir.join("a.json");
+        fs::write(&path, "{}").unwrap();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(path.clone());
+        app.editor_settings.format_on_save = true;
+        app.active_tab_mut().text_content = "{ not json".to_owned();
+        assert!(app.save());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+        let (_, is_error) = app.status_message.clone().unwrap();
+        assert!(is_error, "the formatter's failure is reported, not 'Saved'");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_auto_save_neither_trims_nor_formats() {
+        let dir = history_folder("autosave_no_trim");
+        let path = dir.join("a.txt");
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(path.clone());
+        app.editor_settings.trim_trailing_whitespace = true;
+        app.toggle_auto_save();
+        app.active_tab_mut().text_content = "edited  ".to_owned();
+        autosave_frame(&ctx, &mut app, 10.0, true);
+        autosave_frame(&ctx, &mut app, 11.1, true);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "edited  ");
         let _ = fs::remove_dir_all(dir);
     }
 
