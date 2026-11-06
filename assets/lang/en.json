@@ -71,6 +71,7 @@
   "welcome.open_folder": "Open Folder…",
   "welcome.recent_folders": "Recent Folders",
   "welcome.recent_files": "Recent Files",
+  "drop.hint": "Drop to open",
   "file.save": "Save",
   "file.save_as": "Save As...",
   "file.exit": "Exit",

@@ -71,6 +71,7 @@
   "welcome.open_folder": "Abrir carpeta…",
   "welcome.recent_folders": "Carpetas recientes",
   "welcome.recent_files": "Archivos recientes",
+  "drop.hint": "Suelta para abrir",
   "file.save": "Guardar",
   "file.save_as": "Guardar como...",
   "file.exit": "Salir",

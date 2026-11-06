@@ -71,6 +71,7 @@
   "welcome.open_folder": "打开文件夹…",
   "welcome.recent_folders": "最近的文件夹",
   "welcome.recent_files": "最近的文件",
+  "drop.hint": "松开即可打开",
   "file.save": "保存",
   "file.save_as": "另存为...",
   "file.exit": "退出",

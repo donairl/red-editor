@@ -71,6 +71,7 @@
   "welcome.open_folder": "Ordner öffnen…",
   "welcome.recent_folders": "Zuletzt geöffnete Ordner",
   "welcome.recent_files": "Zuletzt geöffnete Dateien",
+  "drop.hint": "Zum Öffnen loslassen",
   "file.save": "Speichern",
   "file.save_as": "Speichern unter...",
   "file.exit": "Beenden",

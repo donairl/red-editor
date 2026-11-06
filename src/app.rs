@@ -15,6 +15,7 @@ use crate::file_browser::{self, Explorer, ExplorerAction};
 use crate::file_ops;
 use crate::git::{FileChange, GitError};
 use crate::diff_view::{self, Against, DiffViewAction, DiffViewUi};
+use crate::drop;
 use crate::git_graph::{self, GitGraphUi, GraphAction};
 use crate::git_worker::{Base, DiffSource, GitState, Op};
 use crate::editor_view::{render_editor_with, text_content_exceeds_highlight_limit};
@@ -2044,9 +2045,11 @@ impl TextEditorApp {
     /// Shows `folder` in the Explorer sidebar and records it in the history.
     ///
     /// The new folder starts clean: saved tabs of the old one are closed
-    /// (unsaved ones stay, so no work is lost) and Search in Files forgets
-    /// its query, options and results.
+    /// (unsaved ones stay, so no work is lost), the diff view closes with the
+    /// tab it showed, and Search in Files forgets its query, options and
+    /// results.
     pub fn open_folder(&mut self, folder: PathBuf) {
+        self.close_diff_view();
         self.close_tabs_where(0, |_, _| true);
         self.search.stop();
         self.search = SearchState::default();
@@ -2056,6 +2059,24 @@ impl TextEditorApp {
         self.show_sidebar = true;
         self.sidebar_view = SidebarView::Explorer;
         self.status_message = Some((self.i18n.t("msg.folder_opened").to_owned(), false));
+    }
+
+    /// Opens what was dropped on the window: a folder becomes the workspace
+    /// and every file opens in a tab.
+    ///
+    /// Folders go first, so the files dropped beside one land in its
+    /// workspace instead of being closed again by the switch to it.
+    pub fn open_dropped(&mut self, paths: Vec<PathBuf>) {
+        let dropped = drop::Dropped::split(paths);
+        if dropped.is_empty() {
+            return;
+        }
+        for folder in dropped.folders {
+            self.open_folder(folder);
+        }
+        for file in dropped.files {
+            self.open_file_in_tab(file);
+        }
     }
 
     /// Reopens an entry of File > Open Recent. One no longer there is
@@ -2577,6 +2598,14 @@ impl eframe::App for TextEditorApp {
         self.apply_font_size(ui);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         self.poll_disk(&ctx);
+        // Files dropped on the window open in tabs, a folder as the
+        // workspace. Read before git is polled, so the new folder's
+        // repository is looked up in this very frame.
+        let dropped = drop::paths(&ctx);
+        if !dropped.is_empty() {
+            self.open_dropped(dropped);
+        }
+        drop::show_hint(&ctx, &self.i18n);
         self.poll_git(&ctx);
         // A new repository replaces the graph: load it again, or close the
         // graph when there is no repository left.
@@ -5316,6 +5345,67 @@ mod tests {
         assert!(app.history.is_empty(), "missing entries are dropped");
         assert!(app.active_tab().is_pristine(), "no file was opened");
         assert!(app.explorer.is_none(), "no folder was opened");
+    }
+
+    /// Dropping a file on the window opens it in a tab, from the start page
+    /// too.
+    #[test]
+    fn test_a_dropped_file_opens_in_a_tab() {
+        let dir = history_folder("dropped_file");
+        let path = dir.join("a.txt");
+        let mut app = TextEditorApp::default();
+        assert!(app.show_welcome, "the start page is the default");
+
+        app.open_dropped(vec![path.clone()]);
+
+        assert!(!app.show_welcome, "the drop left the start page");
+        assert_eq!(app.active_tab().current_path.as_ref(), Some(&path));
+        assert_eq!(app.active_tab().text_content, "a");
+        assert_eq!(app.history.entries().len(), 1, "the file is recent");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A dropped folder becomes the workspace, and the files dropped beside
+    /// it are still open afterwards: folders are handled first, so the
+    /// switch to the new workspace does not close them again.
+    #[test]
+    fn test_a_dropped_folder_becomes_the_workspace_beside_its_files() {
+        let dir = history_folder("dropped_folder");
+        let (old, file) = (dir.join("b.txt"), dir.join("a.txt"));
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(old.clone());
+
+        app.open_dropped(vec![file.clone(), dir.clone()]);
+
+        let root = app.explorer.as_ref().map(|e| e.root().to_path_buf());
+        assert_eq!(root, Some(dir.clone()), "the folder did not become the workspace");
+        assert!(
+            app.tabs.iter().any(|t| t.current_path.as_ref() == Some(&file)),
+            "the dropped file is not open"
+        );
+        assert!(
+            !app.tabs.iter().any(|t| t.current_path.as_ref() == Some(&old)),
+            "the old workspace's saved tab stayed open"
+        );
+        assert_eq!(app.sidebar_view, SidebarView::Explorer);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Closing the diff view with the folder it belongs to matters: the view
+    /// is indexed by tab, and the new folder replaces the tabs.
+    #[test]
+    fn test_opening_a_folder_closes_the_diff_view() {
+        let dir = history_folder("dropped_diff");
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(dir.join("a.txt"));
+        let ctx = egui::Context::default();
+        app.toggle_diff_view(&ctx, Against::File { path: dir.join("b.txt"), text: "b".to_owned() });
+        assert!(app.diff_view.is_some(), "the diff view did not open");
+
+        app.open_folder(dir.clone());
+
+        assert!(app.diff_view.is_none(), "the diff view outlived its tab");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

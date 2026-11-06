@@ -23,8 +23,10 @@ Last updated 2026-11-06.
   `Ctrl+0`, `Ctrl` + scroll, and View → Zoom. One editor font size, kept in
   storage; it feeds `FontId::monospace` and the layout cache. The status bar
   shows the size as a percentage when it is not the default one.
-- [ ] **Drag and drop** — files dropped on the window open in tabs, a
-  folder opens as the workspace (`ctx.input(|i| i.raw.dropped_files)`).
+- [x] **Drag and drop** — done 2026-11-06 (`src/drop.rs`): files dropped on
+  the window open in tabs and a folder opens as the workspace; folders are
+  handled first, so the files dropped beside one land in it. A hint is
+  painted over the window while files hover it.
 
 ## Editing experience
 
@@ -92,5 +94,5 @@ Last updated 2026-11-06.
 
 ## Suggested order
 
-Indent guides → drag and drop (quick wins), then split editor, then the
-minimal LSP client.
+Indent guides (a quick win), then split editor, then the minimal LSP
+client.

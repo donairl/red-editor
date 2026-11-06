@@ -11,6 +11,7 @@ mod brackets;
 mod bookmarks;
 mod console_panel;
 mod diff_view;
+mod drop;
 mod editor_view;
 mod embedded_sql;
 mod file_browser;
