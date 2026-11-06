@@ -10,6 +10,7 @@ mod blame;
 mod brackets;
 mod bookmarks;
 mod console_panel;
+mod diff_view;
 mod editor_view;
 mod embedded_sql;
 mod file_browser;

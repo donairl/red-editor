@@ -74,8 +74,7 @@ pub(crate) fn render_editor(
     );
 }
 
-/// What the user did to the folds in a frame, for the app to apply to the
-/// document's folds.
+/// What the user did to the folds and gutter in a frame, for the app to apply.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FoldOutput {
     /// Fold or unfold the block with this header (0-based line): its
@@ -84,6 +83,8 @@ pub(crate) struct FoldOutput {
     /// Unfold whatever hides this line (0-based): the caret was put there
     /// by other means than stepping over the fold (find, Go to Line, undo).
     pub reveal: Option<usize>,
+    /// Gutter change marker was clicked for 1-based line.
+    pub clicked_change: Option<usize>,
 }
 
 /// Keeps the caret of editor `id` out of the `hidden` ranges: one that
@@ -488,7 +489,9 @@ fn render_editor_inner(
                 hidden: &request.hidden,
                 foldable: &request.foldable,
             };
-            folds.toggle = gutter::paint(ui, &output, &font_id, width, bookmarks, changes, &folding);
+            let gout = gutter::paint(ui, &output, &font_id, width, bookmarks, changes, &folding);
+            folds.toggle = gout.toggled_fold;
+            folds.clicked_change = gout.clicked_change;
         }
         folds.toggle = folds.toggle.or(paint_fold_markers(ui, &output, &request.hidden));
         if let Some((strip, clip, column, small)) = &blame {

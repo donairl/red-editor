@@ -114,7 +114,7 @@ impl TextEditorApp {
         let ctx = ui.ctx().clone();
         // Folding acts on the editor, which the start page and the Git
         // Graph hide.
-        let editing = !self.show_welcome && self.git_graph.is_none();
+        let editing = !self.show_welcome && self.git_graph.is_none() && self.diff_view.is_none();
         let fold_items = [
             ("view.fold", shortcuts::label(&ctx, &shortcuts::FOLD), ShortcutAction::Fold),
             ("view.unfold", shortcuts::label(&ctx, &shortcuts::UNFOLD), ShortcutAction::Unfold),
@@ -142,6 +142,20 @@ impl TextEditorApp {
         if ui.add_enabled(self.git.repo().is_some(), graph).clicked() {
             self.toggle_git_graph(&ctx);
             ui.close();
+        }
+        let diff_head = egui::Button::new(self.i18n.t("view.diff_head"))
+            .selected(self.diff_view.as_ref().is_some_and(|v| v.against == crate::diff_view::Against::Head))
+            .shortcut_text(shortcuts::label(&ctx, &shortcuts::DIFF_VIEW));
+        if ui.add_enabled(!self.show_welcome, diff_head).clicked() {
+            self.apply_shortcut(&ctx, ShortcutAction::DiffWithHead);
+            ui.close();
+        }
+        if ui
+            .add_enabled(!self.show_welcome, egui::Button::new(self.i18n.t("view.diff_file")))
+            .clicked()
+        {
+            ui.close();
+            self.apply_shortcut(&ctx, ShortcutAction::DiffWithFile);
         }
         if menu_item(
             ui,

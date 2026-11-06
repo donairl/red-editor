@@ -315,6 +315,34 @@ impl Repo {
         self.git(&["add", "-A"]).map(drop)
     }
 
+    /// Stages only the change the gutter marks at 1-based `line`, taking
+    /// it from `text` (the editor's copy of `path`) into the index. The
+    /// work tree is not touched. Fails when that line holds no change
+    /// against the index.
+    pub fn stage_hunk(&self, path: &Path, text: &str, line: usize) -> Result<(), GitError> {
+        let rel = self.relative(path).ok_or(GitError::NotRepo)?;
+        // The index's copy, else HEAD's; a new file starts empty.
+        let staged = self
+            .git(&["show", &format!(":{rel}")])
+            .or_else(|_| self.git(&["show", &format!("HEAD:{rel}")]))
+            .unwrap_or_default();
+        let new_index = crate::line_diff::apply_hunk(&staged, text, line)
+            .ok_or_else(|| GitError::Failed("no unstaged change at this line".to_owned()))?;
+        let mode = self
+            .git(&["ls-files", "-s", "--", &rel])
+            .ok()
+            .and_then(|out| out.split_whitespace().next().map(str::to_owned))
+            .unwrap_or_else(|| "100644".to_owned());
+        let hash = run(
+            &self.root,
+            &["hash-object", "-w", "--stdin", "--path", &rel],
+            Some(&new_index),
+            LOCAL_TIMEOUT,
+        )?;
+        let info = format!("{mode},{},{rel}", hash.trim());
+        self.git(&["update-index", "--add", "--cacheinfo", &info]).map(drop)
+    }
+
     pub fn unstage(&self, paths: &[PathBuf]) -> Result<(), GitError> {
         match self.git_paths(&["restore", "--staged"], paths) {
             Ok(_) => Ok(()),
@@ -1195,6 +1223,26 @@ mod tests {
             assert!(matches!(e, GitError::NotRepo | GitError::NotInstalled), "{e:?}");
         }
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_stage_hunk_stages_one_change_and_leaves_the_file() {
+        let Some(repo) = temp_repo("stage_hunk") else { return };
+        let file = repo.root().join("a.txt");
+        fs::write(&file, "a\nb\nc\nd\ne\n").unwrap();
+        repo.stage(std::slice::from_ref(&file)).unwrap();
+        repo.commit("first").unwrap();
+        let edited = "a\nB\nc\nd\nE\n";
+        fs::write(&file, edited).unwrap();
+
+        repo.stage_hunk(&file, edited, 2).unwrap();
+        assert_eq!(repo.git(&["show", ":a.txt"]).unwrap(), "a\nB\nc\nd\ne\n");
+        assert_eq!(fs::read_to_string(&file).unwrap(), edited, "work tree untouched");
+        // Against the index line 2 is no longer a change.
+        assert!(repo.stage_hunk(&file, edited, 2).is_err());
+        repo.stage_hunk(&file, edited, 5).unwrap();
+        assert_eq!(repo.git(&["show", ":a.txt"]).unwrap(), edited);
+        let _ = fs::remove_dir_all(repo.root());
     }
 
     #[test]

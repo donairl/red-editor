@@ -21,6 +21,22 @@ pub enum Mark {
     DeletedBelow,
 }
 
+/// A contiguous changed hunk between `base` and `text`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hunk {
+    /// 1-based line range in the current `text` [start, end].
+    /// For pure deletion above line L, this is L..=L.
+    pub new_line_range: std::ops::RangeInclusive<usize>,
+    /// The lines from `base` that were removed/replaced (without trailing newline).
+    pub old_lines: Vec<String>,
+    /// The lines from `text` that were added/modified (without trailing newline).
+    pub new_lines: Vec<String>,
+    /// Char range in `text` that this hunk replaces.
+    pub char_range: (usize, usize),
+    /// The original text in `base` that should replace `char_range` to revert this hunk.
+    pub revert_replacement: String,
+}
+
 /// The mark of every changed line.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LineMarks {
@@ -83,6 +99,74 @@ pub fn marks(base: &str, text: &str) -> LineMarks {
     marks
 }
 
+/// The changed block of `ops` the gutter shows at 1-based `line`: its line
+/// ranges in the old and the new text (0-based, end exclusive). A removal
+/// is shown on the line now in its place, or on the last line past the end.
+fn op_at(ops: &[DiffOp], last_line: usize, line: usize) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+    ops.iter().find_map(|op| {
+        let hit = match *op {
+            DiffOp::Equal { .. } => false,
+            DiffOp::Insert { .. } | DiffOp::Replace { .. } => op.new_range().contains(&(line - 1)),
+            DiffOp::Delete { new_index, .. } => {
+                let marker = if new_index >= last_line { last_line.max(1) } else { new_index + 1 };
+                marker == line
+            }
+        };
+        hit.then(|| (op.old_range(), op.new_range()))
+    })
+}
+
+fn trim_newline(s: &str) -> String {
+    s.strip_suffix('\n').map(|s| s.strip_suffix('\r').unwrap_or(s)).unwrap_or(s).to_owned()
+}
+
+/// Finds the changed hunk the gutter marks at 1-based `target_line`.
+pub fn hunk_at(base: &str, text: &str, target_line: usize) -> Option<Hunk> {
+    if target_line == 0 {
+        return None;
+    }
+    let diff = TextDiff::configure()
+        .algorithm(Algorithm::Myers)
+        .deadline(Instant::now() + DEADLINE)
+        .diff_lines(base, text);
+    let (base_lines, text_lines) = (diff.old_slices(), diff.new_slices());
+    let (old, new) = op_at(diff.ops(), find::line_count(text), target_line)?;
+    let chars = |lines: &[&str]| lines.iter().map(|s| s.chars().count()).sum::<usize>();
+    let char_start = chars(&text_lines[..new.start]);
+    let char_end = char_start + chars(&text_lines[new.clone()]);
+    let shown = if new.is_empty() { target_line..=target_line } else { new.start + 1..=new.end };
+    Some(Hunk {
+        new_line_range: shown,
+        old_lines: base_lines[old.clone()].iter().map(|s| trim_newline(s)).collect(),
+        new_lines: text_lines[new.clone()].iter().map(|s| trim_newline(s)).collect(),
+        char_range: (char_start, char_end),
+        revert_replacement: base_lines[old].concat(),
+    })
+}
+
+/// `base` with only the hunk shown at 1-based `line` taken from `text`:
+/// what the index holds after staging that one hunk.
+pub fn apply_hunk(base: &str, text: &str, line: usize) -> Option<String> {
+    if line == 0 {
+        return None;
+    }
+    let diff = TextDiff::configure()
+        .algorithm(Algorithm::Myers)
+        .deadline(Instant::now() + DEADLINE)
+        .diff_lines(base, text);
+    let (base_lines, text_lines) = (diff.old_slices(), diff.new_slices());
+    let (old, new) = op_at(diff.ops(), find::line_count(text), line)?;
+    let mut out = base_lines[..old.start].concat();
+    let added = text_lines[new].concat();
+    // A base without a final newline followed by inserted lines.
+    if !out.is_empty() && !out.ends_with('\n') && !added.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(&added);
+    out.push_str(&base_lines[old.end..].concat());
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +207,55 @@ mod tests {
     fn test_empty_base_marks_every_line_added() {
         use Mark::*;
         assert_eq!(list(&marks("", "x\ny\n"), 3), [Some(Added), Some(Added), None]);
+    }
+
+    #[test]
+    fn test_hunk_at_modified_added_and_deleted() {
+        let base = "line1\nline2\nline3\nline4\n";
+        let text = "line1\nMODIFIED\nline3\nline4\n";
+        let hunk = hunk_at(base, text, 2).expect("should find hunk at line 2");
+        assert_eq!(hunk.new_line_range, 2..=2);
+        assert_eq!(hunk.old_lines, vec!["line2"]);
+        assert_eq!(hunk.new_lines, vec!["MODIFIED"]);
+        assert_eq!(hunk.revert_replacement, "line2\n");
+
+        // Test revert application
+        let mut reverted = text.to_string();
+        reverted.replace_range(hunk.char_range.0..hunk.char_range.1, &hunk.revert_replacement);
+        assert_eq!(reverted, base);
+
+        // Test insertion
+        let text_ins = "line1\nline2\nINSERTED1\nINSERTED2\nline3\nline4\n";
+        let hunk_ins = hunk_at(base, text_ins, 3).expect("hunk at line 3");
+        assert_eq!(hunk_ins.new_line_range, 3..=4);
+        assert!(hunk_ins.old_lines.is_empty());
+        assert_eq!(hunk_ins.new_lines, vec!["INSERTED1", "INSERTED2"]);
+        assert_eq!(hunk_ins.revert_replacement, "");
+        let mut reverted_ins = text_ins.to_string();
+        reverted_ins.replace_range(hunk_ins.char_range.0..hunk_ins.char_range.1, &hunk_ins.revert_replacement);
+        assert_eq!(reverted_ins, base);
+
+        // Test deletion
+        let text_del = "line1\nline3\nline4\n";
+        // line2 was deleted; in text_del, line2 is now line3 (DeletedAbove)
+        let hunk_del = hunk_at(base, text_del, 2).expect("hunk at line 2");
+        assert_eq!(hunk_del.old_lines, vec!["line2"]);
+        assert!(hunk_del.new_lines.is_empty());
+        assert_eq!(hunk_del.revert_replacement, "line2\n");
+        let mut reverted_del = text_del.to_string();
+        reverted_del.replace_range(hunk_del.char_range.0..hunk_del.char_range.1, &hunk_del.revert_replacement);
+        assert_eq!(reverted_del, base);
+    }
+
+    #[test]
+    fn test_apply_hunk_takes_only_that_hunk() {
+        let base = "a\nb\nc\nd\ne\n";
+        let text = "a\nB\nc\nd\nE\nf\n";
+        assert_eq!(apply_hunk(base, text, 2).unwrap(), "a\nB\nc\nd\ne\n");
+        assert_eq!(apply_hunk(base, text, 5).unwrap(), "a\nb\nc\nd\nE\nf\n");
+        assert_eq!(apply_hunk(base, text, 3), None, "unchanged line");
+        // A removal, marked on the line now in its place.
+        assert_eq!(apply_hunk(base, "a\nc\nd\ne\n", 2).unwrap(), "a\nc\nd\ne\n");
+        assert_eq!(hunk_at(base, text, 0), None);
     }
 }

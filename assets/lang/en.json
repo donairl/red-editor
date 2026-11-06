@@ -217,6 +217,9 @@
   "scm.diff_working": "(Working Tree)",
   "scm.diff_close": "Close diff",
   "scm.diff_empty": "No differences.",
+  "scm.revert_hunk": "Revert Change",
+  "scm.stage_hunk": "Stage Change",
+  "scm.hunk_staged": "Change staged.",
 
   "scm.open_console": "Open Console",
   "git.pull_diverged": "The branch has diverged from its upstream. Merge or rebase in the Console.",
@@ -253,6 +256,12 @@
   "graph.parents": "Parents",
   "graph.files": "Files",
   "view.git_graph": "Git Graph",
+  "view.diff_head": "Compare with HEAD",
+  "view.diff_file": "Compare with File…",
+  "diff.changes": "{count} changes",
+  "diff.next": "Next change",
+  "diff.prev": "Previous change",
+  "diff.no_head": "This file is not in a git repository; use Compare with File…",
   "scm.graph": "Git Graph",
 
   "view.blame": "Git Blame",

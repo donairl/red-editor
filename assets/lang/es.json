@@ -217,6 +217,9 @@
   "scm.diff_working": "(Árbol de trabajo)",
   "scm.diff_close": "Cerrar diff",
   "scm.diff_empty": "Sin diferencias.",
+  "scm.revert_hunk": "Revertir cambio",
+  "scm.stage_hunk": "Preparar cambio",
+  "scm.hunk_staged": "Cambio preparado.",
 
   "scm.open_console": "Abrir consola",
   "git.pull_diverged": "La rama se ha separado de su upstream. Haz merge o rebase en la Consola.",
@@ -253,6 +256,12 @@
   "graph.parents": "Padres",
   "graph.files": "Archivos",
   "view.git_graph": "Git Graph",
+  "view.diff_head": "Comparar con HEAD",
+  "view.diff_file": "Comparar con archivo…",
+  "diff.changes": "{count} cambios",
+  "diff.next": "Cambio siguiente",
+  "diff.prev": "Cambio anterior",
+  "diff.no_head": "Este archivo no está en un repositorio git; usa Comparar con archivo…",
   "scm.graph": "Git Graph",
 
   "view.blame": "Git Blame",

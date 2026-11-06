@@ -23,6 +23,9 @@ pub const GRAPH_PAGE: usize = 200;
 pub enum Op {
     Stage(Vec<PathBuf>),
     Unstage(Vec<PathBuf>),
+    /// Stage the change at a 1-based line of `text`, the editor's copy of
+    /// the file.
+    StageHunk { path: PathBuf, text: String, line: usize },
     Discard(Vec<FileChange>),
     Commit(String),
     /// Stages everything, then commits.
@@ -66,6 +69,7 @@ impl Op {
         match self {
             Op::Stage(paths) => repo.stage(paths),
             Op::Unstage(paths) => repo.unstage(paths),
+            Op::StageHunk { path, text, line } => repo.stage_hunk(path, text, *line),
             Op::Discard(changes) => repo.discard(changes),
             Op::Commit(message) => repo.commit(message),
             Op::CommitAll(message) => repo.stage_all().and_then(|()| repo.commit(message)),

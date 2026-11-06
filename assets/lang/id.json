@@ -217,6 +217,9 @@
   "scm.diff_working": "(Working Tree)",
   "scm.diff_close": "Tutup diff",
   "scm.diff_empty": "Tidak ada perbedaan.",
+  "scm.revert_hunk": "Batalkan Perubahan",
+  "scm.stage_hunk": "Stage Perubahan",
+  "scm.hunk_staged": "Perubahan di-stage.",
 
   "scm.open_console": "Buka Console",
   "git.pull_diverged": "Branch sudah bercabang dari upstream-nya. Lakukan merge atau rebase di Console.",
@@ -253,6 +256,12 @@
   "graph.parents": "Induk",
   "graph.files": "File",
   "view.git_graph": "Git Graph",
+  "view.diff_head": "Bandingkan dengan HEAD",
+  "view.diff_file": "Bandingkan dengan File…",
+  "diff.changes": "{count} perubahan",
+  "diff.next": "Perubahan berikutnya",
+  "diff.prev": "Perubahan sebelumnya",
+  "diff.no_head": "File ini tidak ada di repository git; pakai Bandingkan dengan File…",
   "scm.graph": "Git Graph",
 
   "view.blame": "Git Blame",

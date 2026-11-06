@@ -186,6 +186,13 @@ fn visible_numbers(
     numbers
 }
 
+/// What a gutter interaction produced: folded header (0-based) and/or clicked change line (1-based).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GutterOutput {
+    pub toggled_fold: Option<usize>,
+    pub clicked_change: Option<usize>,
+}
+
 /// Paints the gutter over the left `width` points of the editor's viewport.
 ///
 /// The gutter sticks to the left edge of the viewport: when the editor is
@@ -193,7 +200,7 @@ fn visible_numbers(
 ///
 /// A foldable line gets a chevron between its number and the text, as in
 /// VS Code: always while folded, only while the pointer is over the gutter
-/// otherwise. Returns the header (0-based line) whose chevron was clicked.
+/// otherwise. Returns gutter events (fold toggled, change marker clicked).
 pub fn paint(
     ui: &egui::Ui,
     output: &egui::text_edit::TextEditOutput,
@@ -202,7 +209,7 @@ pub fn paint(
     bookmarks: &Bookmarks,
     changes: &LineMarks,
     folding: &Folding<'_>,
-) -> Option<usize> {
+) -> GutterOutput {
     let palette = theme::active(ui.ctx()).gutter;
     let clip = ui.clip_rect();
     let left = output.response.response.rect.left().max(clip.left());
@@ -219,7 +226,7 @@ pub fn paint(
 
     let x = rect.right() - PAD_RIGHT;
     let hovered = ui.rect_contains_pointer(rect);
-    let mut toggled = None;
+    let mut gutter_out = GutterOutput::default();
     for number in visible_numbers(
         &output.galley,
         output.galley_pos.y,
@@ -236,7 +243,7 @@ pub fn paint(
                 .interact(cell, id, egui::Sense::click())
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if response.clicked() {
-                toggled = Some(number.line - 1);
+                gutter_out.toggled_fold = Some(number.line - 1);
             }
             if folded || hovered {
                 let color = if response.hovered() {
@@ -248,7 +255,16 @@ pub fn paint(
             }
         }
         if let Some(change) = number.change {
-            paint_change(&painter, rect.right() - PAD_RIGHT + CHANGE_INSET, number.row, change, &palette);
+            let change_x = rect.right() - PAD_RIGHT + CHANGE_INSET;
+            let change_cell = Rect::from_x_y_ranges(change_x - 1.0..=change_x + CHANGE_WIDTH + 3.0, number.row);
+            let change_id = output.response.response.id.with(("change_marker", number.line));
+            let change_resp = ui
+                .interact(change_cell, change_id, egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if change_resp.clicked() {
+                gutter_out.clicked_change = Some(number.line);
+            }
+            paint_change(&painter, change_x, number.row, change, &palette);
         }
         if number.bookmarked {
             let mark_left = rect.left() + MARK_INSET;
@@ -268,7 +284,7 @@ pub fn paint(
             color,
         );
     }
-    toggled
+    gutter_out
 }
 
 /// A fold chevron centred on `at`: pointing right (`▸`) while folded, down
@@ -511,5 +527,12 @@ mod tests {
         let folds: Vec<Option<bool>> = numbers.iter().map(|n| n.fold).collect();
         assert_eq!(folds, vec![Some(true), Some(false), None, None]);
         assert!(numbers.iter().all(|n| !n.bookmarked), "a hidden bookmark is not drawn");
+    }
+
+    #[test]
+    fn test_gutter_output_default() {
+        let out = GutterOutput::default();
+        assert_eq!(out.toggled_fold, None);
+        assert_eq!(out.clicked_change, None);
     }
 }

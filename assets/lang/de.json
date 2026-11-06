@@ -217,6 +217,9 @@
   "scm.diff_working": "(Arbeitsverzeichnis)",
   "scm.diff_close": "Diff schließen",
   "scm.diff_empty": "Keine Unterschiede.",
+  "scm.revert_hunk": "Änderung verwerfen",
+  "scm.stage_hunk": "Änderung vormerken",
+  "scm.hunk_staged": "Änderung vorgemerkt.",
 
   "scm.open_console": "Konsole öffnen",
   "git.pull_diverged": "Der Branch ist von seinem Upstream abgewichen. Merge oder Rebase in der Konsole.",
@@ -253,6 +256,12 @@
   "graph.parents": "Eltern",
   "graph.files": "Dateien",
   "view.git_graph": "Git Graph",
+  "view.diff_head": "Mit HEAD vergleichen",
+  "view.diff_file": "Mit Datei vergleichen…",
+  "diff.changes": "{count} Änderungen",
+  "diff.next": "Nächste Änderung",
+  "diff.prev": "Vorherige Änderung",
+  "diff.no_head": "Diese Datei liegt in keinem Git-Repository; nutze Mit Datei vergleichen…",
   "scm.graph": "Git Graph",
 
   "view.blame": "Git Blame",

@@ -217,6 +217,9 @@
   "scm.diff_working": "（工作区）",
   "scm.diff_close": "关闭差异",
   "scm.diff_empty": "没有差异。",
+  "scm.revert_hunk": "还原更改",
+  "scm.stage_hunk": "暂存更改",
+  "scm.hunk_staged": "更改已暂存。",
 
   "scm.open_console": "打开控制台",
   "git.pull_diverged": "该分支已与上游分叉。请在控制台中合并或变基。",
@@ -253,6 +256,12 @@
   "graph.parents": "父提交",
   "graph.files": "文件",
   "view.git_graph": "Git Graph",
+  "view.diff_head": "与 HEAD 比较",
+  "view.diff_file": "与文件比较…",
+  "diff.changes": "{count} 处更改",
+  "diff.next": "下一处更改",
+  "diff.prev": "上一处更改",
+  "diff.no_head": "此文件不在 git 仓库中；请使用“与文件比较…”",
   "scm.graph": "Git Graph",
 
   "view.blame": "Git Blame",

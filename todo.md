@@ -38,8 +38,16 @@ Last updated 2026-11-04.
 - [ ] **Minimal LSP client** — diagnostics first (squiggles + a Problems
   panel) from `rust-analyzer` / `gopls` / `tsserver`, then completion and
   hover. Biggest feature, biggest cost.
-- [ ] **Diff view** — active file vs HEAD, or two files, in a tab
-  (`Ctrl+Shift+D`). The SCM diff view exists; reuse it.
+- [x] **Diff view** — done 2026-11-06 (`src/diff_view.rs`): side by side in
+  place of the editor, the document (unsaved edits too) vs HEAD
+  (`Ctrl+Shift+D`) or vs a picked file; step between changes, double-click
+  to jump. Later: word-level highlights inside changed lines, editing on
+  the right side, folding unchanged runs.
+
+- [x] **Gutter diff popup** — done 2026-11-06: click a change marker for the
+  old/new lines with Revert Change (editor only) and Stage Change (index
+  only, via `hash-object` + `update-index`). Hunks are taken against HEAD;
+  staging re-diffs against the index. Later: Unstage, next/prev change.
 
 ## Tech debt
 
@@ -51,4 +59,4 @@ Last updated 2026-11-04.
 
 ## Suggested order
 
-Code folding → diff view.
+Minimal LSP client (diagnostics first).

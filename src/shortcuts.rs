@@ -34,6 +34,7 @@ pub const TOGGLE_SIDEBAR: KeyboardShortcut = cmd(Key::B);
 pub const SOURCE_CONTROL: KeyboardShortcut = cmd_shift(Key::G);
 pub const BLAME: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::B);
+pub const DIFF_VIEW: KeyboardShortcut = cmd_shift(Key::D);
 pub const GIT_GRAPH: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::G);
 pub const NEXT_TAB: KeyboardShortcut = cmd(Key::Tab);
@@ -103,6 +104,11 @@ pub enum ShortcutAction {
     SourceControl,
     Blame,
     GitGraph,
+    /// Show the active document beside HEAD's copy.
+    DiffWithHead,
+    /// Show the active document beside a file picked in a dialog (a menu
+    /// and palette entry; no key).
+    DiffWithFile,
     NextTab,
     PrevTab,
     GotoLine,
@@ -159,6 +165,8 @@ impl ShortcutAction {
                 | ToggleConsole
                 | SourceControl
                 | GitGraph
+                | DiffWithHead
+                | DiffWithFile
                 | OpenFile
                 | OpenFolder
                 | SaveAs
@@ -186,6 +194,7 @@ impl ShortcutAction {
             SourceControl => SOURCE_CONTROL,
             Blame => BLAME,
             GitGraph => GIT_GRAPH,
+            DiffWithHead => DIFF_VIEW,
             NextTab => NEXT_TAB,
             PrevTab => PREV_TAB,
             GotoLine => GOTO_LINE,
@@ -215,7 +224,7 @@ impl ShortcutAction {
             Unfold => UNFOLD,
             CommandPalette => COMMAND_PALETTE,
             QuickOpen => QUICK_OPEN,
-            SelectTheme(_) | FoldAll | UnfoldAll => return None,
+            SelectTheme(_) | FoldAll | UnfoldAll | DiffWithFile => return None,
         })
     }
 
@@ -256,6 +265,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
     use ShortcutAction::*;
     [
         (COMMAND_PALETTE, CommandPalette),
+        (DIFF_VIEW, DiffWithHead),
         (FIND_PREV, FindPrev),
         (FIND_REFERENCES, FindReferences),
         (FIND_NEXT, FindNext),
@@ -383,6 +393,7 @@ mod tests {
             (egui::Key::K, ctrl_shift, ShortcutAction::DeleteLine),
             (egui::Key::Slash, ctrl, ShortcutAction::ToggleComment),
             (egui::Key::D, ctrl, ShortcutAction::SelectNextMatch),
+            (egui::Key::D, ctrl_shift, ShortcutAction::DiffWithHead),
             (egui::Key::Backslash, ctrl_shift, ShortcutAction::GoToBracket),
             // What a US layout reports for Shift+\.
             (egui::Key::Pipe, ctrl_shift, ShortcutAction::GoToBracket),

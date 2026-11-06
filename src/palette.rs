@@ -143,6 +143,8 @@ pub const COMMANDS: &[Command] = &[
     command("view.source_control", ShortcutAction::SourceControl),
     command("view.blame", ShortcutAction::Blame),
     command("view.git_graph", ShortcutAction::GitGraph),
+    command("view.diff_head", ShortcutAction::DiffWithHead),
+    command("view.diff_file", ShortcutAction::DiffWithFile),
     command("cmd.theme", ShortcutAction::SelectTheme(ThemeId::System)),
     command(
         "cmd.theme",
