@@ -77,8 +77,11 @@ Last updated 2026-11-06.
 - [ ] **Minimal LSP client** — diagnostics first (squiggles + a Problems
   panel) from `rust-analyzer` / `gopls` / `tsserver`, then Go to Definition
   (`F12`) and hover. Biggest feature, biggest cost.
-- [ ] **Outline for more languages** — `src/symbols.rs` knows Rust, PHP, Go
-  and Python; add JavaScript / TypeScript, C / C++ and Markdown headings.
+- [x] **Outline for more languages** — done 2026-11-06 (`src/symbols.rs`):
+  JavaScript / TypeScript (classes, members, functions, arrow functions,
+  interfaces, types, enums, namespaces), C / C++ (functions, methods,
+  structs, classes, enums, namespaces, typedefs, `using`, `#define`) and
+  Markdown headings (Go to Symbol only; Go to Definition stays code-only).
 - [ ] **Several Console terminals** — a `+` for another shell tab in the
   Console panel, and a choice of shell (`bash`, `zsh`, `fish`).
 
@@ -102,4 +105,5 @@ Last updated 2026-11-06.
 
 ## Suggested order
 
-Outline for more languages (a quick win), then the minimal LSP client.
+Settings (one place for the toggles that piled up), then splitting
+`src/app.rs`, then the minimal LSP client.

@@ -411,22 +411,28 @@ impl TextEditorApp {
             }
         }
         ui.separator();
-        let navigable = symbols::supports(self.effective_language());
-        let nav_item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {
+        let language = self.effective_language();
+        let nav_item = |ui: &mut egui::Ui,
+                        label: &str,
+                        shortcut: &egui::KeyboardShortcut,
+                        enabled: bool| {
             let button = egui::Button::new(label).shortcut_text(shortcuts::label(ctx, shortcut));
-            let clicked = ui.add_enabled(navigable, button).clicked();
+            let clicked = ui.add_enabled(enabled, button).clicked();
             if clicked {
                 ui.close();
             }
             clicked
         };
-        if nav_item(ui, self.i18n.t("edit.goto_symbol"), &shortcuts::GOTO_SYMBOL) {
+        // Markdown has an outline of headings, but no identifiers to follow.
+        let (outline, navigable) = (symbols::supports(language), symbols::navigates(language));
+        if nav_item(ui, self.i18n.t("edit.goto_symbol"), &shortcuts::GOTO_SYMBOL, outline) {
             self.open_symbol_picker();
         }
         if nav_item(
             ui,
             self.i18n.t("edit.goto_definition"),
             &shortcuts::GOTO_DEFINITION,
+            navigable,
         ) {
             self.goto_definition(ctx, None);
         }
@@ -434,6 +440,7 @@ impl TextEditorApp {
             ui,
             self.i18n.t("edit.find_references"),
             &shortcuts::FIND_REFERENCES,
+            navigable,
         ) {
             self.find_references(ctx, None);
         }
@@ -483,7 +490,7 @@ impl TextEditorApp {
         }
         editor.context_menu(|ui| {
             self.show_clipboard_items(ui, ctx);
-            if symbols::supports(self.effective_language()) {
+            if symbols::navigates(self.effective_language()) {
                 ui.separator();
                 let at = ctx.data(|d| d.get_temp::<usize>(self.editor_id().with(CONTEXT_CHAR)));
                 let item = |ui: &mut egui::Ui, label: &str, shortcut: &egui::KeyboardShortcut| {

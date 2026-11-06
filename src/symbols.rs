@@ -1,22 +1,39 @@
-//! Code navigation for Rust, PHP, Go and Python: the definitions in a file,
-//! the word under the caret, and the Go to Symbol bar.
+//! Code navigation for Rust, PHP, Go, Python, JavaScript / TypeScript and
+//! C / C++: the definitions in a file, the word under the caret, and the Go
+//! to Symbol bar. Markdown gets its headings, for Go to Symbol only.
 //!
 //! Definitions are found by a light line scanner, not a parser: a line that
 //! starts with `fn`, `def`, `func`, `class`, … after its modifiers defines
-//! something. Nesting comes from indentation, so code is expected to be
-//! formatted. Block comments and multi-line strings are skipped.
+//! something; in C and C++, a line naming something just before its `(`.
+//! Nesting comes from indentation, so code is expected to be formatted.
+//! Block comments and multi-line strings are skipped.
 
 use eframe::egui::{self, Key};
 
 use crate::highlighter::Language;
 use crate::i18n::I18n;
 
-/// Whether code navigation knows `language`.
+/// Whether Go to Symbol knows `language`.
 pub fn supports(language: Language) -> bool {
     matches!(
         language,
-        Language::Rust | Language::Php | Language::Go | Language::Python
+        Language::Rust
+            | Language::Php
+            | Language::Go
+            | Language::Python
+            | Language::JavaScript
+            | Language::TypeScript
+            | Language::C
+            | Language::Cpp
+            | Language::Markdown
     )
+}
+
+/// Whether Go to Definition and Find References know `language`: every
+/// language Go to Symbol knows but Markdown, whose headings are no
+/// identifiers.
+pub fn navigates(language: Language) -> bool {
+    supports(language) && language != Language::Markdown
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +52,8 @@ pub enum SymbolKind {
     Macro,
     Constant,
     Variable,
+    /// A Markdown heading of this level, 1 to 6.
+    Heading(u8),
 }
 
 impl SymbolKind {
@@ -54,6 +73,12 @@ impl SymbolKind {
             SymbolKind::Macro => "macro",
             SymbolKind::Constant => "const",
             SymbolKind::Variable => "var",
+            SymbolKind::Heading(1) => "h1",
+            SymbolKind::Heading(2) => "h2",
+            SymbolKind::Heading(3) => "h3",
+            SymbolKind::Heading(4) => "h4",
+            SymbolKind::Heading(5) => "h5",
+            SymbolKind::Heading(_) => "h6",
         }
     }
 }
@@ -71,7 +96,7 @@ pub struct Symbol {
 impl Symbol {
     /// Whether the symbol defines `name`, for Go to Definition.
     pub fn defines(&self, name: &str) -> bool {
-        self.kind != SymbolKind::Impl && self.name == name
+        !matches!(self.kind, SymbolKind::Impl | SymbolKind::Heading(_)) && self.name == name
     }
 }
 
@@ -85,6 +110,19 @@ fn ident(s: &str) -> Option<(&str, &str)> {
     let end = s.find(|c: char| !is_ident(c)).unwrap_or(s.len());
     let name = &s[..end];
     (!name.is_empty() && !name.starts_with(|c: char| c.is_ascii_digit())).then(|| (name, &s[end..]))
+}
+
+/// The identifier `s` ends with, after trailing spaces.
+fn last_ident(s: &str) -> Option<&str> {
+    let s = s.trim_end();
+    let start = s
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| is_ident(c))
+        .last()
+        .map_or(s.len(), |(i, _)| i);
+    let name = &s[start..];
+    (!name.is_empty() && !name.starts_with(|c: char| c.is_ascii_digit())).then_some(name)
 }
 
 /// What follows `keyword` when `s` starts with it as a whole word.
@@ -137,7 +175,11 @@ impl Skipper {
                         }
                     };
                 }
-                if language == Language::Go && line.matches('`').count() % 2 == 1 {
+                let backticks = matches!(
+                    language,
+                    Language::Go | Language::JavaScript | Language::TypeScript
+                );
+                if backticks && line.matches('`').count() % 2 == 1 {
                     self.inside = Some("`");
                     return Some(line);
                 }
@@ -153,7 +195,11 @@ pub fn symbols(text: &str, language: Language) -> Vec<Symbol> {
     if !supports(language) {
         return found;
     }
+    if language == Language::Markdown {
+        return markdown(text);
+    }
     let mut skipper = Skipper::default();
+    let mut c_state = CState::default();
     // Indent and kind of each symbol whose body may follow, innermost last.
     let mut scopes: Vec<(usize, SymbolKind)> = Vec::new();
     let mut go_group: Option<GoGroup> = None;
@@ -166,6 +212,12 @@ pub fn symbols(text: &str, language: Language) -> Vec<Symbol> {
         if code.is_empty() || code == "{" {
             continue;
         }
+        // C++ access labels sit at their class's indent without closing it.
+        if matches!(language, Language::Cpp)
+            && matches!(code, "public:" | "private:" | "protected:")
+        {
+            continue;
+        }
         let indent = indent_width(line);
         while scopes.last().is_some_and(|&(open, _)| open >= indent) {
             scopes.pop();
@@ -176,6 +228,8 @@ pub fn symbols(text: &str, language: Language) -> Vec<Symbol> {
             Language::Go => go(code, indent, &mut go_group),
             Language::Python => python(code, parent),
             Language::Php => php(code, parent),
+            Language::JavaScript | Language::TypeScript => javascript(code, parent),
+            Language::C | Language::Cpp => c_family(code, indent, parent, &mut c_state),
             _ => None,
         };
         if let Some((kind, name)) = symbol {
@@ -372,6 +426,369 @@ fn php(line: &str, parent: Option<SymbolKind>) -> Option<(SymbolKind, String)> {
     }
 }
 
+/// The modifiers that may come before a JavaScript or TypeScript definition.
+const JS_MODIFIERS: &[&str] = &[
+    "export", "default", "declare", "abstract", "async", "public", "private", "protected",
+    "static", "readonly", "override", "accessor",
+];
+
+fn javascript(line: &str, parent: Option<SymbolKind>) -> Option<(SymbolKind, String)> {
+    if line.starts_with("//") || line.starts_with('*') || line.starts_with('@') {
+        return None;
+    }
+    let member_of = matches!(parent, Some(SymbolKind::Class | SymbolKind::Interface));
+    let mut rest = line;
+    loop {
+        let trimmed = rest.trim_start();
+        let Some((word, after)) = ident(trimmed) else {
+            // A `#private` method, or a `*generator` one.
+            let name = trimmed.strip_prefix('#').or_else(|| trimmed.strip_prefix('*'))?;
+            let (name, after) = ident(name).filter(|_| member_of)?;
+            return js_member(name, after);
+        };
+        let kind = match word {
+            _ if JS_MODIFIERS.contains(&word) => {
+                rest = after;
+                continue;
+            }
+            "class" | "interface" | "enum" | "namespace" | "module" => {
+                rest = after;
+                match word {
+                    "class" => SymbolKind::Class,
+                    "interface" => SymbolKind::Interface,
+                    "enum" => SymbolKind::Enum,
+                    _ => SymbolKind::Module,
+                }
+            }
+            // `get name()`, `set name(v)`; a member called `get` stays one.
+            "get" | "set" if member_of && ident(after).is_some() => {
+                rest = after;
+                continue;
+            }
+            "function" => {
+                rest = after.trim_start().trim_start_matches('*');
+                SymbolKind::Function
+            }
+            "type" => {
+                // `type` is also a fine name for a variable: a type alias
+                // goes on with `=` or its parameters.
+                let (name, after) = ident(after)?;
+                let next = after.trim_start();
+                return (next.starts_with('=') || next.starts_with('<'))
+                    .then(|| (SymbolKind::Type, name.to_owned()));
+            }
+            "const" if keyword(after.trim_start(), "enum").is_some() => {
+                rest = keyword(after.trim_start(), "enum")?;
+                SymbolKind::Enum
+            }
+            "const" | "let" | "var" => {
+                // Only the module's own: a body's locals are no outline.
+                if !matches!(parent, None | Some(SymbolKind::Module)) {
+                    return None;
+                }
+                let (name, after) = ident(after)?;
+                let value = after.split_once('=').map_or("", |(_, value)| value.trim_start());
+                let kind = if js_function_value(value) {
+                    SymbolKind::Function
+                } else if word == "const" {
+                    SymbolKind::Constant
+                } else {
+                    SymbolKind::Variable
+                };
+                return Some((kind, name.to_owned()));
+            }
+            _ if member_of => return js_member(word, after),
+            _ => return None,
+        };
+        let (name, _) = ident(rest)?;
+        return Some((kind, name.to_owned()));
+    }
+}
+
+/// Whether a value assigned to a name is a function: `function`, `async`,
+/// or an arrow.
+fn js_function_value(value: &str) -> bool {
+    keyword(value, "function").is_some()
+        || keyword(value, "async").is_some()
+        || (value.starts_with('(') && value.contains("=>"))
+        || ident(value).is_some_and(|(_, rest)| rest.trim_start().starts_with("=>"))
+}
+
+/// A class or interface member called `name`, followed by `after`: a method
+/// when its parameters come next, or an arrow function assigned to it.
+/// Fields are no outline.
+fn js_member(name: &str, after: &str) -> Option<(SymbolKind, String)> {
+    // TypeScript's optional and definite members: `name?(`, `name!:`.
+    let next = after.trim_start().trim_start_matches(['?', '!']).trim_start();
+    let method = next.starts_with('(')
+        || next.starts_with('<')
+        || next
+            .strip_prefix('=')
+            .is_some_and(|value| js_function_value(value.trim_start()));
+    method.then(|| (SymbolKind::Method, name.to_owned()))
+}
+
+/// Words that come before a `(` without a function being defined: control
+/// flow, operators that look like calls, and the types a declaration such as
+/// `void (*callback)(int)` starts with.
+const C_NOT_NAMES: &[&str] = &[
+    "if", "for", "while", "switch", "return", "sizeof", "else", "do", "catch", "case", "new",
+    "delete", "throw", "static_assert", "decltype", "alignof", "alignas", "typeid", "defined",
+    "__attribute__", "__declspec", "noexcept", "requires", "operator", "void", "int", "char",
+    "short", "long", "float", "double", "bool", "unsigned", "signed", "auto", "const",
+    "struct", "union", "enum", "class",
+];
+
+/// The words that only qualify what follows them in C and C++.
+const C_MODIFIERS: &[&str] = &["export", "extern", "static", "inline", "constexpr"];
+
+/// What the C scanner carries from one line to the next.
+#[derive(Default)]
+struct CState {
+    /// The indent of a `typedef` whose body is open: its name comes with the
+    /// `}` that closes it, `} Name;`.
+    typedef: Option<usize>,
+}
+
+fn c_family(
+    line: &str,
+    indent: usize,
+    parent: Option<SymbolKind>,
+    state: &mut CState,
+) -> Option<(SymbolKind, String)> {
+    if line.starts_with("//") || line.starts_with('*') {
+        return None;
+    }
+    if let Some(open) = state.typedef {
+        // The members of the typedef'd struct are fields, not symbols.
+        if indent > open || !line.starts_with('}') {
+            return None;
+        }
+        state.typedef = None;
+        let name = last_ident(line.trim_start_matches('}').trim().trim_end_matches(';'))?;
+        return Some((SymbolKind::Type, name.to_owned()));
+    }
+    if let Some(directive) = line.strip_prefix('#') {
+        let rest = keyword(directive.trim_start(), "define")?;
+        return ident(rest).map(|(name, _)| (SymbolKind::Macro, name.to_owned()));
+    }
+    let end = line.trim_end();
+    if let Some(rest) = keyword(line, "typedef") {
+        if let Some(head) = end.strip_suffix(';') {
+            // `typedef void (*handler)(int);`
+            if let Some((_, pointer)) = head.split_once("(*") {
+                return ident(pointer).map(|(name, _)| (SymbolKind::Type, name.to_owned()));
+            }
+            return last_ident(head).map(|name| (SymbolKind::Type, name.to_owned()));
+        }
+        // `typedef struct Name {` or `typedef struct`: the alias comes with
+        // the closing `}`.
+        state.typedef = Some(indent);
+        return c_type_head(rest);
+    }
+    let mut rest = line;
+    while let Some((word, after)) = ident(rest).filter(|(word, _)| C_MODIFIERS.contains(word)) {
+        let _ = word;
+        rest = after;
+    }
+    // A type, unless the line declares a function returning one:
+    // `struct node *next(struct node *n)`.
+    if let Some((word, after)) = ident(rest)
+        && (word == "namespace" || !line.contains('('))
+    {
+        if word == "using" {
+            // `using Name = Type;`; `using namespace std;` names nothing.
+            let (name, after) = ident(after)?;
+            return after
+                .trim_start()
+                .starts_with('=')
+                .then(|| (SymbolKind::Type, name.to_owned()));
+        }
+        if let Some(found) = c_type_head(rest) {
+            // A forward declaration, or a variable of the type, defines
+            // nothing here.
+            let body = line.find('{');
+            let assigned = line.find('=').is_some_and(|at| body.is_none_or(|open| at < open));
+            if (end.ends_with(';') && body.is_none()) || assigned {
+                return None;
+            }
+            return Some(found);
+        }
+    }
+    // Statements in a body, a struct's fields: nothing more to find.
+    let in_type = matches!(parent, Some(SymbolKind::Class | SymbolKind::Struct));
+    if !matches!(parent, None | Some(SymbolKind::Module)) && !in_type {
+        return None;
+    }
+    if parent.is_none() && indent > 0 {
+        return None;
+    }
+    let head = &line[..line.find('(')?];
+    if head.contains(['=', '"']) || head.matches('<').count() != head.matches('>').count() {
+        return None;
+    }
+    let name = last_ident(head)?;
+    if C_NOT_NAMES.contains(&name) {
+        return None;
+    }
+    // A prototype or a call ends in `;`; a declaration in a class is one
+    // of its methods.
+    if !in_type && (end.ends_with(';') || end.ends_with(',')) {
+        return None;
+    }
+    let before = head.trim_end();
+    let before = &before[..before.len() - name.len()];
+    let destructor = before.ends_with('~');
+    let qualified = before.trim_end_matches('~').ends_with("::");
+    let name = if destructor { format!("~{name}") } else { name.to_owned() };
+    let kind = if in_type || qualified {
+        SymbolKind::Method
+    } else {
+        SymbolKind::Function
+    };
+    Some((kind, name))
+}
+
+/// `struct Name`, `class Name`, `enum class Name`, `namespace Name`: the kind
+/// and the name, if `line` starts with one. A macro between the keyword and
+/// the name, `class API Name`, is passed over.
+fn c_type_head(line: &str) -> Option<(SymbolKind, String)> {
+    let (word, after) = ident(line)?;
+    let kind = match word {
+        "struct" | "union" => SymbolKind::Struct,
+        "class" => SymbolKind::Class,
+        "enum" => SymbolKind::Enum,
+        "namespace" => SymbolKind::Module,
+        _ => return None,
+    };
+    let mut after = after;
+    if kind == SymbolKind::Enum
+        && let Some((_, rest)) = ident(after).filter(|(w, _)| matches!(*w, "class" | "struct"))
+    {
+        after = rest;
+    }
+    let (mut name, rest) = ident(after)?;
+    if let Some((second, tail)) = ident(rest)
+        && second != "final"
+    {
+        let tail = tail.trim_start();
+        if tail.is_empty() || tail.starts_with(['{', ':']) {
+            name = second;
+        }
+    }
+    Some((kind, name.to_owned()))
+}
+
+/// The headings of a Markdown document, nested by level: `#` headings and
+/// underlined ones, outside code blocks, HTML comments and front matter.
+fn markdown(text: &str) -> Vec<Symbol> {
+    let mut found = Vec::new();
+    // The levels of the headings that enclose the next one.
+    let mut open: Vec<u8> = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
+    let mut comment = false;
+    let mut previous: Option<&str> = None;
+    let lines: Vec<&str> = text.lines().collect();
+    let mut index = 0;
+    // YAML front matter is no heading, whatever its `---` say.
+    if lines.first().is_some_and(|line| line.trim_end() == "---")
+        && let Some(close) = lines
+            .iter()
+            .skip(1)
+            .position(|line| matches!(line.trim_end(), "---" | "..."))
+    {
+        index = close + 2;
+    }
+    let mut push = |found: &mut Vec<Symbol>, level: u8, title: &str, line: usize| {
+        while open.last().is_some_and(|&above| above >= level) {
+            open.pop();
+        }
+        found.push(Symbol {
+            name: title.to_owned(),
+            kind: SymbolKind::Heading(level),
+            line,
+            depth: open.len(),
+        });
+        open.push(level);
+    };
+    while index < lines.len() {
+        let line = lines[index];
+        index += 1;
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let trimmed = line.trim();
+        if let Some((mark, length)) = fence {
+            let closes = indent < 4
+                && trimmed.chars().all(|c| c == mark)
+                && trimmed.chars().count() >= length;
+            if closes {
+                fence = None;
+            }
+            previous = None;
+            continue;
+        }
+        if comment {
+            comment = !trimmed.contains("-->");
+            previous = None;
+            continue;
+        }
+        if indent < 4 {
+            let mark = trimmed.chars().next();
+            if let Some(mark @ ('`' | '~')) = mark {
+                let length = trimmed.chars().take_while(|&c| c == mark).count();
+                if length >= 3 {
+                    fence = Some((mark, length));
+                    previous = None;
+                    continue;
+                }
+            }
+            if trimmed.starts_with("<!--") && !trimmed.contains("-->") {
+                comment = true;
+                previous = None;
+                continue;
+            }
+            // `# Title`, with an optional closing run of `#`.
+            let level = trimmed.chars().take_while(|&c| c == '#').count();
+            if (1..=6).contains(&level) {
+                let rest = &trimmed[level..];
+                if rest.is_empty() || rest.starts_with([' ', '\t']) {
+                    let title = rest.trim().trim_end_matches('#').trim_end();
+                    if !title.is_empty() {
+                        push(&mut found, level as u8, title, index);
+                    }
+                    previous = None;
+                    continue;
+                }
+            }
+            // A paragraph line underlined with `=` or `-`.
+            if let Some(title) = previous
+                && !trimmed.is_empty()
+            {
+                let underline = |c| trimmed.chars().all(|x| x == c);
+                let level = if underline('=') {
+                    Some(1)
+                } else if underline('-') {
+                    Some(2)
+                } else {
+                    None
+                };
+                if let Some(level) = level {
+                    push(&mut found, level, title, index - 1);
+                    previous = None;
+                    continue;
+                }
+            }
+        }
+        // Only a paragraph line can be underlined into a heading: not a list
+        // item, a quote, a table or code.
+        let paragraph = indent < 4
+            && !trimmed.is_empty()
+            && !trimmed.starts_with(['-', '*', '+', '>', '|'])
+            && !trimmed.starts_with(|c: char| c.is_ascii_digit());
+        previous = paragraph.then_some(trimmed);
+    }
+    found
+}
+
 /// The identifier at or just before the `char` index `at`.
 pub fn word_at(text: &str, at: usize) -> Option<String> {
     let start = text.char_indices().nth(at).map_or(text.len(), |(i, _)| i);
@@ -547,17 +964,292 @@ mod tests {
     }
 
     #[test]
-    fn test_supports_only_the_four_languages() {
+    fn test_which_languages_are_supported() {
         for language in [
             Language::Rust,
             Language::Php,
             Language::Go,
             Language::Python,
+            Language::JavaScript,
+            Language::TypeScript,
+            Language::C,
+            Language::Cpp,
         ] {
             assert!(supports(language), "{language:?}");
+            assert!(navigates(language), "{language:?}");
         }
-        assert!(!supports(Language::JavaScript));
-        assert!(symbols("function f() {}", Language::JavaScript).is_empty());
+        // Markdown has an outline, but its headings are no identifiers.
+        assert!(supports(Language::Markdown));
+        assert!(!navigates(Language::Markdown));
+        for language in [Language::PlainText, Language::Html, Language::Css, Language::Json] {
+            assert!(!supports(language), "{language:?}");
+        }
+        assert!(symbols("body { color: red }", Language::Css).is_empty());
+    }
+
+    #[test]
+    fn test_javascript_symbols() {
+        let text = "\
+// function not_this() {}
+import { x } from './x.js';
+
+export default class Shape extends Base {
+    #count = 0;
+    static origin = null;
+
+    constructor(name) {
+        const local = 1;
+    }
+
+    get area() {
+        return 1;
+    }
+
+    async *walk() {}
+    #secret() {}
+    handler = (event) => {};
+}
+
+export async function load(url) {
+    function inner() {}
+}
+
+const LIMIT = 10;
+let counter = 0;
+export const run = async () => {};
+const double = x => x * 2;
+const items = list.map(a => a);
+/*
+function commented() {}
+*/
+const html = `
+function inTemplate() {}
+`;
+";
+        assert_eq!(
+            outline(text, Language::JavaScript),
+            [
+                row(0, "class", "Shape", 4),
+                row(1, "method", "constructor", 8),
+                row(1, "method", "area", 12),
+                row(1, "method", "walk", 16),
+                row(1, "method", "secret", 17),
+                row(1, "method", "handler", 18),
+                row(0, "fn", "load", 21),
+                row(1, "fn", "inner", 22),
+                row(0, "const", "LIMIT", 25),
+                row(0, "var", "counter", 26),
+                row(0, "fn", "run", 27),
+                row(0, "fn", "double", 28),
+                row(0, "const", "items", 29),
+                row(0, "const", "html", 33),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_typescript_symbols() {
+        let text = "\
+export interface Shape {
+    area(): number;
+    name: string;
+    resize?(factor: number): void;
+}
+
+export type Id = string;
+type Pair<T> = [T, T];
+let type = 1;
+
+export enum Color { Red, Green }
+const enum Flags { A = 1 }
+
+declare namespace Api {
+    function call(): void;
+}
+
+export abstract class Base<T> implements Shape {
+    private readonly id: Id;
+    public abstract area(): number;
+    protected static make<U>(value: U): Base<U> {}
+}
+";
+        assert_eq!(
+            outline(text, Language::TypeScript),
+            [
+                row(0, "interface", "Shape", 1),
+                row(1, "method", "area", 2),
+                row(1, "method", "resize", 4),
+                row(0, "type", "Id", 7),
+                row(0, "type", "Pair", 8),
+                row(0, "var", "type", 9),
+                row(0, "enum", "Color", 11),
+                row(0, "enum", "Flags", 12),
+                row(0, "mod", "Api", 14),
+                row(1, "fn", "call", 15),
+                row(0, "class", "Base", 18),
+                row(1, "method", "area", 20),
+                row(1, "method", "make", 21),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_c_symbols() {
+        let text = "\
+#include <stdio.h>
+#define MAX_LEN 64
+
+/* int not_this(void) { } */
+struct point {
+    int x;
+    void (*draw)(struct point *p);
+};
+
+struct point origin = { 0, 0 };
+struct node;
+typedef unsigned int uint;
+typedef void (*handler)(int code);
+
+typedef struct {
+    int width;
+} size_t2;
+
+enum color { RED, GREEN };
+
+static int helper(int a);
+
+static inline int add(int a, int b)
+{
+    int sum = add_more(a, b);
+    if (sum > 0) {
+        return sum;
+    }
+    return 0;
+}
+
+struct node *next(struct node *n) {
+    return n;
+}
+
+int
+main(void)
+{
+    printf(\"hi\");
+}
+";
+        assert_eq!(
+            outline(text, Language::C),
+            [
+                row(0, "macro", "MAX_LEN", 2),
+                row(0, "struct", "point", 5),
+                row(0, "type", "uint", 12),
+                row(0, "type", "handler", 13),
+                row(0, "type", "size_t2", 17),
+                row(0, "enum", "color", 19),
+                row(0, "fn", "add", 23),
+                row(0, "fn", "next", 32),
+                row(0, "fn", "main", 37),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cpp_symbols() {
+        let text = "\
+namespace geometry {
+
+class EXPORT Shape : public Base {
+public:
+    Shape(int sides);
+    virtual ~Shape();
+    double area() const;
+    std::function<void()> callback;
+    int count = compute(3);
+};
+
+enum class Kind { Circle, Square };
+using Id = std::string;
+using namespace std;
+
+template <typename T>
+T largest(T a, T b) {
+    return a > b ? a : b;
+}
+
+Shape::Shape(int sides) {}
+Shape::~Shape() {}
+double Shape::area() const {
+    return 0.0;
+}
+
+}
+";
+        assert_eq!(
+            outline(text, Language::Cpp),
+            [
+                row(0, "mod", "geometry", 1),
+                row(0, "class", "Shape", 3),
+                row(1, "method", "Shape", 5),
+                row(1, "method", "~Shape", 6),
+                row(1, "method", "area", 7),
+                row(0, "enum", "Kind", 12),
+                row(0, "type", "Id", 13),
+                row(0, "fn", "largest", 17),
+                row(0, "method", "Shape", 21),
+                row(0, "method", "~Shape", 22),
+                row(0, "method", "area", 23),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_markdown_headings() {
+        let text = "\
+---
+title: Front matter
+---
+
+# Guide
+
+Intro text.
+
+## Install ##
+
+```sh
+# not a heading
+```
+
+### Linux
+Setup
+=====
+Details
+-------
+
+- item
+---
+
+<!--
+# commented
+-->
+    # indented code
+#not-a-heading
+####### seven
+## Usage
+";
+        assert_eq!(
+            outline(text, Language::Markdown),
+            [
+                row(0, "h1", "Guide", 5),
+                row(1, "h2", "Install", 9),
+                row(2, "h3", "Linux", 15),
+                row(0, "h1", "Setup", 16),
+                row(1, "h2", "Details", 18),
+                row(1, "h2", "Usage", 30),
+            ]
+        );
+        // Headings are an outline, never a definition.
+        let found = symbols("# Guide\n", Language::Markdown);
+        assert!(!found[0].defines("Guide"));
     }
 
     #[test]

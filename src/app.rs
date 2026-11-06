@@ -1318,7 +1318,7 @@ impl TextEditorApp {
     /// The identifier at the `char` index `at`, else at the caret, when code
     /// navigation knows the active document's language.
     fn navigation_word(&self, ctx: &egui::Context, at: Option<usize>) -> Option<(String, usize)> {
-        if !symbols::supports(self.effective_language()) {
+        if !symbols::navigates(self.effective_language()) {
             return None;
         }
         let at = at.or_else(|| self.editor_selection(ctx).map(|(a, _)| a))?;
@@ -5816,6 +5816,37 @@ mod tests {
         eframe::App::save(&mut app, &mut storage);
         assert!(saved_auto_save(Some(&storage)));
         assert!(!saved_auto_save(None));
+    }
+
+    /// Go to Symbol lists a Markdown document's headings, and a JavaScript
+    /// file's functions; Go to Definition stays a code-only command.
+    #[test]
+    fn test_go_to_symbol_covers_markdown_and_javascript() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.active_tab_mut().text_content = "# Guide\n\n## Install\n".to_owned();
+        app.active_tab_mut().active_language = Language::Markdown;
+        app.open_symbol_picker();
+        assert!(app.symbol_picker.visible, "no outline for Markdown");
+        let names: Vec<&str> =
+            app.symbol_picker.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Guide", "Install"]);
+
+        // A heading is no identifier: Go to Definition does nothing.
+        app.symbol_picker.visible = false;
+        app.goto_definition(&ctx, Some(3));
+        assert!(!app.search.visible, "a heading was looked up as a definition");
+
+        app.active_tab_mut().text_content = "function load() {}\nload();\n".to_owned();
+        app.active_tab_mut().active_language = Language::JavaScript;
+        app.open_symbol_picker();
+        let names: Vec<&str> =
+            app.symbol_picker.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["load"]);
+        // Go to Definition on the call jumps to the function's line.
+        app.symbol_picker.visible = false;
+        app.goto_definition(&ctx, Some(20));
+        assert_eq!(app.editor_request.goto, Some(0), "did not jump to line 1");
     }
 
     /// Dropping a file on the window opens it in a tab, from the start page
