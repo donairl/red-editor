@@ -2149,6 +2149,10 @@ impl TextEditorApp {
 
     fn save_as_with(&mut self, pick_path: impl FnOnce(&DocumentTab) -> Option<PathBuf>) -> bool {
         if let Some(path) = pick_path(self.active_tab()) {
+            // The formatter goes by the language the tab will have once it is
+            // saved here; put the old one back if the write fails.
+            let previous_language = self.active_tab().active_language;
+            self.active_tab_mut().active_language = Language::from_path(&path);
             let warning = self.prepare_for_save(self.active_tab_index);
             let text_to_save = self.active_tab().text_content.clone();
             match fs::write(&path, &text_to_save) {
@@ -2163,6 +2167,7 @@ impl TextEditorApp {
                     true
                 }
                 Err(err) => {
+                    self.active_tab_mut().active_language = previous_language;
                     self.status_message = Some((self.i18n.tf("msg.save_failed", &[("error", &err.to_string())]), true));
                     false
                 }
@@ -6881,6 +6886,27 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "saved text");
         assert!(!app.tabs[0].is_dirty());
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_save_as_formats_by_the_new_path_language() {
+        let dir = history_folder("save_as_format");
+        let path = dir.join("x.json");
+        let mut app = TextEditorApp::default();
+        app.editor_settings.format_on_save = true;
+        app.active_tab_mut().text_content = r#"{"a":1}"#.into();
+        assert!(app.save_as_with(|_| Some(path.clone())));
+        let expected = prettify::prettify(Language::Json, r#"{"a":1}"#).unwrap();
+        assert_ne!(expected, r#"{"a":1}"#);
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+        assert_eq!(app.active_tab().active_language, Language::Json);
+
+        // A failed write leaves the tab's language as it was.
+        let mut app = TextEditorApp::default();
+        let bad = dir.join("no_such_dir").join("y.json");
+        assert!(!app.save_as_with(|_| Some(bad.clone())));
+        assert_eq!(app.active_tab().active_language, Language::PlainText);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn rust_app(text: &str) -> TextEditorApp {

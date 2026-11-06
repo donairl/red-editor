@@ -245,13 +245,15 @@ pub fn indent(text: &str, selection: Range, unit: &str) -> Option<Edit> {
 }
 
 /// Shift+Tab: every line the caret or selection touches loses one level from
-/// its front — one `\t`, or up to `width` spaces. `None` when no line has
+/// its front — one `\t`, or up to one `unit` of spaces (four for a tab unit,
+/// as wide as egui draws a tab). `None` when no line has
 /// any indentation to lose.
-pub fn outdent(text: &str, selection: Range, width: usize) -> Option<Edit> {
+pub fn outdent(text: &str, selection: Range, unit: &str) -> Option<Edit> {
     let chars: Vec<char> = text.chars().collect();
     let (a, b) = sorted(&chars, selection);
     let starts = line_starts(&chars);
     let (first, last) = touched_lines(&starts, (a, b));
+    let width = if unit == "\t" { crate::indent_guides::TAB_COLUMNS } else { unit.chars().count() };
     // (line start, chars removed) for each line that loses indentation.
     let cuts: Vec<(usize, usize)> = (first..=last)
         .filter_map(|line| {
@@ -337,7 +339,7 @@ pub fn apply_events(
             {
                 special = true;
                 let edit = if modifiers.shift {
-                    outdent(&state.text, state.selection, usize::from(settings.tab_size))
+                    outdent(&state.text, state.selection, &unit)
                 } else {
                     indent(&state.text, state.selection, &unit)
                 };
@@ -643,24 +645,52 @@ mod tests {
 
     #[test]
     fn test_outdent_removes_one_level() {
-        assert_eq!(outdent("\tab", (2, 2), 4), Some(ed("ab", 1, 1)));
-        assert_eq!(outdent("      ab", (7, 7), 4), Some(ed("  ab", 3, 3)));
-        assert_eq!(outdent("  ab", (3, 3), 4), Some(ed("ab", 1, 1)), "fewer spaces than a level");
+        let four = "    ";
+        assert_eq!(outdent("\tab", (2, 2), four), Some(ed("ab", 1, 1)));
+        assert_eq!(outdent("      ab", (7, 7), four), Some(ed("  ab", 3, 3)));
+        assert_eq!(outdent("  ab", (3, 3), four), Some(ed("ab", 1, 1)), "fewer spaces than a level");
+    }
+
+    #[test]
+    fn test_outdent_tab_unit_takes_four_spaces_or_a_tab() {
+        assert_eq!(outdent("      ab", (7, 7), "\t"), Some(ed("  ab", 3, 3)));
+        assert_eq!(outdent("\t  ab", (3, 3), "  "), Some(ed("  ab", 2, 2)), "a tab line loses one tab");
     }
 
     #[test]
     fn test_outdent_multi_line_and_lines_without_indent() {
-        assert_eq!(outdent("  a\nb\n  c", (0, 9), 2), Some(ed("a\nb\nc", 0, 5)));
+        assert_eq!(outdent("  a\nb\n  c", (0, 9), "  "), Some(ed("a\nb\nc", 0, 5)));
     }
 
     #[test]
     fn test_outdent_caret_inside_the_indent_moves_to_the_line_start() {
-        assert_eq!(outdent("    ab", (2, 2), 4), Some(ed("ab", 0, 0)));
+        assert_eq!(outdent("    ab", (2, 2), "    "), Some(ed("ab", 0, 0)));
     }
 
     #[test]
     fn test_outdent_without_indentation_does_nothing() {
-        assert_eq!(outdent("ab\ncd", (0, 4), 4), None);
+        assert_eq!(outdent("ab\ncd", (0, 4), "    "), None);
+    }
+
+    #[test]
+    fn test_outdent_selection_ending_at_column_zero_leaves_that_line() {
+        // selects "  a\n": the caret sits at the start of "  b"
+        assert_eq!(outdent("  a\n  b", (0, 4), "  "), Some(ed("a\n  b", 0, 2)));
+    }
+
+    #[test]
+    fn test_outdent_multibyte_line() {
+        assert_eq!(outdent("    é", (5, 5), "    "), Some(ed("é", 1, 1)));
+        assert_eq!(outdent("    é", (3, 3), "    "), Some(ed("é", 0, 0)));
+    }
+
+    #[test]
+    fn test_apply_events_shift_tab_follows_the_detected_unit() {
+        // two-space document, tab_size 4: one level is two spaces
+        let s = EditorSettings { tab_size: 4, ..EditorSettings::default() };
+        let text = "  a\n    b";
+        let (edit, _) = apply_events(text, (text.chars().count(), text.chars().count()), &[tab(true)], Language::PlainText, &s).unwrap();
+        assert_eq!(edit, ed("  a\n  b", 7, 7));
     }
 
     fn tab(shift: bool) -> egui::Event {
