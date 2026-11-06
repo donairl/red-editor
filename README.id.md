@@ -12,10 +12,13 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Syntax highlighting** untuk Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (juga `.scss` dan `.less`), JSON, Markdown, Go, Python, SQL, serta template Blade (`.blade.php`), Twig (`.twig`), dan Smarty (`.tpl`), dikenali dari ekstensi file. Bahasa bisa diganti manual lewat menu **Tampilan → Bahasa**. File di atas 1 MB ditampilkan tanpa highlighting, dan file di atas 10 MB tidak dibuka.
 - **SQL di dalam string**: string di Rust, C, C++, PHP, JavaScript, TypeScript, Go, atau Python yang berisi perintah SQL (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) diwarnai kata kunci SQL-nya, termasuk string multi-baris. Kata kunci huruf besar sudah cukup; huruf kecil butuh klausa kedua (`select … from`), jadi teks UI seperti "Select a file" tetap berwarna string biasa.
 - **Nomor baris** yang bisa ditampilkan atau disembunyikan (**Tampilan → Nomor Baris**). Nomor baris tempat kursor berada tampil lebih terang.
+- **Garis indentasi** (**Tampilan → Garis Indentasi**, menyala secara bawaan) menggambar garis tipis di setiap tingkat indentasi, dari tata letak yang sama dengan teksnya, jadi baris yang dibungkus atau dilipat dilewati.
 - **Bookmark baris**: klik kanan sebuah baris di editor lalu pilih **Tambah Bookmark** (atau **Hapus Bookmark**). Baris yang di-bookmark diberi penanda di gutter dan ikut bergeser saat teks diedit. Badge **Di-bookmark: N** di status bar membuka daftar baris yang di-bookmark; klik salah satunya untuk melompat ke sana. Bookmark berlaku selama aplikasi terbuka.
 - **Buka Terbaru** (**File → Buka Terbaru**): 20 file dan folder terakhir yang dibuka, yang terbaru di atas, tetap tersimpan setelah aplikasi ditutup. Klik salah satunya untuk membukanya lagi. Kalau sudah tidak ada, status bar memberi tahu dan entri itu dihapus. **Hapus Riwayat** mengosongkan daftar.
 - **Pulihkan sesi**: folder dan file tersimpan yang terbuka saat keluar dibuka lagi saat editor dijalankan berikutnya, dengan tab aktif yang sama, dan setiap tab di posisi kursor dan gulir tempat ia ditinggalkan. Tab tanpa nama tidak disimpan; file yang sudah tidak ada dilewati.
 - **Bungkus baris** (word wrap) yang bisa dinyalakan atau dimatikan (**Tampilan → Bungkus Baris**). Saat mati, baris panjang bisa digeser ke samping.
+- **Tampilkan spasi** (**Tampilan → Tampilkan Spasi**): titik samar untuk setiap spasi dan panah untuk setiap tab, untuk melihat spasi di ujung baris dan indentasi campuran.
+- **Simpan otomatis** (**File → Simpan Otomatis**, mati secara bawaan): setiap file yang punya path menyimpan dirinya sendiri setelah jeda mengetik satu detik, dan saat jendela kehilangan fokus. File yang diubah program lain diserahkan ke dialog konflik.
 - **Perbesar teks** (**Tampilan → Perbesar**, `Ctrl++` / `Ctrl+-` / `Ctrl+0`, atau `Ctrl` + scroll): satu ukuran huruf untuk editor, nomor baris, tampilan diff, dan terminal. Ukurannya diingat saat aplikasi ditutup, dan bar status menampilkannya sebagai persen kalau bukan ukuran bawaan.
 - **Seret dan lepas**: lepaskan file di jendela untuk membukanya di tab; folder yang dilepas menjadi workspace. Selagi file melayang di atas jendela, ada petunjuk bahwa melepasnya akan membukanya. Di Linux ini butuh X11: winit, pustaka jendelanya, belum punya seret dan lepas di Wayland.
 - **Explorer dan Activity Bar** seperti VS Code: buka folder, jelajahi isinya sebagai tree, klik file untuk membukanya di tab. Ada tombol **Refresh** dan **Collapse All** di header folder.
@@ -116,9 +119,9 @@ Editor dibuka dengan **halaman awal** berisi **File Baru**, **Buka File…**, **
 
 | Menu | Isi |
 |---|---|
-| **File** | Tab Baru, Tutup Tab, Jendela Baru, Buka File…, Buka Folder…, Buka Cepat…, Buka Terbaru, Simpan, Simpan Sebagai…, Bahasa, Keluar |
+| **File** | Tab Baru, Tutup Tab, Jendela Baru, Buka File…, Buka Folder…, Buka Cepat…, Buka Terbaru, Simpan, Simpan Sebagai…, Simpan Otomatis, Bahasa, Keluar |
 | **Edit** | Urungkan, Ulangi, Potong, Salin, Tempel, Cari, Ganti, Cari di File, Ke Baris… |
-| **Tampilan** | Bungkus Baris, Nomor Baris, Zen Mode, Pratinjau Markdown, Palet Perintah…, Perbesar, Tema, Bahasa, Bahasa Antarmuka |
+| **Tampilan** | Bungkus Baris, Nomor Baris, Garis Indentasi, Tampilkan Spasi, Zen Mode, Bagi Editor, Pratinjau Markdown, Palet Perintah…, Perbesar, Tema, Bahasa, Bahasa Antarmuka |
 | **Help** | About |
 
 ### Shortcut keyboard
@@ -153,6 +156,7 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | `Ctrl+Shift+P` | Palet Perintah |
 | `Ctrl+P` | Buka Cepat (file berdasarkan nama) |
 | `Ctrl+G` | Ke baris |
+| `Ctrl+\` | Bagi editor menjadi dua tampilan |
 | `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Perbesar / perkecil / kembalikan ukuran teks |
 | `Ctrl` + scroll | Perbesar / perkecil teks |
 | `Esc` | Tutup bar cari, bar ke baris, atau panel Cari di File |

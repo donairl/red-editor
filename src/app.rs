@@ -18,7 +18,7 @@ use crate::diff_view::{self, Against, DiffViewAction, DiffViewUi};
 use crate::drop;
 use crate::git_graph::{self, GitGraphUi, GraphAction};
 use crate::git_worker::{Base, DiffSource, GitState, Op};
-use crate::editor_view::{render_editor_with, text_content_exceeds_highlight_limit};
+use crate::editor_view::{self, FoldOutput, render_editor_with, text_content_exceeds_highlight_limit};
 #[cfg(test)]
 use crate::editor_view::render_editor;
 use crate::highlighter::{DocumentHighlightCache, Language, SyntaxHighlighter};
@@ -27,7 +27,7 @@ use crate::line_ops;
 use crate::i18n::{self, I18n};
 use crate::layout_cache::LayoutCache;
 use crate::line_diff::{self, LineMarks};
-use crate::markdown_preview::{MarkdownPreview, ScrollSync};
+use crate::markdown_preview::{MarkdownPreview, ScrollPos, ScrollSync};
 use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
 use crate::prettify;
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
@@ -58,8 +58,17 @@ const THEME_KEY: &str = "theme";
 /// Storage key under which eframe remembers the editor's font size.
 const FONT_SIZE_KEY: &str = "font_size";
 
+/// Storage key under which eframe remembers whether auto-save is on.
+const AUTO_SAVE_KEY: &str = "auto_save";
+
 /// Seconds between checks for open files changed by other programs.
 const DISK_CHECK_SECS: f64 = 2.0;
+
+/// How long the typing must pause before auto-save writes the open files.
+const AUTOSAVE_SECS: f64 = 1.0;
+
+/// The width of the seam between the two editor views, in points.
+const SPLIT_GAP: f32 = 1.0;
 
 /// Least time between two updates of the gutter's git change markers.
 const MARKS_INTERVAL: Duration = Duration::from_millis(250);
@@ -304,6 +313,16 @@ impl DocumentTab {
     }
 }
 
+/// Which editor pane holds the keyboard, when the document is shown twice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Pane {
+    /// The editor above the split; the only one while the split is off.
+    #[default]
+    Main,
+    /// The second view of the same document, on the right.
+    Split,
+}
+
 /// What the sidebar shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SidebarView {
@@ -353,12 +372,36 @@ pub struct TextEditorApp {
     /// Kept for the active tab only: a galley takes tens of bytes per
     /// character.
     pub(crate) editor_layout: LayoutCache,
+    /// The split view's layout; separate, because the two panes have
+    /// different widths to wrap at.
+    pub(crate) editor_layout_split: LayoutCache,
+    /// Show the document in a second view beside the editor. `View >
+    /// Split Editor`.
+    pub split: bool,
+    /// The pane the keyboard was last in.
+    pub focused_pane: Pane,
     /// Wrap long lines to the window width. Off by default: lines run on and
     /// the editor scrolls sideways instead.
     pub word_wrap: bool,
     /// Show the line-number gutter left of the text. On by default, as in
     /// VS Code.
     pub show_line_numbers: bool,
+    /// Draw a thin line at each indentation level. On by default, as in VS
+    /// Code.
+    pub show_indent_guides: bool,
+    /// Draw a dot for every space and an arrow for every tab. Off by
+    /// default: it is an aid, not something to read code through.
+    pub show_whitespace: bool,
+    /// Save every dirty file with a path of its own once the typing pauses,
+    /// and when the window loses focus. Off by default.
+    pub auto_save: bool,
+    /// egui's clock when auto-save fires; `None` while nothing waits.
+    pub(crate) autosave_due: Option<f64>,
+    /// Whether any tab was dirty last frame, to notice an edit that did not
+    /// come through the editor (Find and Replace, Prettify).
+    pub(crate) autosave_dirty: bool,
+    /// Whether the window had the keyboard last frame, to save when it goes.
+    pub(crate) was_focused: bool,
     /// Show who last changed each line, in a column left of the gutter.
     pub show_blame: bool,
     /// Distraction-free mode: fullscreen, with only the editor shown.
@@ -442,7 +485,7 @@ enum HunkAction {
 
 /// What the app wants done to the editor widget, which only `render_editor`
 /// can reach.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct EditorRequest {
     /// Give the editor keyboard focus.
     pub focus: bool,
@@ -491,8 +534,17 @@ impl Default for TextEditorApp {
             last_disk_check: 0.0,
             highlighter: SyntaxHighlighter::new(),
             editor_layout: LayoutCache::default(),
+            editor_layout_split: LayoutCache::default(),
+            split: false,
+            focused_pane: Pane::Main,
             word_wrap: false,
             show_line_numbers: true,
+            show_indent_guides: true,
+            show_whitespace: false,
+            auto_save: false,
+            autosave_due: None,
+            autosave_dirty: false,
+            was_focused: true,
             show_blame: false,
             zen_mode: false,
             show_markdown_preview: false,
@@ -578,6 +630,7 @@ impl TextEditorApp {
             history: saved_history(cc.storage),
             theme: saved_theme(cc.storage),
             font_size: saved_font_size(cc.storage),
+            auto_save: saved_auto_save(cc.storage),
             ..Default::default()
         };
         saved_session(cc.storage).restore(&mut app);
@@ -894,8 +947,19 @@ impl TextEditorApp {
         self.editor_id().with("saved_selection")
     }
 
+    /// The id of the editor the app acts on: the pane with the keyboard,
+    /// the only one while the split is off.
     pub(crate) fn editor_id(&self) -> egui::Id {
-        egui::Id::unique(("editor", self.active_tab_index))
+        let pane = if self.split { self.focused_pane } else { Pane::Main };
+        self.editor_id_of(pane)
+    }
+
+    /// The widget id of one editor pane, for the active tab.
+    pub(crate) fn editor_id_of(&self, pane: Pane) -> egui::Id {
+        match pane {
+            Pane::Main => egui::Id::unique(("editor", self.active_tab_index)),
+            Pane::Split => egui::Id::unique(("editor-split", self.active_tab_index)),
+        }
     }
 
     /// The non-empty selection the editor had on its last focused frame.
@@ -1037,6 +1101,15 @@ impl TextEditorApp {
     }
 
     /// Shows or hides the Markdown preview. Does nothing on other files.
+    /// View > Split Editor: shows the document in a second view beside the
+    /// editor, or closes that view. The two views share the text and scroll
+    /// on their own.
+    pub fn toggle_split(&mut self) {
+        self.split = !self.split;
+        self.focused_pane = Pane::Main;
+        self.editor_request.focus = true;
+    }
+
     pub fn toggle_markdown_preview(&mut self) {
         if self.preview_available() {
             self.show_markdown_preview = !self.show_markdown_preview;
@@ -1439,6 +1512,8 @@ impl TextEditorApp {
             ShortcutAction::ZoomIn => self.zoom(1),
             ShortcutAction::ZoomOut => self.zoom(-1),
             ShortcutAction::ZoomReset => self.reset_zoom(),
+            ShortcutAction::AutoSave => self.toggle_auto_save(),
+            ShortcutAction::SplitEditor => self.toggle_split(),
             ShortcutAction::SelectTheme(id) => self.theme = id,
             ShortcutAction::GotoDefinition => self.goto_definition(ctx, None),
             ShortcutAction::FindReferences => self.find_references(ctx, None),
@@ -2040,6 +2115,88 @@ impl TextEditorApp {
         }
     }
 
+    /// File > Auto Save: turns saving after the typing pauses on or off,
+    /// and forgets a wait that was already running.
+    pub fn toggle_auto_save(&mut self) {
+        self.auto_save = !self.auto_save;
+        self.autosave_due = None;
+        // Turning it on with edits already made starts their pause on the
+        // next frame, instead of waiting for the next edit.
+        self.autosave_dirty = false;
+    }
+
+    /// Notes that the document changed, so auto-save waits a whole pause
+    /// again.
+    fn note_edit(&mut self, ctx: &egui::Context) {
+        if !self.auto_save {
+            return;
+        }
+        let now = ctx.input(|input| input.time);
+        self.autosave_due = Some(now + AUTOSAVE_SECS);
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(AUTOSAVE_SECS));
+    }
+
+    /// Auto Save: once the typing pauses, every dirty file with a path of
+    /// its own is written; so is every one of them when the window loses
+    /// focus.
+    ///
+    /// A file another program changed is left alone: overwriting it is the
+    /// conflict dialog's job, not auto-save's.
+    pub fn autosave(&mut self, ctx: &egui::Context) {
+        if !self.auto_save {
+            self.autosave_due = None;
+            self.autosave_dirty = self.tabs.iter().any(DocumentTab::is_dirty);
+            self.was_focused = ctx.input(|input| input.focused);
+            return;
+        }
+        let (now, focused) = ctx.input(|input| (input.time, input.focused));
+        let dirty = self.tabs.iter().any(DocumentTab::is_dirty);
+        // An edit that did not come through the editor (Find and Replace,
+        // Prettify) starts the pause too.
+        if dirty && !self.autosave_dirty {
+            self.note_edit(ctx);
+        }
+        self.autosave_dirty = dirty;
+        if self.was_focused && !focused {
+            self.autosave_now();
+        }
+        self.was_focused = focused;
+        let Some(due) = self.autosave_due else { return };
+        if now < due {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(due - now));
+            return;
+        }
+        self.autosave_due = None;
+        self.autosave_now();
+    }
+
+    /// Writes every tab auto-save handles. Returns whether any was written.
+    fn autosave_now(&mut self) -> bool {
+        let mut saved = false;
+        for index in 0..self.tabs.len() {
+            let tab = &self.tabs[index];
+            let quiet = tab.current_path.is_some()
+                && tab.is_dirty()
+                && !tab.disk_conflict
+                && !tab.changed_on_disk();
+            if !quiet {
+                continue;
+            }
+            match self.tabs[index].save() {
+                Ok(()) => saved = true,
+                Err(err) => {
+                    let message =
+                        self.i18n.tf("msg.save_failed", &[("error", &err.to_string())]);
+                    self.status_message = Some((message, true));
+                }
+            }
+        }
+        if saved {
+            self.git.request_refresh();
+        }
+        saved
+    }
+
     pub fn trigger_open_file(&mut self) {
         self.pick_and_open_file();
     }
@@ -2566,10 +2723,35 @@ fn saved_font_size(storage: Option<&dyn eframe::Storage>) -> f32 {
     )
 }
 
+/// Whether auto-save was on when eframe last saved; off on the first run.
+fn saved_auto_save(storage: Option<&dyn eframe::Storage>) -> bool {
+    storage
+        .and_then(|storage| storage.get_string(AUTO_SAVE_KEY))
+        .is_some_and(|text| text == "true")
+}
+
 /// Where egui's memory keeps the font size the app last wrote, so it is
 /// only written when it changed.
 fn font_size_id() -> egui::Id {
     egui::Id::unique("rred_font_size")
+}
+
+/// The request for the editor view without the keyboard: it draws the same
+/// folds and find highlight, but carries none of the user's actions.
+fn quiet_request(request: &EditorRequest) -> EditorRequest {
+    EditorRequest {
+        focus: false,
+        key: None,
+        goto: None,
+        select: None,
+        inactive_selection: None,
+        reveal: None,
+        highlight: request.highlight,
+        auto_edit: None,
+        match_brackets: request.match_brackets,
+        hidden: request.hidden.clone(),
+        foldable: request.foldable.clone(),
+    }
 }
 
 /// Asks the user where to save `tab`, starting in its current folder.
@@ -2599,6 +2781,7 @@ impl eframe::App for TextEditorApp {
         storage.set_string(HISTORY_KEY, self.history.to_storage());
         storage.set_string(THEME_KEY, self.theme.slug().to_owned());
         storage.set_string(FONT_SIZE_KEY, zoom::to_storage(self.font_size));
+        storage.set_string(AUTO_SAVE_KEY, self.auto_save.to_string());
         storage.set_string(SESSION_KEY, Session::from_app(self).to_storage());
     }
 
@@ -2610,6 +2793,15 @@ impl eframe::App for TextEditorApp {
         // so the new size is used in this very frame.
         self.zoom_with_wheel(&ctx);
         self.apply_font_size(ui);
+        // The decorations the editor paints over the text, from View.
+        editor_view::set_decorations(
+            &ctx,
+            editor_view::Decorations {
+                indent_guides: self.show_indent_guides,
+                whitespace: self.show_whitespace,
+            },
+        );
+        self.autosave(&ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         self.poll_disk(&ctx);
         // Files dropped on the window open in tabs, a folder as the
@@ -3030,7 +3222,11 @@ impl eframe::App for TextEditorApp {
             request.inactive_selection = (self.menu_focus == Some(self.editor_id()))
                 .then(|| self.saved_selection(&ctx))
                 .flatten();
-            let editor_id = self.editor_id();
+            let (main_id, split_id) = (
+                self.editor_id_of(Pane::Main),
+                self.editor_id_of(Pane::Split),
+            );
+            let keyboard_pane = if self.split { self.focused_pane } else { Pane::Main };
 
             // `TextEdit::font` resolves this `TextStyle` the same way, so the
             // caret and selection line up with the highlighted glyphs.
@@ -3097,8 +3293,22 @@ impl eframe::App for TextEditorApp {
             } else {
                 None
             };
-            let (editor_pos, editor, folds) = ui.push_id(self.active_tab_index, |ui| {
+            // The document, once; or twice side by side when the split is
+            // on. Both views read the same tab, so an edit in either shows
+            // in both; the typing goes to the view with the keyboard.
+            let mut draw = |ui: &mut egui::Ui,
+                            pane: Pane,
+                            id: egui::Id,
+                            request: EditorRequest,
+                            scroll_to: Option<f32>| {
                 let tab = &mut self.tabs[active_idx];
+                let layout = match pane {
+                    Pane::Main => &mut self.editor_layout,
+                    Pane::Split => &mut self.editor_layout_split,
+                };
+                // Blame is one column at the left of the editor; the second
+                // view leaves it out.
+                let blame = if pane == Pane::Main { blame_column } else { None };
                 if too_large {
                     render_editor_with(
                         ui,
@@ -3107,18 +3317,18 @@ impl eframe::App for TextEditorApp {
                         word_wrap,
                         line_numbers,
                         hint,
-                        Some(editor_id),
+                        Some(id),
                         request,
                         scroll_to,
                         &mut tab.bookmarks,
                         &tab.line_marks,
-                        blame_column,
-                        &mut self.editor_layout,
+                        blame,
+                        layout,
                     )
                 } else {
                     let mut layouter = self
                         .highlighter
-                        .layouter(language, font_id)
+                        .layouter(language, font_id.clone())
                         .with_document_cache(&mut tab.highlight_cache);
                     render_editor_with(
                         ui,
@@ -3127,47 +3337,136 @@ impl eframe::App for TextEditorApp {
                         word_wrap,
                         line_numbers,
                         hint,
-                        Some(editor_id),
+                        Some(id),
                         request,
                         scroll_to,
                         &mut tab.bookmarks,
                         &tab.line_marks,
-                        blame_column,
-                        &mut self.editor_layout,
+                        blame,
+                        layout,
                     )
                 }
-            })
-            .inner;
-            let tab = &mut self.tabs[active_idx];
+            };
+            let mut drawn: Vec<(Pane, (ScrollPos, egui::Response, FoldOutput))> =
+                Vec::with_capacity(2);
+            if self.split {
+                let full = ui.available_rect_before_wrap();
+                let half = ((full.width() - SPLIT_GAP) * 0.5).max(0.0);
+                let left = egui::Rect::from_min_size(full.min, egui::vec2(half, full.height()));
+                let right = egui::Rect::from_min_size(
+                    egui::pos2(full.min.x + half + SPLIT_GAP, full.min.y),
+                    egui::vec2((full.width() - half - SPLIT_GAP).max(0.0), full.height()),
+                );
+                // The seam between the two views.
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(left.right(), full.top()),
+                        egui::vec2(SPLIT_GAP, full.height()),
+                    ),
+                    0.0,
+                    theme::active(&ctx).tab.border,
+                );
+                for (pane, rect, id) in [
+                    (Pane::Main, left, main_id),
+                    (Pane::Split, right, split_id),
+                ] {
+                    let (pane_request, pane_scroll) = if pane == keyboard_pane {
+                        (request.clone(), scroll_to)
+                    } else {
+                        (quiet_request(&request), None)
+                    };
+                    let painted = ui
+                        .scope_builder(
+                            egui::UiBuilder::new()
+                                .id_salt((pane, active_idx))
+                                .max_rect(rect),
+                            |ui| draw(ui, pane, id, pane_request, pane_scroll),
+                        )
+                        .inner;
+                    drawn.push((pane, painted));
+                }
+            } else {
+                let full = ui.available_rect_before_wrap();
+                let painted = ui
+                    .scope_builder(
+                        egui::UiBuilder::new()
+                            .id_salt((Pane::Main, active_idx))
+                            .max_rect(full),
+                        |ui| draw(ui, Pane::Main, main_id, request, scroll_to),
+                    )
+                    .inner;
+                drawn.push((Pane::Main, painted));
+            }
+            // Which view holds the keyboard: the next frame's requests, the
+            // status bar's caret and the menus act on it. When neither does
+            // (a menu or a dialog has it), the view the app was acting on
+            // keeps it, so the focus comes back to the right one.
+            if self.split {
+                let (main, side) = ctx.memory(|memory| {
+                    (memory.has_focus(main_id), memory.has_focus(split_id))
+                });
+                if side {
+                    self.focused_pane = Pane::Split;
+                } else if main {
+                    self.focused_pane = Pane::Main;
+                }
+            }
+            let focused = if self.split { self.focused_pane } else { Pane::Main };
             // Where the caret and the view are, for the session: egui keeps
             // them in its memory, which does not outlive the process.
-            if let Some(caret) = egui::TextEdit::load_state(&ctx, editor_id)
+            let focused_id = if focused == Pane::Split { split_id } else { main_id };
+            let tab = &mut self.tabs[active_idx];
+            if let Some(caret) = egui::TextEdit::load_state(&ctx, focused_id)
                 .and_then(|state| state.cursor.char_range())
                 .map(|range| range.primary.index.0)
             {
                 tab.caret = caret;
             }
-            tab.scroll = editor_pos.offset;
-            if let Some(line) = folds.reveal {
-                tab.folds.reveal_line(&tab.text_content, line);
+            if let Some((pos, _, _)) = drawn.iter().find(|(pane, _)| *pane == focused).map(|(_, drawn)| drawn) {
+                tab.scroll = pos.offset;
             }
-            if let Some(header) = folds.toggle {
-                tab.folds.toggle(header);
-                self.keep_caret_visible(&ctx);
-            }
-            if let Some(line) = folds.clicked_change {
-                let pos = ctx.input(|i| i.pointer.interact_pos()).unwrap_or(editor.rect.left_top());
-                let popup = HunkPopup { tab: active_idx, line, pos: pos + egui::vec2(8.0, 4.0) };
-                // A second click on the same marker closes it.
-                self.hunk_popup = (self.hunk_popup.as_ref().map(|p| (p.tab, p.line)) != Some((active_idx, line)))
+            for (pane, (_, editor, folds)) in &drawn {
+                // A caret a fold just hid moves out of it in the view the
+                // typing goes to; the other view keeps the document folded.
+                if let Some(line) = folds.reveal.filter(|_| *pane == focused) {
+                    let tab = &mut self.tabs[active_idx];
+                    tab.folds.reveal_line(&tab.text_content, line);
+                }
+                if let Some(header) = folds.toggle {
+                    self.tabs[active_idx].folds.toggle(header);
+                    self.keep_caret_visible(&ctx);
+                }
+                if let Some(line) = folds.clicked_change {
+                    let pos = ctx
+                        .input(|input| input.pointer.interact_pos())
+                        .unwrap_or(editor.rect.left_top());
+                    let popup = HunkPopup {
+                        tab: active_idx,
+                        line,
+                        pos: pos + egui::vec2(8.0, 4.0),
+                    };
+                    // A second click on the same marker closes it.
+                    self.hunk_popup = (self.hunk_popup.as_ref().map(|p| (p.tab, p.line))
+                        != Some((active_idx, line)))
                     .then_some(popup);
-            }
-            self.show_editor_context_menu(&ctx, &editor);
-            if editor.clicked() && ctx.input(|i| i.modifiers.command) {
-                self.goto_definition(&ctx, None);
+                }
+                self.show_editor_context_menu(&ctx, editor);
+                if editor.changed() {
+                    // The typing pauses from now.
+                    self.note_edit(&ctx);
+                }
+                if editor.clicked() && ctx.input(|input| input.modifiers.command) {
+                    self.goto_definition(&ctx, None);
+                }
             }
             match preview_pos {
-                Some(preview_pos) => self.scroll_sync.observe(editor_pos, preview_pos),
+                Some(preview_pos) => {
+                    if let Some((pos, _, _)) =
+                        drawn.iter().find(|(pane, _)| *pane == Pane::Main).map(|(_, drawn)| drawn)
+                    {
+                        self.scroll_sync.observe(*pos, preview_pos);
+                    }
+                }
                 None => self.scroll_sync.reset(),
             }
         });
@@ -5390,6 +5689,135 @@ mod tests {
         assert!(app.explorer.is_none(), "no folder was opened");
     }
 
+    /// Runs one frame of auto-save at egui time `time`, with the window
+    /// focused or not.
+    fn autosave_frame(ctx: &egui::Context, app: &mut TextEditorApp, time: f64, focused: bool) {
+        let input = egui::RawInput {
+            time: Some(time),
+            focused,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| app.autosave(ui.ctx()));
+        output.textures_delta.clear();
+    }
+
+    /// Auto-save writes once the typing pauses, not before.
+    #[test]
+    fn test_auto_save_waits_for_the_pause_then_writes() {
+        let dir = history_folder("autosave_pause");
+        let path = dir.join("a.txt");
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(path.clone());
+        assert!(!app.auto_save, "off until the user asks for it");
+        app.toggle_auto_save();
+        app.active_tab_mut().text_content = "edited".to_owned();
+
+        // The edit starts the pause at t=10; nothing is written before it
+        // runs out.
+        autosave_frame(&ctx, &mut app, 10.0, true);
+        autosave_frame(&ctx, &mut app, 10.5, true);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a", "saved too early");
+        assert!(app.active_tab().is_dirty());
+
+        autosave_frame(&ctx, &mut app, 11.1, true);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "edited");
+        assert!(!app.active_tab().is_dirty(), "the tab is clean again");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A typing pause that never comes still saves when the window loses
+    /// focus.
+    #[test]
+    fn test_auto_save_writes_when_the_window_loses_focus() {
+        let dir = history_folder("autosave_focus");
+        let path = dir.join("a.txt");
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(path.clone());
+        app.toggle_auto_save();
+        app.active_tab_mut().text_content = "edited".to_owned();
+
+        autosave_frame(&ctx, &mut app, 10.0, true);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a", "still typing");
+        autosave_frame(&ctx, &mut app, 10.2, false);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "edited");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A file another program changed is the conflict dialog's job: auto-save
+    /// leaves it alone.
+    #[test]
+    fn test_auto_save_leaves_a_file_changed_on_disk_alone() {
+        let dir = history_folder("autosave_conflict");
+        let path = dir.join("a.txt");
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(path.clone());
+        app.toggle_auto_save();
+        app.active_tab_mut().text_content = "mine".to_owned();
+        // Another program writes the file after the tab read it.
+        fs::write(&path, "theirs").unwrap();
+
+        autosave_frame(&ctx, &mut app, 10.0, true);
+        autosave_frame(&ctx, &mut app, 11.5, true);
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "theirs");
+        assert!(app.active_tab().is_dirty(), "the edit waits for the user");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Turning auto-save on with edits already made saves them once the
+    /// typing pauses too, not only after the next edit.
+    #[test]
+    fn test_enabling_auto_save_saves_what_was_already_unsaved() {
+        let dir = history_folder("autosave_late");
+        let path = dir.join("a.txt");
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.open_file_in_tab(path.clone());
+        app.active_tab_mut().text_content = "edited".to_owned();
+
+        // Off: nothing is scheduled, and the file is left as it was.
+        autosave_frame(&ctx, &mut app, 5.0, true);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a");
+
+        app.toggle_auto_save();
+        autosave_frame(&ctx, &mut app, 6.0, true);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a", "saved at once");
+        autosave_frame(&ctx, &mut app, 7.1, true);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "edited");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// An untitled tab has nowhere to save to; auto-save leaves it dirty.
+    #[test]
+    fn test_auto_save_leaves_an_untitled_tab_alone() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.toggle_auto_save();
+        app.active_tab_mut().text_content = "draft".to_owned();
+
+        autosave_frame(&ctx, &mut app, 10.0, true);
+        autosave_frame(&ctx, &mut app, 11.5, true);
+
+        assert!(app.active_tab().is_dirty());
+        assert!(app.active_tab().current_path.is_none());
+    }
+
+    #[test]
+    fn test_auto_save_is_saved_and_restored() {
+        let mut app = TextEditorApp::default();
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        assert!(!saved_auto_save(Some(&storage)), "off by default");
+
+        app.auto_save = true;
+        eframe::App::save(&mut app, &mut storage);
+        assert!(saved_auto_save(Some(&storage)));
+        assert!(!saved_auto_save(None));
+    }
+
     /// Dropping a file on the window opens it in a tab, from the start page
     /// too.
     #[test]
@@ -5701,6 +6129,123 @@ mod tests {
         (0..300).map(|i| format!("line {i}\n")).collect()
     }
 
+    /// How many editor galleys carry `text`: one per view of the document.
+    fn views_of(shapes: &[egui::epaint::ClippedShape], text: &str) -> usize {
+        fn walk(shape: &egui::Shape, text: &str) -> usize {
+            match shape {
+                egui::Shape::Vec(items) => items.iter().map(|item| walk(item, text)).sum(),
+                egui::Shape::Text(shape) if shape.galley.text() == text => 1,
+                _ => 0,
+            }
+        }
+        shapes.iter().map(|clipped| walk(&clipped.shape, text)).sum()
+    }
+
+    /// Split Editor shows the document twice, side by side, each view with
+    /// its own editor.
+    #[test]
+    fn test_split_editor_shows_the_document_twice() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.active_tab_mut().text_content = "unique-line".to_owned();
+        app.active_tab_mut().saved_content = "unique-line".to_owned();
+        let shapes = |ctx: &egui::Context, app: &mut TextEditorApp| {
+            run_frame_with_events(ctx, Vec::new(), |ui| {
+                eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
+            })
+        };
+
+        let single = shapes(&ctx, &mut app);
+        assert_eq!(views_of(&single, "unique-line"), 1, "one view while whole");
+
+        app.toggle_split();
+        let split = shapes(&ctx, &mut app);
+        assert_eq!(views_of(&split, "unique-line"), 2, "the document is not twice");
+        // Both editors keep their own state.
+        let main = egui::TextEdit::load_state(&ctx, app.editor_id_of(Pane::Main));
+        let side = egui::TextEdit::load_state(&ctx, app.editor_id_of(Pane::Split));
+        assert!(main.is_some() && side.is_some(), "a view has no state");
+
+        app.toggle_split();
+        let closed = shapes(&ctx, &mut app);
+        assert_eq!(views_of(&closed, "unique-line"), 1, "the split did not close");
+    }
+
+    /// Clicking the second view moves the keyboard to it, so the status bar
+    /// and the menus act there.
+    #[test]
+    fn test_the_second_view_can_take_the_keyboard() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        app.active_tab_mut().text_content = "one\ntwo\nthree".to_owned();
+        app.active_tab_mut().saved_content = "one\ntwo\nthree".to_owned();
+        app.toggle_split();
+        run_frame_with_events(&ctx, Vec::new(), |ui| {
+            eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+        });
+        assert_eq!(app.focused_pane, Pane::Main);
+
+        // A click in the right-hand view.
+        run_frame_with_events(&ctx, click_events(egui::pos2(600.0, 300.0)), |ui| {
+            eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+        });
+        assert_eq!(app.focused_pane, Pane::Split, "the click did not move the keyboard");
+    }
+
+    /// The two views scroll on their own: the wheel over one moves only
+    /// that one.
+    #[test]
+    fn test_each_view_scrolls_on_its_own() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        let text = long_document();
+        app.active_tab_mut().text_content = text.clone();
+        app.active_tab_mut().saved_content = text;
+        app.toggle_split();
+        let frame = |ctx: &egui::Context, app: &mut TextEditorApp, events: Vec<egui::Event>| {
+            run_frame_with_events(ctx, events, |ui| {
+                eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
+            })
+        };
+        let wheel = |at: egui::Pos2| {
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -1400.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+
+        frame(&ctx, &mut app, Vec::new());
+        // The right-hand view takes the keyboard, then the wheel scrolls it.
+        // The pointer stays over it while egui's smooth scrolling runs out,
+        // so no of it is left for the other view.
+        frame(&ctx, &mut app, click_events(egui::pos2(600.0, 300.0)));
+        assert_eq!(app.focused_pane, Pane::Split);
+        frame(&ctx, &mut app, wheel(egui::pos2(600.0, 300.0)));
+        // egui spreads a wheel notch over the frames that follow: let it run
+        // out with the pointer still over the view it began in, or the rest
+        // of it lands in the other view.
+        for _ in 0..30 {
+            frame(&ctx, &mut app, Vec::new());
+        }
+        let side = app.active_tab().scroll;
+        assert!(side > 100.0, "the second view did not scroll: {side}");
+
+        // The left view kept its own place, at the top.
+        frame(&ctx, &mut app, click_events(egui::pos2(200.0, 120.0)));
+        for _ in 0..3 {
+            frame(&ctx, &mut app, Vec::new());
+        }
+        assert_eq!(app.focused_pane, Pane::Main);
+        let main = app.active_tab().scroll;
+        assert!(main < 1.0, "the first view moved too: {main}");
+    }
+
     /// The frame records where the caret and the view are, so the session
     /// saves the position the tab was left at.
     #[test]
@@ -5777,6 +6322,59 @@ mod tests {
             app.active_tab().scroll > 0.0,
             "the scroll was not recorded: {}",
             app.active_tab().scroll
+        );
+    }
+
+    /// View > Indent Guides and Render Whitespace reach the editor: the
+    /// guides are thin lines, the whitespace marks are dots.
+    #[test]
+    fn test_the_view_toggles_paint_the_decorations() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        let text = "    a b\n".to_owned();
+        app.active_tab_mut().text_content = text.clone();
+        app.active_tab_mut().saved_content = text;
+        let shapes = |ctx: &egui::Context, app: &mut TextEditorApp| {
+            run_frame_with_events(ctx, Vec::new(), |ui| {
+                eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
+            })
+        };
+        // Guides are painted together in one `Shape::Vec`.
+        fn count(shapes: &[egui::epaint::ClippedShape], what: fn(&egui::Shape) -> bool) -> usize {
+            fn walk(shape: &egui::Shape, what: fn(&egui::Shape) -> bool) -> usize {
+                match shape {
+                    egui::Shape::Vec(items) => items.iter().map(|item| walk(item, what)).sum(),
+                    _ => usize::from(what(shape)),
+                }
+            }
+            shapes.iter().map(|clipped| walk(&clipped.shape, what)).sum()
+        }
+        let thin = |shapes: &[egui::epaint::ClippedShape]| {
+            count(shapes, |shape| {
+                matches!(shape, egui::Shape::Rect(rect) if rect.rect.width() <= 1.5 && rect.rect.height() > 2.0)
+            })
+        };
+        let dots = |shapes: &[egui::epaint::ClippedShape]| {
+            count(shapes, |shape| matches!(shape, egui::Shape::Circle(_)))
+        };
+
+        app.show_indent_guides = false;
+        app.show_whitespace = false;
+        let plain = shapes(&ctx, &mut app);
+
+        app.show_indent_guides = true;
+        let guides = shapes(&ctx, &mut app);
+        assert!(thin(&guides) > thin(&plain), "no guide was painted");
+
+        app.show_whitespace = true;
+        let both = shapes(&ctx, &mut app);
+        // The line holds five spaces: four of indentation, one between the
+        // words.
+        assert!(
+            dots(&both) >= dots(&guides) + 5,
+            "whitespace marks were not painted: {} to {}",
+            dots(&guides),
+            dots(&both)
         );
     }
 

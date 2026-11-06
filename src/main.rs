@@ -26,6 +26,7 @@ mod gutter;
 mod highlighter;
 mod history;
 mod i18n;
+mod indent_guides;
 mod layout_cache;
 mod line_diff;
 mod line_ops;
@@ -45,6 +46,7 @@ mod tab_bar;
 mod terminal;
 mod theme;
 mod welcome;
+mod whitespace;
 mod zoom;
 
 use app::TextEditorApp;

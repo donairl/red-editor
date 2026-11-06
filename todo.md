@@ -43,12 +43,16 @@ Last updated 2026-11-06.
 - [x] **Code folding** — done 2026-11-04, released in v0.8.0
   (`src/folding.rs`): fold blocks by indentation; gutter chevrons, a `⋯`
   marker, Fold / Unfold (`Ctrl+Shift+[` / `]`), Fold All, Unfold All.
-- [ ] **Indent guides** — thin vertical lines at each indent level, from
-  the same indentation scan as `src/folding.rs`.
-- [ ] **Render whitespace** (View → Whitespace) — faint `·` for spaces, `→`
-  for tabs, to spot trailing whitespace and mixed indentation.
-- [ ] **Split editor** — two tabs side by side, or two views of one file;
-  the Markdown preview's split is the pattern to follow.
+- [x] **Indent guides** — done 2026-11-06 (`src/indent_guides.rs`): a thin
+  line per indent level, read off the laid-out rows, so wrapped and folded
+  rows are skipped. View → Indent Guides, on by default.
+- [x] **Render whitespace** — done 2026-11-06 (`src/whitespace.rs`): faint
+  dots for spaces and arrows for tabs, over the visible rows only.
+  View → Render Whitespace, off by default.
+- [x] **Split editor** — done 2026-11-06 (`Ctrl+\`, View → Split Editor):
+  the same document in two views side by side, each with its own caret,
+  scroll and layout cache; typing goes to the view with the keyboard.
+  Still to do: two *different* tabs side by side, and dragging the seam.
 - [ ] **Multi-cursor / column select** — `Ctrl+D` exists, but egui's
   `TextEdit` has no multi-cursor; needs a custom text widget. Later.
 - [ ] **Snippets** — a short prefix + `Tab` expands to boilerplate (`fn` in
@@ -80,8 +84,10 @@ Last updated 2026-11-06.
 
 ## Settings
 
-- [ ] **Auto-save** (optional) — after a pause in typing, or when the
-  window loses focus.
+- [x] **Auto-save** — done 2026-11-06: File → Auto Save (off by default),
+  kept in storage. Every dirty file with a path is written after a one
+  second pause in the typing, and when the window loses focus; a file
+  another program changed waits for the conflict dialog.
 - [ ] **Settings** — one place for tab size, spaces vs tabs, format on
   save, trim trailing whitespace; a panel or a `settings.json`.
 
@@ -96,5 +102,4 @@ Last updated 2026-11-06.
 
 ## Suggested order
 
-Indent guides (a quick win), then split editor, then the minimal LSP
-client.
+Outline for more languages (a quick win), then the minimal LSP client.

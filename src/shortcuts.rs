@@ -93,6 +93,8 @@ pub const ZOOM_IN: KeyboardShortcut = cmd(Key::Plus);
 pub const ZOOM_IN_SHIFTED: KeyboardShortcut = cmd(Key::Equals);
 /// `Ctrl+-` makes the font smaller.
 pub const ZOOM_OUT: KeyboardShortcut = cmd(Key::Minus);
+/// `Ctrl+\` shows the document in a second view beside the editor.
+pub const SPLIT_EDITOR: KeyboardShortcut = cmd(Key::Backslash);
 // Shown in the Edit menu only: the focused text editor handles these
 // keys itself.
 pub const UNDO: KeyboardShortcut = cmd(Key::Z);
@@ -165,6 +167,11 @@ pub enum ShortcutAction {
     ZoomOut,
     /// Return the editor's font to its default size.
     ZoomReset,
+    /// Turn saving after the typing pauses on or off (File > Auto Save; no
+    /// key).
+    AutoSave,
+    /// Show the document in a second view beside the editor.
+    SplitEditor,
     /// Switch to this color theme (a Command Palette entry; no key).
     SelectTheme(ThemeId),
 }
@@ -245,7 +252,8 @@ impl ShortcutAction {
             ZoomIn => ZOOM_IN,
             ZoomOut => ZOOM_OUT,
             ZoomReset => ZOOM_RESET,
-            SelectTheme(_) | FoldAll | UnfoldAll | DiffWithFile => return None,
+            SplitEditor => SPLIT_EDITOR,
+            SelectTheme(_) | FoldAll | UnfoldAll | DiffWithFile | AutoSave => return None,
         })
     }
 
@@ -257,6 +265,7 @@ impl ShortcutAction {
             Find | Replace
                 | FindNext
                 | FindPrev
+                | SplitEditor
                 | GotoLine
                 | GotoSymbol
                 | GotoDefinition
@@ -335,6 +344,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (ZOOM_IN_SHIFTED, ZoomIn),
         (ZOOM_OUT, ZoomOut),
         (ZOOM_RESET, ZoomReset),
+        (SPLIT_EDITOR, SplitEditor),
     ]
     .into_iter()
     .find(|(shortcut, _)| input.consume_shortcut(shortcut))
@@ -350,6 +360,13 @@ mod tests {
         let ctx = egui::Context::default();
         assert!(label(&ctx, &FOLD).ends_with('['), "{}", label(&ctx, &FOLD));
         assert!(label(&ctx, &UNFOLD).ends_with(']'), "{}", label(&ctx, &UNFOLD));
+    }
+
+    /// The split key prints as `Ctrl+\`, not as the key's name.
+    #[test]
+    fn test_the_split_label_shows_the_key() {
+        let ctx = egui::Context::default();
+        assert!(label(&ctx, &SPLIT_EDITOR).ends_with('\\'), "{}", label(&ctx, &SPLIT_EDITOR));
     }
 
     /// The zoom keys are shown as the user pressed them: `Ctrl++`,
@@ -460,6 +477,7 @@ mod tests {
             (egui::Key::Equals, ctrl, ShortcutAction::ZoomIn),
             (egui::Key::Minus, ctrl, ShortcutAction::ZoomOut),
             (egui::Key::Num0, ctrl, ShortcutAction::ZoomReset),
+            (egui::Key::Backslash, ctrl, ShortcutAction::SplitEditor),
         ] {
             let mut got = None;
             let mut output = ctx.run_ui(press(key, mods), |ui| {

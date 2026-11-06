@@ -12,10 +12,13 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Syntax highlighting** for Rust, C, C++, PHP, JavaScript, TypeScript, HTML, CSS (also `.scss` and `.less`), JSON, Markdown, Go, Python, SQL, and the Blade (`.blade.php`), Twig (`.twig`), and Smarty (`.tpl`) templates, auto-detected from file extensions. Language can be switched manually via the **View → Language** menu. Files over 1 MB are rendered without highlighting, and files over 10 MB are not opened.
 - **SQL inside strings**: a string literal in Rust, C, C++, PHP, JavaScript, TypeScript, Go or Python that reads as an SQL statement (`"SELECT id FROM users"`, `` `\n  SELECT …` ``) has its SQL keywords coloured, across multi-line strings too. Upper-case keywords are enough; lower case needs a second clause (`select … from`), so UI text like "Select a file" stays a plain string.
 - **Line numbers** that can be toggled on or off (**View → Line Numbers**). The active line number is highlighted.
+- **Indent guides** (**View → Indent Guides**, on by default) draw a thin line at each indentation level, from the same layout the text uses, so wrapped and folded lines are skipped.
 - **Line bookmarks**: right-click a line in the editor and pick **Add Bookmark** (or **Remove Bookmark**). Bookmarked lines get a marker in the gutter and follow their line as you edit. A **Bookmarked: N** badge in the status bar opens the list of bookmarked lines; click one to jump to it. Bookmarks last for the session.
 - **Open Recent** (**File → Open Recent**): the last 20 files and folders you opened, newest first, kept across restarts. Click one to reopen it. If it no longer exists, the status bar says so and the entry is removed. **Clear Recently Opened** empties the list.
 - **Restore session**: the folder and the saved files open when you quit are reopened at the next start, with the same tab active, each tab at the caret and scroll position it was left at. Untitled tabs are not kept; files that no longer exist are skipped.
 - **Word wrap** that can be toggled on or off (**View → Word Wrap**). When disabled, long lines scroll horizontally.
+- **Render whitespace** (**View → Render Whitespace**): a faint dot for every space and an arrow for every tab, to spot trailing whitespace and mixed indentation.
+- **Auto Save** (**File → Auto Save**, off by default): every file with a path saves itself once the typing pauses for a second, and when the window loses focus. Files another program changed are left to the conflict dialog.
 - **Font zoom** (**View → Zoom**, `Ctrl++` / `Ctrl+-` / `Ctrl+0`, or `Ctrl` + scroll): one font size for the editor, the gutter, the diff view and the terminal. The size is remembered across restarts, and the status bar shows it as a percentage when it is not the default one.
 - **Drag and drop**: drop files on the window to open them in tabs; a dropped folder becomes the workspace. While files hover over the window a hint says the drop will open them. On Linux this needs X11: winit, the window library, has no drag and drop on Wayland yet.
 - **VS Code-style Explorer and Activity Bar**: Open folders, browse tree hierarchy, click files to open in tabs. Includes **Refresh** and **Collapse All** actions in the folder header.
@@ -26,6 +29,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Unsaved changes confirmation** when closing tabs or quitting the application.
 - **Multilingual interface** (English, Indonesian, Spanish, German, Chinese, and additional languages via JSON files). Select via **View → Interface Language**; preference is persisted across restarts. See [Adding interface languages](#adding-interface-languages).
 - **Color themes** (**View → Theme**): System (follows the OS), Light Modern, Dark Modern, Solarized Light, Solarized Dark, Ocean Dark, Mocha Dark and Eighties Dark. The theme recolors syntax highlighting and the whole interface at once, without a restart, and is remembered across restarts.
+- **Split editor** (**View → Split Editor**, `Ctrl+\`): the same document in a second view beside the editor. Each view has its own caret and scroll; typing goes to the one with the keyboard.
 - **Zen Mode** (`F11`): Distraction-free full-screen mode showing only the editor; press `Esc` to exit.
 - **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON, HTML and CSS in place, and Rust, Go, C/C++, Python and JS/TS through the installed formatter (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Markdown preview** (`Ctrl+Shift+V`): rendered preview of `.md` files in a live split view beside the editor.
@@ -116,9 +120,9 @@ The editor opens on a **start page** with **New File**, **Open File…** and **O
 
 | Menu | Items |
 |---|---|
-| **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Quick Open…, Open Recent, Save, Save As…, Language, Exit |
+| **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Quick Open…, Open Recent, Save, Save As…, Auto Save, Language, Exit |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line…, Prettify |
-| **View** | Word Wrap, Line Numbers, Zen Mode, Markdown Preview, Command Palette…, Zoom, Theme, Language, Interface Language |
+| **View** | Word Wrap, Line Numbers, Indent Guides, Render Whitespace, Zen Mode, Split Editor, Markdown Preview, Command Palette…, Zoom, Theme, Language, Interface Language |
 | **Help** | About |
 
 ### Keyboard Shortcuts
@@ -159,6 +163,7 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+Shift+P` | Command Palette |
 | `Ctrl+P` | Quick Open (file by name) |
 | `Ctrl+G` | Go to line |
+| `Ctrl+\` | Split the editor into two views |
 | `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Zoom the text in / out / back to the default size |
 | `Ctrl` + scroll | Zoom the text in / out |
 | `Esc` | Close find bar, go-to-line bar, or Find in Files panel |

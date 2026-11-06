@@ -10,6 +10,8 @@ use crate::brackets;
 use crate::find;
 use crate::gutter;
 use crate::highlighter::{HighlighterLayouter, Language};
+use crate::indent_guides;
+use crate::whitespace;
 use crate::layout_cache::{self, LayoutCache};
 use crate::line_diff::LineMarks;
 use crate::markdown_preview::ScrollPos;
@@ -24,6 +26,35 @@ const HIGHLIGHT_SIZE_LIMIT: usize = 1024 * 1024;
 /// True when a document is too large to highlight cheaply.
 pub(crate) fn text_content_exceeds_highlight_limit(content: &str) -> bool {
     content.len() > HIGHLIGHT_SIZE_LIMIT
+}
+
+/// The decorations painted over the text, from the View menu.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Decorations {
+    /// A thin line at each indentation level.
+    pub indent_guides: bool,
+    /// A dot for every space and an arrow for every tab.
+    pub whitespace: bool,
+}
+
+/// Where the context keeps the decorations the editor paints.
+fn decorations_id() -> egui::Id {
+    egui::Id::unique("rred_decorations")
+}
+
+/// Makes `decorations` the ones every editor painted from now on uses.
+///
+/// Kept in the context, like the theme and the font size, so the app sets
+/// them once a frame and the editor reads them without threading them
+/// through every caller.
+pub fn set_decorations(ctx: &egui::Context, decorations: Decorations) {
+    ctx.data_mut(|data| data.insert_temp(decorations_id(), decorations));
+}
+
+/// The decorations the editor paints. None until [`set_decorations`] runs.
+pub fn decorations(ctx: &egui::Context) -> Decorations {
+    ctx.data(|data| data.get_temp(decorations_id()))
+        .unwrap_or_default()
 }
 
 /// Renders the multiline editor, optionally through a syntax highlighter.
@@ -409,6 +440,9 @@ fn render_editor_inner(
 
         let text_edit = egui::TextEdit::multiline(text)
             .font(egui::TextStyle::Monospace)
+            // A document starts at its first line with the caret before it;
+            // egui's default puts the caret at the end, off screen.
+            .cursor_at_end(false)
             .lock_focus(true)
             .desired_width(f32::INFINITY)
             .min_size(ui.available_size())
@@ -435,6 +469,10 @@ fn render_editor_inner(
         let inactive_shape = request
             .inactive_selection
             .map(|_| ui.painter().add(egui::Shape::Noop));
+        // The indent guides go under the text too.
+        let guides_shape = decorations(ui.ctx())
+            .indent_guides
+            .then(|| ui.painter().add(egui::Shape::Noop));
 
         let output = match layouter.as_mut() {
             Some(highlighter) => {
@@ -481,6 +519,32 @@ fn render_editor_inner(
                 text_edit.layouter(&mut lay).show(ui)
             }
         };
+
+        if let Some(index) = guides_shape {
+            let step = indent_guides::step(ui, &font_id);
+            let shapes = indent_guides::shapes(
+                &output.galley,
+                output.galley_pos,
+                ui.clip_rect(),
+                step,
+                indent_guides::color(ui.ctx()),
+            );
+            ui.painter().set(index, egui::Shape::Vec(shapes));
+        }
+        if decorations(ui.ctx()).whitespace {
+            let color = ui
+                .visuals()
+                .widgets
+                .inactive
+                .text_color()
+                .gamma_multiply(whitespace::FAINT);
+            ui.painter().extend(whitespace::shapes(
+                &output.galley,
+                output.galley_pos,
+                ui.clip_rect(),
+                color,
+            ));
+        }
 
         bookmarks.sync(text);
         let mut folds = FoldOutput::default();

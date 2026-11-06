@@ -112,6 +112,11 @@ impl TextEditorApp {
             &mut self.show_line_numbers,
             self.i18n.t("view.line_numbers"),
         );
+        ui.checkbox(
+            &mut self.show_indent_guides,
+            self.i18n.t("view.indent_guides"),
+        );
+        ui.checkbox(&mut self.show_whitespace, self.i18n.t("view.whitespace"));
         let ctx = ui.ctx().clone();
         // Folding acts on the editor, which the start page and the Git
         // Graph hide.
@@ -157,6 +162,13 @@ impl TextEditorApp {
         {
             ui.close();
             self.apply_shortcut(&ctx, ShortcutAction::DiffWithFile);
+        }
+        let split = egui::Button::new(self.i18n.t("view.split_editor"))
+            .selected(self.split)
+            .shortcut_text(shortcuts::label(&ctx, &shortcuts::SPLIT_EDITOR));
+        if ui.add_enabled(!self.show_welcome, split).clicked() {
+            self.toggle_split();
+            ui.close();
         }
         if menu_item(
             ui,
@@ -556,6 +568,11 @@ impl TextEditorApp {
         {
             self.save_as();
         }
+        let auto = egui::Button::new(self.i18n.t("file.auto_save")).selected(self.auto_save);
+        if ui.add(auto).clicked() {
+            self.toggle_auto_save();
+            ui.close();
+        }
         ui.separator();
         self.show_language_menu(ui);
         ui.separator();
@@ -608,6 +625,36 @@ mod tests {
             painted_text(&shapes, "Bahasa").is_some(),
             "Tampilan menu must offer Bahasa"
         );
+    }
+
+    /// View > Split Editor shows the command and turns the second view on.
+    #[test]
+    fn test_the_view_menu_toggles_the_split() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        assert!(app.i18n.select("en"));
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_view_menu(ui));
+        let (rect, _) = painted_text(&shapes, "Split Editor").expect("View menu lacks Split Editor");
+
+        run_frame_with_events(&ctx, click_events(rect.center()), |ui| app.show_view_menu(ui));
+        assert!(app.split, "the click did not split the view");
+        assert!(app.i18n.select("en"));
+    }
+
+    /// File > Auto Save shows the setting and turns it on.
+    #[test]
+    fn test_the_file_menu_toggles_auto_save() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        assert!(app.i18n.select("en"));
+        let shapes =
+            run_frame_with_events(&ctx, Vec::new(), |ui| app.show_file_menu(ui, &ctx));
+        let (rect, _) = painted_text(&shapes, "Auto Save").expect("File menu lacks Auto Save");
+
+        run_frame_with_events(&ctx, click_events(rect.center()), |ui| {
+            app.show_file_menu(ui, &ctx)
+        });
+        assert!(app.auto_save, "the click did not turn it on");
     }
 
     /// Help > Home opens the project page in the browser.
