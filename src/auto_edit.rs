@@ -195,6 +195,95 @@ fn plain_insert(text: &str, sel: Range, insert: &str) -> Edit {
     Edit { text: splice(&chars, (a, b), insert), selection: (at, at) }
 }
 
+/// The `char` index where each line of `chars` starts.
+fn line_starts(chars: &[char]) -> Vec<usize> {
+    let mut starts = vec![0];
+    starts.extend(chars.iter().enumerate().filter(|(_, c)| **c == '\n').map(|(i, _)| i + 1));
+    starts
+}
+
+/// The line `pos` is on.
+fn line_of(starts: &[usize], pos: usize) -> usize {
+    starts.partition_point(|&s| s <= pos) - 1
+}
+
+/// The first and last line a block indent or outdent acts on. A last line
+/// the selection reaches only at its column 0 is left out, as in VS Code:
+/// selecting whole lines ends there.
+fn touched_lines(starts: &[usize], (a, b): Range) -> (usize, usize) {
+    let first = line_of(starts, a);
+    let mut last = line_of(starts, b);
+    if last > first && starts[last] == b {
+        last -= 1;
+    }
+    (first, last)
+}
+
+/// Tab: with a caret or a selection inside one line, `unit` replaces the
+/// selection; a selection across lines gets `unit` in front of every line it
+/// touches and grows to keep covering the same text.
+pub fn indent(text: &str, selection: Range, unit: &str) -> Option<Edit> {
+    let chars: Vec<char> = text.chars().collect();
+    let (a, b) = sorted(&chars, selection);
+    let starts = line_starts(&chars);
+    if line_of(&starts, a) == line_of(&starts, b) {
+        return Some(plain_insert(text, (a, b), unit));
+    }
+    let (first, last) = touched_lines(&starts, (a, b));
+    let mut out = String::with_capacity(text.len() + unit.len() * (last - first + 1));
+    let mut next = first;
+    for (i, c) in chars.iter().enumerate() {
+        if next <= last && i == starts[next] {
+            out.push_str(unit);
+            next += 1;
+        }
+        out.push(*c);
+    }
+    let n = unit.chars().count();
+    let shift = |p: usize| p + n * (first..=last).filter(|&l| starts[l] <= p).count();
+    Some(Edit { text: out, selection: (shift(a), shift(b)) })
+}
+
+/// Shift+Tab: every line the caret or selection touches loses one level from
+/// its front — one `\t`, or up to `width` spaces. `None` when no line has
+/// any indentation to lose.
+pub fn outdent(text: &str, selection: Range, width: usize) -> Option<Edit> {
+    let chars: Vec<char> = text.chars().collect();
+    let (a, b) = sorted(&chars, selection);
+    let starts = line_starts(&chars);
+    let (first, last) = touched_lines(&starts, (a, b));
+    // (line start, chars removed) for each line that loses indentation.
+    let cuts: Vec<(usize, usize)> = (first..=last)
+        .filter_map(|line| {
+            let rest = &chars[starts[line]..];
+            let cut = if rest.first() == Some(&'\t') {
+                1
+            } else {
+                rest.iter().take_while(|&&c| c == ' ').take(width.max(1)).count()
+            };
+            (cut > 0).then_some((starts[line], cut))
+        })
+        .collect();
+    if cuts.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(text.len());
+    let (mut i, mut k) = (0, 0);
+    while i < chars.len() {
+        if k < cuts.len() && i == cuts[k].0 {
+            i += cuts[k].1;
+            k += 1;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    let shift = |p: usize| {
+        p - cuts.iter().map(|&(s, cut)| if s <= p { cut.min(p - s) } else { 0 }).sum::<usize>()
+    };
+    Some(Edit { text: out, selection: (shift(a), shift(b)) })
+}
+
 /// Runs one frame's typing through the rules above. When any of `events`
 /// is special — Enter, or a one-char `Text` or a Backspace that a rule
 /// changes — every `Text`, Enter and Backspace event is applied in order
@@ -239,6 +328,20 @@ pub fn apply_events(
                     }
                     None => plain_backspace(&state.text, state.selection),
                 }
+            }
+            // Tab and Shift+Tab indent and outdent. Always handled, so egui
+            // neither types a raw `\t` nor moves the focus. Ctrl+Tab is
+            // Next Tab and is left alone.
+            egui::Event::Key { key: egui::Key::Tab, pressed: true, modifiers, .. }
+                if modifiers.is_none() || modifiers.shift_only() =>
+            {
+                special = true;
+                let edit = if modifiers.shift {
+                    outdent(&state.text, state.selection, usize::from(settings.tab_size))
+                } else {
+                    indent(&state.text, state.selection, &unit)
+                };
+                edit.unwrap_or_else(|| state.clone())
             }
             // `TextEdit` leaves newlines in `Text` to its Enter handling. An
             // input method delivers typed text as a commit instead.
@@ -509,5 +612,99 @@ mod tests {
         let events = [preedit(""), enter];
         let (got, _) = apply_events("{}", caret(1), &events, Language::Php, &EditorSettings::default()).unwrap();
         assert_eq!(got, edit("{\n    \n}", caret(6)));
+    }
+
+    fn ed(text: &str, a: usize, b: usize) -> Edit {
+        Edit { text: text.to_owned(), selection: (a, b) }
+    }
+
+    #[test]
+    fn test_indent_caret_inserts_the_unit() {
+        assert_eq!(indent("ab", (1, 1), "    "), Some(ed("a    b", 5, 5)));
+        assert_eq!(indent("ab", (1, 1), "\t"), Some(ed("a\tb", 2, 2)));
+    }
+
+    #[test]
+    fn test_indent_selection_in_one_line_is_replaced() {
+        assert_eq!(indent("abcd", (1, 3), "  "), Some(ed("a  d", 3, 3)));
+    }
+
+    #[test]
+    fn test_indent_multi_line_selection_indents_every_line() {
+        // "a\nb\nc", selection from inside "a" to inside "c"
+        assert_eq!(indent("a\nb\nc", (0, 5), "  "), Some(ed("  a\n  b\n  c", 2, 11)));
+    }
+
+    #[test]
+    fn test_indent_leaves_out_a_last_line_reached_at_column_0() {
+        // selects "a\nb\n": the caret sits at the start of "c"
+        assert_eq!(indent("a\nb\nc", (0, 4), "\t"), Some(ed("\ta\n\tb\nc", 1, 6)));
+    }
+
+    #[test]
+    fn test_outdent_removes_one_level() {
+        assert_eq!(outdent("\tab", (2, 2), 4), Some(ed("ab", 1, 1)));
+        assert_eq!(outdent("      ab", (7, 7), 4), Some(ed("  ab", 3, 3)));
+        assert_eq!(outdent("  ab", (3, 3), 4), Some(ed("ab", 1, 1)), "fewer spaces than a level");
+    }
+
+    #[test]
+    fn test_outdent_multi_line_and_lines_without_indent() {
+        assert_eq!(outdent("  a\nb\n  c", (0, 9), 2), Some(ed("a\nb\nc", 0, 5)));
+    }
+
+    #[test]
+    fn test_outdent_caret_inside_the_indent_moves_to_the_line_start() {
+        assert_eq!(outdent("    ab", (2, 2), 4), Some(ed("ab", 0, 0)));
+    }
+
+    #[test]
+    fn test_outdent_without_indentation_does_nothing() {
+        assert_eq!(outdent("ab\ncd", (0, 4), 4), None);
+    }
+
+    fn tab(shift: bool) -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE },
+        }
+    }
+
+    #[test]
+    fn test_apply_events_handles_tab_and_shift_tab() {
+        let s = EditorSettings::default();
+        let (edit, handled) =
+            apply_events("ab", (0, 0), &[tab(false)], Language::PlainText, &s).unwrap();
+        assert_eq!(edit, ed("    ab", 4, 4));
+        assert_eq!(handled, vec![0]);
+        let (edit, _) =
+            apply_events("    ab", (4, 4), &[tab(true)], Language::PlainText, &s).unwrap();
+        assert_eq!(edit, ed("ab", 0, 0));
+    }
+
+    #[test]
+    fn test_apply_events_shift_tab_with_nothing_to_outdent_is_still_handled() {
+        // handled, so egui does not type a tab or move focus
+        let s = EditorSettings::default();
+        let (edit, handled) =
+            apply_events("ab", (1, 1), &[tab(true)], Language::PlainText, &s).unwrap();
+        assert_eq!(edit, ed("ab", 1, 1));
+        assert_eq!(handled, vec![0]);
+    }
+
+    #[test]
+    fn test_apply_events_ignores_ctrl_tab() {
+        let s = EditorSettings::default();
+        let ctrl_tab = egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        assert!(apply_events("ab", (0, 0), &[ctrl_tab], Language::PlainText, &s).is_none());
     }
 }

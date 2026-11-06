@@ -1288,6 +1288,28 @@ mod tests {
         assert_eq!(editor_caret(&ctx), Some((1, 1)));
     }
 
+    /// Tab indents through auto-edit, and egui neither types its own `\t` nor
+    /// moves the focus away from the editor.
+    #[test]
+    fn test_tab_indents_without_a_raw_tab_or_a_focus_change() {
+        let ctx = egui::Context::default();
+        let mut text = String::from("ab");
+        focused_editor(&ctx, &mut text, Some(Language::PlainText));
+
+        let tab = egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let request = EditorRequest { auto_edit: Some(Language::PlainText), ..Default::default() };
+        auto_edit_frame(&ctx, &mut text, vec![tab], request);
+        assert_eq!(text, "    ab");
+        assert_eq!(editor_caret(&ctx), Some((4, 4)));
+        assert_eq!(ctx.memory(|m| m.focused()), Some(egui::Id::unique("ed")));
+    }
+
     /// An editor without focus does not act on the frame's typing.
     #[test]
     fn test_auto_edit_needs_focus() {
