@@ -39,6 +39,7 @@ pub const BLAME: KeyboardShortcut =
 pub const DIFF_VIEW: KeyboardShortcut = cmd_shift(Key::D);
 pub const GIT_GRAPH: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::G);
+pub const OPEN_SETTINGS: KeyboardShortcut = cmd(Key::Comma);
 pub const NEXT_TAB: KeyboardShortcut = cmd(Key::Tab);
 pub const PREV_TAB: KeyboardShortcut = cmd_shift(Key::Tab);
 pub const FIND_IN_FILES: KeyboardShortcut = cmd_shift(Key::F);
@@ -170,6 +171,8 @@ pub enum ShortcutAction {
     /// Turn saving after the typing pauses on or off (File > Auto Save; no
     /// key).
     AutoSave,
+    /// Show or hide the Settings window (File > Settings).
+    OpenSettings,
     /// Show the document in a second view beside the editor.
     SplitEditor,
     /// Switch to this color theme (a Command Palette entry; no key).
@@ -253,6 +256,7 @@ impl ShortcutAction {
             ZoomOut => ZOOM_OUT,
             ZoomReset => ZOOM_RESET,
             SplitEditor => SPLIT_EDITOR,
+            OpenSettings => OPEN_SETTINGS,
             SelectTheme(_) | FoldAll | UnfoldAll | DiffWithFile | AutoSave => return None,
         })
     }
@@ -345,6 +349,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (ZOOM_OUT, ZoomOut),
         (ZOOM_RESET, ZoomReset),
         (SPLIT_EDITOR, SplitEditor),
+        (OPEN_SETTINGS, OpenSettings),
     ]
     .into_iter()
     .find(|(shortcut, _)| input.consume_shortcut(shortcut))
@@ -478,6 +483,7 @@ mod tests {
             (egui::Key::Minus, ctrl, ShortcutAction::ZoomOut),
             (egui::Key::Num0, ctrl, ShortcutAction::ZoomReset),
             (egui::Key::Backslash, ctrl, ShortcutAction::SplitEditor),
+            (egui::Key::Comma, ctrl, ShortcutAction::OpenSettings),
         ] {
             let mut got = None;
             let mut output = ctx.run_ui(press(key, mods), |ui| {

@@ -39,6 +39,7 @@ mod process;
 mod search;
 mod session;
 mod settings;
+mod settings_window;
 mod shortcuts;
 mod status_bar;
 mod source_control;

@@ -398,6 +398,8 @@ pub struct TextEditorApp {
     /// Save every dirty file with a path of its own once the typing pauses,
     /// and when the window loses focus. Off by default.
     pub auto_save: bool,
+    /// Whether the Settings window is open.
+    pub show_settings: bool,
     /// Indentation and on-save settings, edited in the Settings window.
     pub editor_settings: EditorSettings,
     /// egui's clock when auto-save fires; `None` while nothing waits.
@@ -549,6 +551,7 @@ impl Default for TextEditorApp {
             show_indent_guides: true,
             show_whitespace: false,
             auto_save: false,
+            show_settings: false,
             editor_settings: EditorSettings::default(),
             autosave_due: None,
             autosave_dirty: false,
@@ -639,6 +642,7 @@ impl TextEditorApp {
             theme: saved_theme(cc.storage),
             font_size: saved_font_size(cc.storage),
             auto_save: saved_auto_save(cc.storage),
+            show_settings: false,
             editor_settings: saved_editor_settings(cc.storage),
             ..Default::default()
         };
@@ -1522,6 +1526,7 @@ impl TextEditorApp {
             ShortcutAction::ZoomOut => self.zoom(-1),
             ShortcutAction::ZoomReset => self.reset_zoom(),
             ShortcutAction::AutoSave => self.toggle_auto_save(),
+            ShortcutAction::OpenSettings => self.show_settings = !self.show_settings,
             ShortcutAction::SplitEditor => self.toggle_split(),
             ShortcutAction::SelectTheme(id) => self.theme = id,
             ShortcutAction::GotoDefinition => self.goto_definition(ctx, None),
@@ -3552,6 +3557,7 @@ impl eframe::App for TextEditorApp {
         // 5. Modals & Dialogs
         about::show(&ctx, &mut self.show_about_modal, &mut self.about, &self.i18n);
 
+        self.show_settings_window(&ctx);
         self.show_bookmarks_window(&ctx);
         self.show_hunk_popup(&ctx);
 
@@ -4214,6 +4220,17 @@ mod tests {
         assert!(app.zen_mode && app.editor_request.focus);
         app.apply_shortcut(&ctx, ShortcutAction::ZenMode);
         assert!(!app.zen_mode);
+    }
+
+    #[test]
+    fn test_open_settings_toggles_the_window() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        assert!(!app.show_settings);
+        app.apply_shortcut(&ctx, ShortcutAction::OpenSettings);
+        assert!(app.show_settings);
+        app.apply_shortcut(&ctx, ShortcutAction::OpenSettings);
+        assert!(!app.show_settings);
     }
 
     #[test]

@@ -110,6 +110,7 @@ pub const COMMANDS: &[Command] = &[
     command("file.save", ShortcutAction::Save),
     command("file.save_as", ShortcutAction::SaveAs),
     command("file.auto_save", ShortcutAction::AutoSave),
+    command("file.settings", ShortcutAction::OpenSettings),
     command("file.exit", ShortcutAction::Exit),
     command("edit.find", ShortcutAction::Find),
     command("edit.replace", ShortcutAction::Replace),
@@ -653,6 +654,7 @@ mod tests {
             Key::R,
             Key::F12,
             Key::P,
+            Key::Comma,
         ];
         let modifiers = [
             Modifiers::NONE,

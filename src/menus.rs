@@ -580,6 +580,9 @@ impl TextEditorApp {
             self.toggle_auto_save();
             ui.close();
         }
+        if item(ui, self.i18n.t("file.settings"), &shortcuts::OPEN_SETTINGS) {
+            self.show_settings = true;
+        }
         ui.separator();
         self.show_language_menu(ui);
         ui.separator();
