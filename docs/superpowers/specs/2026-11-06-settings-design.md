@@ -56,8 +56,9 @@ impl EditorSettings {
     last line is left out, as in VS Code. The selection grows to keep
     covering the same text.
 - **Shift+Tab**: every line the caret or selection touches loses one
-  indent level from its front: one `\t`, or up to `tab_size` spaces
-  (fewer if fewer are there). Lines with no leading whitespace are
+  indent level from its front: one `\t`, or up to one indent unit of
+  spaces — the unit detected from the document, as Tab uses (4 when the
+  unit is `\t`); fewer if fewer are there. Lines with no leading whitespace are
   untouched. The selection follows the text.
 - Pure functions over `char` indices, in the style of `line_ops.rs`, return
   `Option<line_ops::Edit>` (`None` = nothing to do):
