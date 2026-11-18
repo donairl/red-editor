@@ -1534,6 +1534,8 @@ impl TextEditorApp {
             ShortcutAction::ZenMode => self.toggle_zen_mode(ctx),
             ShortcutAction::MarkdownPreview => self.toggle_markdown_preview(),
             ShortcutAction::ToggleConsole => self.toggle_console(ctx),
+            ShortcutAction::ToggleAgent => self.toggle_agent_panel(ctx),
+            ShortcutAction::NewAgentSession => self.new_agent_session(ctx),
             ShortcutAction::FindInFiles => self.open_search(ctx),
             ShortcutAction::Find => self.open_find(ctx, false),
             ShortcutAction::Replace => self.open_find(ctx, true),
@@ -3097,6 +3099,8 @@ impl eframe::App for TextEditorApp {
                         search_tooltip: self.i18n.t("edit.find_in_files"),
                         source_control_tooltip: self.i18n.t("activity.source_control"),
                         console_tooltip: self.i18n.t("activity.console"),
+                        agent_open: self.show_agent,
+                        agent_tooltip: self.i18n.t("activity.agent"),
                         changes: self.git.change_count(),
                     };
                     activity_bar::show(ui, items)
@@ -3117,6 +3121,9 @@ impl eframe::App for TextEditorApp {
             }
             if activity.console_clicked {
                 self.toggle_console(&ctx);
+            }
+            if activity.agent_clicked {
+                self.toggle_agent_panel(&ctx);
             }
         }
 

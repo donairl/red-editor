@@ -142,6 +142,8 @@ pub const COMMANDS: &[Command] = &[
     command("view.zen_mode", ShortcutAction::ZenMode),
     command("view.markdown_preview", ShortcutAction::MarkdownPreview),
     command("view.console", ShortcutAction::ToggleConsole),
+    command("view.agent", ShortcutAction::ToggleAgent),
+    command("agent.new_session", ShortcutAction::NewAgentSession),
     command("view.source_control", ShortcutAction::SourceControl),
     command("view.blame", ShortcutAction::Blame),
     command("view.git_graph", ShortcutAction::GitGraph),

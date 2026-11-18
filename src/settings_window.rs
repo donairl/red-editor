@@ -106,6 +106,19 @@ impl TextEditorApp {
                 });
             ui.end_row();
         });
+
+        ui.separator();
+        ui.heading(self.i18n.t("settings.agent"));
+        egui::Grid::new("settings_agent").num_columns(2).show(ui, |ui| {
+            ui.label(self.i18n.t("settings.agent_command"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.agent_settings.command)
+                    .hint_text(self.i18n.t("settings.agent_command_hint"))
+                    .desired_width(320.0),
+            );
+            ui.end_row();
+        });
+        ui.label(egui::RichText::new(self.i18n.t("settings.agent_restart_note")).weak().small());
     }
 }
 

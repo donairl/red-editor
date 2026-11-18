@@ -218,6 +218,19 @@ impl TextEditorApp {
             self.toggle_console(&ctx);
             ui.close();
         }
+        let agent_label = self.i18n.t("view.agent");
+        let agent_shortcut = shortcuts::label(&ctx, &shortcuts::TOGGLE_AGENT);
+        if ui
+            .add(
+                egui::Button::new(agent_label)
+                    .selected(self.show_agent)
+                    .shortcut_text(agent_shortcut),
+            )
+            .clicked()
+        {
+            self.toggle_agent_panel(&ctx);
+            ui.close();
+        }
         if ui
             .add(egui::Button::new(self.i18n.t("view.git_log")).selected(self.show_git_log))
             .clicked()

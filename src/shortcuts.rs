@@ -48,6 +48,7 @@ pub const PRETTIFY: KeyboardShortcut = cmd_shift(Key::I);
 pub const ZEN_MODE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F11);
 pub const MARKDOWN_PREVIEW: KeyboardShortcut = cmd_shift(Key::V);
 pub const TOGGLE_CONSOLE: KeyboardShortcut = cmd(Key::Backtick);
+pub const TOGGLE_AGENT: KeyboardShortcut = cmd_shift(Key::A);
 pub const FIND: KeyboardShortcut = cmd(Key::F);
 pub const REPLACE: KeyboardShortcut = cmd(Key::H);
 pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
@@ -131,6 +132,10 @@ pub enum ShortcutAction {
     ZenMode,
     MarkdownPreview,
     ToggleConsole,
+    /// Show or hide the Agent panel.
+    ToggleAgent,
+    /// A new conversation with the agent (a Command Palette entry; no key).
+    NewAgentSession,
     FindInFiles,
     Find,
     Replace,
@@ -191,6 +196,7 @@ impl ShortcutAction {
                 | GotoSymbol
                 | FindInFiles
                 | ToggleConsole
+                | ToggleAgent
                 | SourceControl
                 | GitGraph
                 | DiffWithHead
@@ -230,6 +236,7 @@ impl ShortcutAction {
             ZenMode => ZEN_MODE,
             MarkdownPreview => MARKDOWN_PREVIEW,
             ToggleConsole => TOGGLE_CONSOLE,
+            ToggleAgent => TOGGLE_AGENT,
             FindInFiles => FIND_IN_FILES,
             Find => FIND,
             Replace => REPLACE,
@@ -257,7 +264,9 @@ impl ShortcutAction {
             ZoomReset => ZOOM_RESET,
             SplitEditor => SPLIT_EDITOR,
             OpenSettings => OPEN_SETTINGS,
-            SelectTheme(_) | FoldAll | UnfoldAll | DiffWithFile | AutoSave => return None,
+            SelectTheme(_) | FoldAll | UnfoldAll | DiffWithFile | AutoSave | NewAgentSession => {
+                return None;
+            }
         })
     }
 
@@ -321,6 +330,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (UNFOLD, Unfold),
         (UNFOLD_SHIFTED, Unfold),
         (MARKDOWN_PREVIEW, MarkdownPreview),
+        (TOGGLE_AGENT, ToggleAgent),
         (TOGGLE_CONSOLE, ToggleConsole),
         (PRETTIFY, Prettify),
         (SAVE_AS, SaveAs),
@@ -484,6 +494,7 @@ mod tests {
             (egui::Key::Num0, ctrl, ShortcutAction::ZoomReset),
             (egui::Key::Backslash, ctrl, ShortcutAction::SplitEditor),
             (egui::Key::Comma, ctrl, ShortcutAction::OpenSettings),
+            (egui::Key::A, ctrl_shift, ShortcutAction::ToggleAgent),
         ] {
             let mut got = None;
             let mut output = ctx.run_ui(press(key, mods), |ui| {
