@@ -101,6 +101,7 @@
   "view.split_editor": "Split Editor",
   "view.markdown_preview": "Markdown Preview",
   "view.console": "Console",
+  "view.new_console": "New terminal",
   "preview.too_large": "Document too large to preview.",
   "preview.outline": "Outline",
   "preview.prev_heading": "Previous heading",
@@ -183,6 +184,7 @@
   "console.title": "CONSOLE",
   "console.hide": "Hide panel",
   "console.kill": "Kill terminal",
+  "console.tab": "Terminal {n}",
 
   "git.branches": "Branches",
   "git.branch_tooltip": "Git branch: switch, create, fetch, pull, push",

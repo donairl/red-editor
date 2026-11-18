@@ -101,6 +101,7 @@
   "view.split_editor": "Bagi Editor",
   "view.markdown_preview": "Pratinjau Markdown",
   "view.console": "Konsol",
+  "view.new_console": "Terminal baru",
   "preview.too_large": "Dokumen terlalu besar untuk dipratinjau.",
   "preview.outline": "Daftar isi",
   "preview.prev_heading": "Heading sebelumnya",
@@ -183,6 +184,7 @@
   "console.title": "KONSOL",
   "console.hide": "Sembunyikan panel",
   "console.kill": "Hentikan terminal",
+  "console.tab": "Terminal {n}",
 
   "git.branches": "Branch",
   "git.branch_tooltip": "Branch git: ganti, buat, fetch, pull, push",

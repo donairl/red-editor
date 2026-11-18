@@ -92,6 +92,18 @@ impl Terminal {
         Self::spawn_command(ctx, CommandBuilder::new_default_prog(), cwd)
     }
 
+    /// Starts `command` on its own pseudo-terminal. The tests of the
+    /// Console panel need a shell that ends, which the user's does not do
+    /// on its own.
+    #[cfg(test)]
+    pub(crate) fn spawn_test_command(
+        ctx: &egui::Context,
+        command: CommandBuilder,
+        cwd: &Path,
+    ) -> Result<Self, String> {
+        Self::spawn_command(ctx, command, cwd)
+    }
+
     fn spawn_command(
         ctx: &egui::Context,
         mut command: CommandBuilder,

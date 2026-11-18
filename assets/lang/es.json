@@ -101,6 +101,7 @@
   "view.split_editor": "Dividir editor",
   "view.markdown_preview": "Vista previa de Markdown",
   "view.console": "Consola",
+  "view.new_console": "Nueva terminal",
   "preview.too_large": "Documento demasiado grande para la vista previa.",
   "preview.outline": "Esquema",
   "preview.prev_heading": "Encabezado anterior",
@@ -183,6 +184,7 @@
   "console.title": "CONSOLA",
   "console.hide": "Ocultar panel",
   "console.kill": "Finalizar terminal",
+  "console.tab": "Terminal {n}",
 
   "git.branches": "Ramas",
   "git.branch_tooltip": "Rama de git: cambiar, crear, fetch, pull, push",

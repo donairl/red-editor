@@ -431,9 +431,11 @@ pub struct TextEditorApp {
     pub menu_focus: Option<egui::Id>,
     /// Show the Console panel (the integrated terminal) below the editor.
     pub show_console: bool,
-    /// The shell of the Console panel, started the first time it is shown.
-    /// Hiding the panel keeps it running.
-    pub console: Option<Terminal>,
+    /// The shells of the Console panel, one per tab. Hiding the panel keeps
+    /// them running.
+    pub consoles: Vec<Terminal>,
+    /// The tab of `consoles` the panel shows.
+    pub active_console_index: usize,
     /// Show the Git Log panel below the editor: every git command the
     /// editor ran, with its output.
     pub show_git_log: bool,
@@ -569,7 +571,8 @@ impl Default for TextEditorApp {
             editor_request: EditorRequest::default(),
             menu_focus: None,
             show_console: false,
-            console: None,
+            consoles: Vec::new(),
+            active_console_index: 0,
             show_git_log: false,
             git_log: GitLogPanel::default(),
             palette: Palette::default(),
@@ -1512,6 +1515,7 @@ impl TextEditorApp {
             ShortcutAction::ZenMode => self.toggle_zen_mode(ctx),
             ShortcutAction::MarkdownPreview => self.toggle_markdown_preview(),
             ShortcutAction::ToggleConsole => self.toggle_console(ctx),
+            ShortcutAction::NewConsole => self.new_console(ctx),
             ShortcutAction::FindInFiles => self.open_search(ctx),
             ShortcutAction::Find => self.open_find(ctx, false),
             ShortcutAction::Replace => self.open_find(ctx, true),
@@ -2894,12 +2898,19 @@ impl eframe::App for TextEditorApp {
         }
 
         // While the Console has focus the shell gets every key, Escape
-        // included, but the shortcut that hides it.
+        // included, but the shortcuts that open or hide a terminal.
         let console_focused =
             self.show_console && ctx.memory(|m| m.has_focus(terminal::widget_id()));
         let shortcut = if console_focused {
-            ctx.input_mut(|i| i.consume_shortcut(&shortcuts::TOGGLE_CONSOLE))
-                .then_some(ShortcutAction::ToggleConsole)
+            ctx.input_mut(|i| {
+                [
+                    (shortcuts::NEW_CONSOLE, ShortcutAction::NewConsole),
+                    (shortcuts::TOGGLE_CONSOLE, ShortcutAction::ToggleConsole),
+                ]
+                .into_iter()
+                .find(|(shortcut, _)| i.consume_shortcut(shortcut))
+                .map(|(_, action)| action)
+            })
         } else {
             ctx.input_mut(consume_shortcut)
         };

@@ -46,7 +46,7 @@ pub fn info_text() -> String {
 
 /// The keyboard shortcuts the Shortcuts page lists: translation key and
 /// shortcut, in menu order.
-fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 31] {
+fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 32] {
     [
         ("file.new_tab", shortcuts::NEW_TAB),
         ("file.open_file", shortcuts::OPEN_FILE),
@@ -76,6 +76,7 @@ fn shortcut_rows() -> [(&'static str, egui::KeyboardShortcut); 31] {
         ("view.blame", shortcuts::BLAME),
         ("view.diff_head", shortcuts::DIFF_VIEW),
         ("view.console", shortcuts::TOGGLE_CONSOLE),
+        ("view.new_console", shortcuts::NEW_CONSOLE),
         ("view.zen_mode", shortcuts::ZEN_MODE),
         ("view.zoom_in", shortcuts::ZOOM_IN),
         ("view.zoom_reset", shortcuts::ZOOM_RESET),

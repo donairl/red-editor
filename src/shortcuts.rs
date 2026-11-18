@@ -48,6 +48,8 @@ pub const PRETTIFY: KeyboardShortcut = cmd_shift(Key::I);
 pub const ZEN_MODE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F11);
 pub const MARKDOWN_PREVIEW: KeyboardShortcut = cmd_shift(Key::V);
 pub const TOGGLE_CONSOLE: KeyboardShortcut = cmd(Key::Backtick);
+/// A second terminal tab beside the first one.
+pub const NEW_CONSOLE: KeyboardShortcut = cmd_shift(Key::Backtick);
 pub const FIND: KeyboardShortcut = cmd(Key::F);
 pub const REPLACE: KeyboardShortcut = cmd(Key::H);
 pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
@@ -131,6 +133,8 @@ pub enum ShortcutAction {
     ZenMode,
     MarkdownPreview,
     ToggleConsole,
+    /// Open another terminal tab in the Console panel.
+    NewConsole,
     FindInFiles,
     Find,
     Replace,
@@ -191,6 +195,7 @@ impl ShortcutAction {
                 | GotoSymbol
                 | FindInFiles
                 | ToggleConsole
+                | NewConsole
                 | SourceControl
                 | GitGraph
                 | DiffWithHead
@@ -230,6 +235,7 @@ impl ShortcutAction {
             ZenMode => ZEN_MODE,
             MarkdownPreview => MARKDOWN_PREVIEW,
             ToggleConsole => TOGGLE_CONSOLE,
+            NewConsole => NEW_CONSOLE,
             FindInFiles => FIND_IN_FILES,
             Find => FIND,
             Replace => REPLACE,
@@ -321,6 +327,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (UNFOLD, Unfold),
         (UNFOLD_SHIFTED, Unfold),
         (MARKDOWN_PREVIEW, MarkdownPreview),
+        (NEW_CONSOLE, NewConsole),
         (TOGGLE_CONSOLE, ToggleConsole),
         (PRETTIFY, Prettify),
         (SAVE_AS, SaveAs),
@@ -484,6 +491,8 @@ mod tests {
             (egui::Key::Num0, ctrl, ShortcutAction::ZoomReset),
             (egui::Key::Backslash, ctrl, ShortcutAction::SplitEditor),
             (egui::Key::Comma, ctrl, ShortcutAction::OpenSettings),
+            (egui::Key::Backtick, ctrl, ShortcutAction::ToggleConsole),
+            (egui::Key::Backtick, ctrl_shift, ShortcutAction::NewConsole),
         ] {
             let mut got = None;
             let mut output = ctx.run_ui(press(key, mods), |ui| {

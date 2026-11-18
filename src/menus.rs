@@ -218,6 +218,13 @@ impl TextEditorApp {
             self.toggle_console(&ctx);
             ui.close();
         }
+        if menu_item(
+            ui,
+            self.i18n.t("view.new_console"),
+            &shortcuts::label(&ctx, &shortcuts::NEW_CONSOLE),
+        ) {
+            self.new_console(&ctx);
+        }
         if ui
             .add(egui::Button::new(self.i18n.t("view.git_log")).selected(self.show_git_log))
             .clicked()
