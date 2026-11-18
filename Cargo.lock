@@ -3126,6 +3126,7 @@ dependencies = [
  "portable-pty",
  "pulldown-cmark",
  "rfd",
+ "serde",
  "serde_json",
  "similar",
  "syntect",
