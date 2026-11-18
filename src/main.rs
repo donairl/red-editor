@@ -3,7 +3,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod about;
+mod acp;
 mod activity_bar;
+mod agent_panel;
+mod agent_settings;
 mod app;
 mod auto_edit;
 mod blame;

@@ -18,6 +18,8 @@ portable-pty = "0.9"
 vt100 = "0.18"
 similar = "2"
 trash = "5"
+# Agent Client Protocol wire types (serde only; no async runtime).
+agent-client-protocol-schema = { version = "1.18", default-features = false }
 
 
 # winit 0.30.13 with a fix for moving the window onto a monitor with another
