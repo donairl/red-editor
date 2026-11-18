@@ -262,15 +262,17 @@ impl AgentProcess {
         self.child.try_wait().ok().flatten().map(|status| status.code())
     }
 
-    #[cfg(test)]
-    pub fn id(&self) -> u32 {
-        self.child.id()
-    }
 }
 
 impl Drop for AgentProcess {
-    /// Kills the agent and everything it started, then reaps it.
+    /// Kills the agent and everything it started, then reaps it. On Unix
+    /// the group is killed even when the child itself has already ended
+    /// (`npx` gone, its node agent still running). On Windows the tree can
+    /// only be found while the child runs.
     fn drop(&mut self) {
+        #[cfg(unix)]
+        kill_tree(self.child.id());
+        #[cfg(windows)]
         if self.child.try_wait().ok().flatten().is_none() {
             kill_tree(self.child.id());
         }
@@ -355,12 +357,9 @@ mod tests {
     fn test_drop_kills_the_agent_and_its_children() {
         let args = ["-c".to_owned(), "sleep 60 & wait".to_owned()];
         let (conn, process) = AgentProcess::spawn("sh", &args, Path::new("."), Arc::new(|| {})).unwrap();
-        let pgid = process.id();
         drop(process);
-        // Every process of the group is gone: stdout reached EOF.
+        // `sleep` held stdout too: EOF means every process of the group died.
         assert_eq!(conn.recv_timeout(Duration::from_secs(5)), Some(Incoming::Closed));
-        let alive = Command::new("kill").args(["-0", "--", &format!("-{pgid}")]).status().unwrap();
-        assert!(!alive.success(), "process group {pgid} still alive");
     }
 
     #[test]

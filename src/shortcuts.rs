@@ -197,6 +197,7 @@ impl ShortcutAction {
                 | FindInFiles
                 | ToggleConsole
                 | ToggleAgent
+                | NewAgentSession
                 | SourceControl
                 | GitGraph
                 | DiffWithHead

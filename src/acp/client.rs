@@ -19,8 +19,8 @@ use serde_json::Value;
 use super::model::{Notice, Transcript};
 use super::transport::{AgentProcess, Connection, Incoming, RpcError};
 
-/// How long `initialize`, `authenticate` and `session/new` may take.
-/// Prompt turns have no limit; the user has Stop.
+/// How long `initialize` and `session/new` may take. Sign-in (a browser
+/// round trip) and prompt turns have no limit.
 pub const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Lines of stderr shown when the agent exits.
 const EXIT_STDERR_LINES: usize = 20;
@@ -197,7 +197,7 @@ impl Client {
     fn send(&mut self, pending: Pending, method: &'static str, params: Value, now: Instant) {
         let id = self.conn.request(method, params);
         self.pending.insert(id, pending);
-        if pending != Pending::Prompt {
+        if matches!(pending, Pending::Initialize | Pending::NewSession) {
             self.deadline = Some((now + SETUP_TIMEOUT, method));
         }
     }
@@ -211,7 +211,8 @@ impl Client {
         self.send(Pending::NewSession, "session/new", params(request), now);
     }
 
-    fn is_finished(&self) -> bool {
+    /// The agent failed or exited; only Restart helps.
+    pub fn is_finished(&self) -> bool {
         matches!(self.phase, Phase::Failed(_) | Phase::Exited { .. })
     }
 

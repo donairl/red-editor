@@ -106,6 +106,7 @@ impl TextEditorApp {
             _ => self.start_agent(ctx),
         }
         self.show_agent = true;
+        ctx.memory_mut(|m| m.request_focus(input_id()));
     }
 
     /// Once per frame, shown or not: the agent keeps working while hidden.
@@ -115,6 +116,10 @@ impl TextEditorApp {
             client.poll(now);
             if client.wants_repaint(now) {
                 ctx.request_repaint_after(Duration::from_millis(100));
+            } else if !client.is_finished() {
+                // Notice a child that ends without a word (a process it
+                // started still holds its pipes) even while the app idles.
+                ctx.request_repaint_after(Duration::from_millis(500));
             }
         }
     }
@@ -155,14 +160,21 @@ impl TextEditorApp {
                         StartError::Io(error) => i18n.tf("agent.start_failed", &[("error", error)]),
                     };
                     ui.label(message);
-                    if matches!(error, StartError::NoFolder) {
-                        clicks.open_folder = ui.button(i18n.t("agent.open_folder")).clicked();
-                    } else {
-                        clicks.open_settings = ui.button(i18n.t("agent.open_settings")).clicked();
-                    }
+                    ui.horizontal(|ui| {
+                        if matches!(error, StartError::NoFolder) {
+                            clicks.open_folder = ui.button(i18n.t("agent.open_folder")).clicked();
+                        } else {
+                            clicks.open_settings = ui.button(i18n.t("agent.open_settings")).clicked();
+                        }
+                        clicks.restart |= ui.button(i18n.t("agent.restart")).clicked();
+                    });
                     return;
                 }
-                let Some(client) = client else { return };
+                // Restored open from the last run: nothing started yet.
+                let Some(client) = client else {
+                    clicks.restart |= ui.button(i18n.t("agent.restart")).clicked();
+                    return;
+                };
 
                 // Bottom up: the prompt box first, then the transcript fills
                 // what is left above it.

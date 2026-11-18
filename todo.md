@@ -74,6 +74,21 @@ Last updated 2026-11-06.
 
 ## Languages and tooling
 
+- [ ] **Agent panel (ACP)** — stage 1 built 2026-11-18 on branch
+  `feat/acp-agent-panel` (`src/acp/`, `src/agent_panel.rs`): any Agent
+  Client Protocol agent from Settings → Agent, chat with streaming, Stop,
+  New Session, sign-in, Restart; `Ctrl+Shift+A`. Not yet hand-checked with
+  a real agent. Spec: `docs/superpowers/specs/2026-11-18-acp-agent-panel-design.md`,
+  plan: `docs/superpowers/plans/2026-11-18-acp-agent-panel-stage1.md`.
+  Next: stage 2 (tool calls, permission, plan), then fs, terminals,
+  editor context. Known gaps from review:
+  - Windows: `npx` is `npx.cmd`; resolve PATHEXT before spawning (type
+    `npx.cmd …` meanwhile). The process tree is only killed while the
+    direct child runs (a Job Object would fix it).
+  - Editor shortcuts (Alt+Up, Ctrl+/, Ctrl+D…) still act on the document
+    while the agent prompt has focus.
+  - Unix tree kill runs the `kill` binary; a direct `killpg` would avoid
+    the extra process.
 - [ ] **Minimal LSP client** — diagnostics first (squiggles + a Problems
   panel) from `rust-analyzer` / `gopls` / `tsserver`, then Go to Definition
   (`F12`) and hover. Biggest feature, biggest cost.
