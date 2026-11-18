@@ -1,7 +1,7 @@
 # Todo
 
 Improvement ideas for Red Text Editor, roughly in order of value per effort.
-Last updated 2026-11-06.
+Last updated 2026-11-18.
 
 ## High priority (daily use)
 
@@ -74,21 +74,35 @@ Last updated 2026-11-06.
 
 ## Languages and tooling
 
-- [ ] **Agent panel (ACP)** — stage 1 built 2026-11-18 on branch
-  `feat/acp-agent-panel` (`src/acp/`, `src/agent_panel.rs`): any Agent
-  Client Protocol agent from Settings → Agent, chat with streaming, Stop,
-  New Session, sign-in, Restart; `Ctrl+Shift+A`. Not yet hand-checked with
-  a real agent. Spec: `docs/superpowers/specs/2026-11-18-acp-agent-panel-design.md`,
+- [ ] **Agent panel (ACP)** — stage 1 merged 2026-11-18 (`src/acp/`,
+  `src/agent_panel.rs`): any Agent Client Protocol agent from Settings →
+  Agent, chat with streaming, Stop, New Session, sign-in, Restart;
+  `Ctrl+Shift+A`. Spec: `docs/superpowers/specs/2026-11-18-acp-agent-panel-design.md`,
   plan: `docs/superpowers/plans/2026-11-18-acp-agent-panel-stage1.md`.
-  Next: stage 2 (tool calls, permission, plan), then fs, terminals,
-  editor context. Known gaps from review:
-  - Windows: `npx` is `npx.cmd`; resolve PATHEXT before spawning (type
-    `npx.cmd …` meanwhile). The process tree is only killed while the
-    direct child runs (a Job Object would fix it).
-  - Editor shortcuts (Alt+Up, Ctrl+/, Ctrl+D…) still act on the document
-    while the agent prompt has focus.
-  - Unix tree kill runs the `kill` binary; a direct `killpg` would avoid
-    the extra process.
+  - [ ] **Hand check** with a real agent (`npx @zed-industries/claude-code-acp`
+    or `gemini --experimental-acp`): the checklist in Task 10 of the plan.
+  - [ ] **Stage 2** — tool-call cards, permission cards (Allow/Reject; today
+    every request is declined), plan checklist.
+  - [ ] **Stage 3** — `fs/read_text_file` / `fs/write_text_file` through
+    the open buffers, unsaved badge, Diff / Save / Save All Agent Edits.
+  - [ ] **Stage 4** — terminals for the agent (`terminal/*`), live output
+    in cards.
+  - [ ] **Stage 5** — editor context: `@` file chips, Add Selection to
+    Agent.
+  - [ ] **Stage 6** — README (en, id) and release notes.
+  - [ ] **Spec drift** — the spec still describes `AgentEvent`/`Outgoing`,
+    a pending map in `transport.rs` and an `examples/` fake agent; the code
+    keeps the pending map in `Client`, reports exit as a `Phase`, and
+    tests with an in-thread fake (`src/acp/fake_agent.rs`). Update the
+    spec before writing the stage 2 plan.
+  - Known gaps from review:
+    - Windows: `npx` is `npx.cmd`; resolve PATHEXT before spawning (type
+      `npx.cmd …` meanwhile). The process tree is only killed while the
+      direct child runs (a Job Object would fix it).
+    - Editor shortcuts (Alt+Up, Ctrl+/, Ctrl+D…) still act on the document
+      while the agent prompt has focus.
+    - Unix tree kill runs the `kill` binary (and relies on `kill --`,
+      which BSD/macOS may lack); a direct `killpg` would avoid both.
 - [ ] **Minimal LSP client** — diagnostics first (squiggles + a Problems
   panel) from `rust-analyzer` / `gopls` / `tsserver`, then Go to Definition
   (`F12`) and hover. Biggest feature, biggest cost.
@@ -97,8 +111,10 @@ Last updated 2026-11-06.
   interfaces, types, enums, namespaces), C / C++ (functions, methods,
   structs, classes, enums, namespaces, typedefs, `using`, `#define`) and
   Markdown headings (Go to Symbol only; Go to Definition stays code-only).
-- [ ] **Several Console terminals** — a `+` for another shell tab in the
-  Console panel, and a choice of shell (`bash`, `zsh`, `fish`).
+- [x] **Several Console terminals** — done 2026-11-18 (`src/console_panel.rs`):
+  New terminal (`Ctrl+Shift+\``) opens another shell tab, labelled
+  Terminal N, each killed on its own. Still to do: a choice of shell
+  (`bash`, `zsh`, `fish`).
 
 ## Settings
 
@@ -117,6 +133,13 @@ Last updated 2026-11-06.
 
 ## Tech debt
 
+- [ ] **Clippy on tests** — `cargo clippy --all-targets -- -D warnings`
+  fails on `src/console_panel.rs:271` (`app.show_console = true` after
+  `Default::default()`; use a struct literal). CI runs neither clippy nor
+  `cargo fmt`, and most files are not rustfmt-clean.
+- [ ] **Flaky test** — `app::tests::test_spawn_window_starts_a_process_or_reports_why_not`
+  failed once in a full run and passed alone; it runs `current_exe()`, so
+  a shared or busy target dir may be the cause.
 - [x] **Split `src/app.rs`** — done 2026-11-03: 7,092 → 4,812 lines;
   `shortcuts.rs`, `menus.rs`, `status_bar.rs`, `console_panel.rs`,
   `editor_view.rs`. Left for later: `disk.rs` (poll/reload on disk change)
