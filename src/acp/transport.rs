@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -132,10 +132,7 @@ impl Connection {
     /// The next message, if one has arrived. `None` once the reader has
     /// ended and its `Closed` was taken, so a drain loop terminates.
     pub fn try_recv(&self) -> Option<Incoming> {
-        match self.incoming.try_recv() {
-            Ok(message) => Some(message),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
-        }
+        self.incoming.try_recv().ok()
     }
 
     #[cfg(test)]
