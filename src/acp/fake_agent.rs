@@ -7,6 +7,11 @@
 //!   in stage 1), echoes the error code as agent text, ends the turn.
 //! - `"wait"`: does not answer until `session/cancel`, then ends the turn
 //!   with `cancelled`.
+//! - `"orphan"`: answers with an error whose id is `null`.
+//!
+//! It also offers a `terminal` sign-in method (which Red must not show),
+//! fails `authenticate` for any method but `login`, and before answering a
+//! second `session/new` streams a chunk for the previous session.
 //! - anything else: streams `"Hello"` and `" world"`, ends with `end_turn`.
 
 use std::io::{BufRead, BufReader, PipeReader, PipeWriter, Write};
@@ -46,11 +51,11 @@ fn send(out: &mut PipeWriter, message: Value) {
     let _ = writeln!(out, "{message}");
 }
 
-fn chunk(out: &mut PipeWriter, text: &str) {
+fn chunk(out: &mut PipeWriter, session: &str, text: &str) {
     send(
         out,
         json!({"jsonrpc": "2.0", "method": "session/update", "params": {
-            "sessionId": "s1",
+            "sessionId": session,
             "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}
         }}),
     );
@@ -62,6 +67,8 @@ fn end_turn(out: &mut PipeWriter, id: &Value, reason: &str) {
 
 fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
     let mut authed = false;
+    // Sessions handed out so far; the current one is `s{sessions}`.
+    let mut sessions = 0;
     // The prompt waiting for Red's answer to our request, or for a cancel.
     let mut open_prompt: Option<Value> = None;
     for line in BufReader::new(input).lines().map_while(Result::ok) {
@@ -76,7 +83,10 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                     return;
                 }
                 let auth = if options.require_auth {
-                    json!([{"id": "login", "name": "Log in", "description": "Sign in with a browser"}])
+                    json!([
+                        {"id": "login", "name": "Log in", "description": "Sign in with a browser"},
+                        {"id": "cli", "name": "Terminal login", "type": "terminal", "args": ["--login"]}
+                    ])
                 } else {
                     json!([])
                 };
@@ -87,15 +97,24 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                 }}));
             }
             Some("authenticate") => {
-                authed = true;
-                send(&mut out, json!({"jsonrpc": "2.0", "id": id, "result": {}}));
+                if message["params"]["methodId"] == "login" {
+                    authed = true;
+                    send(&mut out, json!({"jsonrpc": "2.0", "id": id, "result": {}}));
+                } else {
+                    send(&mut out, json!({"jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32603, "message": "Sign-in failed"}}));
+                }
             }
             Some("session/new") => {
                 if options.require_auth && !authed {
                     send(&mut out, json!({"jsonrpc": "2.0", "id": id,
                         "error": {"code": -32000, "message": "Authentication required"}}));
                 } else {
-                    send(&mut out, json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": "s1"}}));
+                    if sessions > 0 {
+                        chunk(&mut out, &format!("s{sessions}"), "stale");
+                    }
+                    sessions += 1;
+                    send(&mut out, json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": format!("s{sessions}")}}));
                 }
             }
             Some("session/prompt") => {
@@ -117,9 +136,12 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                             "params": {"sessionId": "s1", "path": "/tmp/x"}}));
                     }
                     "wait" => open_prompt = Some(id),
+                    "orphan" => send(&mut out, json!({"jsonrpc": "2.0", "id": null,
+                        "error": {"code": -32700, "message": "Parse error"}})),
                     _ => {
-                        chunk(&mut out, "Hello");
-                        chunk(&mut out, " world");
+                        let session = format!("s{sessions}");
+                        chunk(&mut out, &session, "Hello");
+                        chunk(&mut out, &session, " world");
                         end_turn(&mut out, &id, "end_turn");
                     }
                 }
@@ -137,7 +159,7 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                     Some("fs-1") => message["error"]["code"].to_string(),
                     _ => continue,
                 };
-                chunk(&mut out, &echo);
+                chunk(&mut out, &format!("s{sessions}"), &echo);
                 if let Some(prompt) = open_prompt.take() {
                     end_turn(&mut out, &prompt, "end_turn");
                 }

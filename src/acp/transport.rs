@@ -10,7 +10,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -57,6 +58,9 @@ pub enum Incoming {
     /// The agent asks Red for something; answer with [`Connection::respond`].
     Request { id: Value, method: String, params: Value },
     Notification { method: String, params: Value },
+    /// An error answer with `"id": null`: the agent could not tell which
+    /// request it answers (for example one it could not parse).
+    OrphanError(RpcError),
     /// The agent's stdout ended. Sent once, last.
     Closed,
 }
@@ -74,8 +78,12 @@ pub fn parse_line(line: &str) -> Option<Incoming> {
             _ => Incoming::Notification { method: method.to_owned(), params },
         });
     }
+    let error = object.get("error").filter(|error| !error.is_null());
+    if let (Some(Value::Null), Some(error)) = (object.get("id"), error) {
+        return Some(Incoming::OrphanError(RpcError::from_value(error)));
+    }
     let id = object.get("id")?.as_u64()?;
-    let result = match object.get("error") {
+    let result = match error {
         Some(error) => Err(RpcError::from_value(error)),
         None => Ok(object.get("result").cloned().unwrap_or(Value::Null)),
     };
@@ -212,12 +220,18 @@ impl AgentProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         crate::process::hide_console(&mut command);
+        // Its own process group, so Drop can kill what the agent started
+        // too (`npx` runs the real agent as a child).
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = command.spawn()?;
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr_pipe = child.stderr.take().expect("stderr is piped");
         let stderr = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_LINES)));
         let sink = Arc::clone(&stderr);
+        // Owned from here on, so every early return below kills the child.
+        let process = AgentProcess { child, stderr };
         thread::Builder::new()
             .name("acp-stderr".to_owned())
             .spawn(move || {
@@ -233,7 +247,7 @@ impl AgentProcess {
                     lines.push_back(text);
                 }
             })?;
-        Ok((Connection::new(stdout, stdin, waker), AgentProcess { child, stderr }))
+        Ok((Connection::new(stdout, stdin, waker), process))
     }
 
     /// The last `n` lines the agent wrote to stderr, oldest first.
@@ -242,26 +256,46 @@ impl AgentProcess {
         lines.iter().skip(lines.len().saturating_sub(n)).cloned().collect()
     }
 
-    /// The exit code, waiting at most `wait` for the process to end.
-    pub fn exit_code_within(&mut self, wait: Duration) -> Option<i32> {
-        let until = Instant::now() + wait;
-        loop {
-            if let Ok(Some(status)) = self.child.try_wait() {
-                return status.code();
-            }
-            if Instant::now() >= until {
-                return None;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
+    /// `Some(code)` once the process has ended (`code` is `None` when a
+    /// signal ended it); `None` while it runs. Never blocks.
+    pub fn try_exit(&mut self) -> Option<Option<i32>> {
+        self.child.try_wait().ok().flatten().map(|status| status.code())
+    }
+
+    #[cfg(test)]
+    pub fn id(&self) -> u32 {
+        self.child.id()
     }
 }
 
 impl Drop for AgentProcess {
+    /// Kills the agent and everything it started, then reaps it.
     fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            kill_tree(self.child.id());
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// The agent's process group (Unix; see `process_group(0)` in `spawn`).
+#[cfg(unix)]
+fn kill_tree(pid: u32) {
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pid}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// The agent and its child processes.
+#[cfg(windows)]
+fn kill_tree(pid: u32) {
+    let mut command = Command::new("taskkill");
+    command.args(["/F", "/T", "/PID", &pid.to_string()]);
+    crate::process::hide_console(&mut command);
+    let _ = command.stdout(Stdio::null()).stderr(Stdio::null()).status();
 }
 
 #[cfg(test)]
@@ -294,6 +328,39 @@ mod tests {
                 result: Err(RpcError { code: -32000, message: "Authentication required".to_owned() }),
             })
         );
+    }
+
+    #[test]
+    fn test_parse_null_id_error_and_null_error_field() {
+        assert_eq!(
+            parse_line(r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#),
+            Some(Incoming::OrphanError(RpcError { code: -32700, message: "Parse error".to_owned() }))
+        );
+        assert_eq!(
+            parse_line(r#"{"jsonrpc":"2.0","id":5,"result":{},"error":null}"#),
+            Some(Incoming::Response { id: 5, result: Ok(json!({})) })
+        );
+    }
+
+    #[test]
+    fn test_spawn_missing_program_is_not_found() {
+        let error = AgentProcess::spawn("red-no-such-acp-agent", &[], Path::new("."), Arc::new(|| {}))
+            .err()
+            .expect("spawn fails");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_drop_kills_the_agent_and_its_children() {
+        let args = ["-c".to_owned(), "sleep 60 & wait".to_owned()];
+        let (conn, process) = AgentProcess::spawn("sh", &args, Path::new("."), Arc::new(|| {})).unwrap();
+        let pgid = process.id();
+        drop(process);
+        // Every process of the group is gone: stdout reached EOF.
+        assert_eq!(conn.recv_timeout(Duration::from_secs(5)), Some(Incoming::Closed));
+        let alive = Command::new("kill").args(["-0", "--", &format!("-{pgid}")]).status().unwrap();
+        assert!(!alive.success(), "process group {pgid} still alive");
     }
 
     #[test]

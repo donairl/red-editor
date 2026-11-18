@@ -24,6 +24,12 @@ use super::transport::{AgentProcess, Connection, Incoming, RpcError};
 pub const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Lines of stderr shown when the agent exits.
 const EXIT_STDERR_LINES: usize = 20;
+/// After the child process ends, how long its stdout may stay open (held
+/// by a process the agent started) before the exit is reported anyway.
+const CHILD_EXIT_GRACE: Duration = Duration::from_millis(500);
+/// How long after an exit the client keeps looking for the exit code and
+/// the last stderr lines.
+const EXIT_SETTLE: Duration = Duration::from_secs(2);
 
 /// A way to sign in that the agent offered.
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +73,10 @@ pub struct Client {
     pending: HashMap<u64, Pending>,
     /// When the outstanding setup request times out, and its method.
     deadline: Option<(Instant, &'static str)>,
+    /// The child's exit code once it has ended (inner `None`: by a signal).
+    exit_code: Option<Option<i32>>,
+    /// When the child was seen ended, or the exit reported.
+    ended_at: Option<Instant>,
 }
 
 fn params(value: impl serde::Serialize) -> Value {
@@ -87,6 +97,8 @@ impl Client {
             auth_methods: Vec::new(),
             pending: HashMap::new(),
             deadline: None,
+            exit_code: None,
+            ended_at: None,
         };
         // Stage 1 offers no file system and no terminals.
         let request = InitializeRequest::new(ProtocolVersion::V1)
@@ -108,7 +120,8 @@ impl Client {
                 Incoming::Response { id, result } => self.on_response(id, result, now),
                 Incoming::Request { id, method, params } => self.on_request(id, &method, params),
                 Incoming::Notification { method, params } => self.on_notification(&method, params),
-                Incoming::Closed => self.on_closed(),
+                Incoming::OrphanError(error) => self.on_orphan_error(error),
+                Incoming::Closed => self.on_closed(now),
             }
         }
         if let Some((deadline, method)) = self.deadline
@@ -116,12 +129,15 @@ impl Client {
         {
             self.fail(format!("the agent did not answer `{method}` within 30 s"));
         }
+        self.watch_process(now);
     }
 
-    /// A setup request is outstanding, so the UI should keep repainting to
-    /// notice the timeout.
-    pub fn is_waiting_on_setup(&self) -> bool {
+    /// Something time-based is pending (a setup timeout, an exit settling),
+    /// so the UI should keep repainting even without messages.
+    pub fn wants_repaint(&self, now: Instant) -> bool {
         self.deadline.is_some()
+            || (self.process.is_some()
+                && self.ended_at.is_some_and(|at| now.duration_since(at) < EXIT_SETTLE))
     }
 
     /// Starts a turn; `false` unless the session is ready.
@@ -188,6 +204,9 @@ impl Client {
 
     fn request_session(&mut self, now: Instant) {
         self.phase = Phase::CreatingSession;
+        // Updates for the old session, still streaming after a cancel,
+        // must not land in the new transcript.
+        self.session_id = None;
         let request = NewSessionRequest::new(self.cwd.clone());
         self.send(Pending::NewSession, "session/new", params(request), now);
     }
@@ -222,6 +241,12 @@ impl Client {
                     Pending::Prompt => {
                         self.transcript.notice(Notice::Error(error.message));
                         self.phase = Phase::Ready;
+                    }
+                    // A failed sign-in (browser closed, wrong account): let
+                    // the user try again.
+                    Pending::Authenticate if !self.auth_methods.is_empty() => {
+                        self.transcript.notice(Notice::Error(error.message));
+                        self.phase = Phase::NeedsAuth(self.auth_methods.clone());
                     }
                     _ => self.fail(error.message),
                 }
@@ -286,20 +311,57 @@ impl Client {
         }
     }
 
-    fn on_closed(&mut self) {
+    /// An error the agent could not tie to a request: it ends whatever
+    /// Red is waiting for.
+    fn on_orphan_error(&mut self, error: RpcError) {
         if self.is_finished() {
             return;
         }
-        let (code, stderr) = match &mut self.process {
-            Some(process) => (
-                process.exit_code_within(Duration::from_millis(200)),
-                process.stderr_tail(EXIT_STDERR_LINES),
-            ),
-            None => (None, Vec::new()),
-        };
+        if self.phase == Phase::Prompting {
+            self.pending.retain(|_, pending| *pending != Pending::Prompt);
+            self.transcript.notice(Notice::Error(error.message));
+            self.phase = Phase::Ready;
+        } else if self.deadline.is_some() {
+            self.fail(error.message);
+        }
+    }
+
+    fn on_closed(&mut self, now: Instant) {
+        if self.is_finished() {
+            return;
+        }
+        // Never wait here: the code and late stderr lines are filled in by
+        // `watch_process` on later polls.
+        let stderr = self.stderr_tail(EXIT_STDERR_LINES);
         self.pending.clear();
         self.deadline = None;
-        self.phase = Phase::Exited { code, stderr };
+        self.ended_at.get_or_insert(now);
+        self.phase = Phase::Exited { code: self.exit_code.flatten(), stderr };
+    }
+
+    /// Notices the child ending without blocking: reports the exit when a
+    /// process it started keeps stdout open, and fills in the exit code and
+    /// the last stderr lines after an exit.
+    fn watch_process(&mut self, now: Instant) {
+        let Some(process) = &mut self.process else { return };
+        if self.exit_code.is_none()
+            && let Some(code) = process.try_exit()
+        {
+            self.exit_code = Some(code);
+            self.ended_at.get_or_insert(now);
+        }
+        if !self.is_finished()
+            && self.ended_at.is_some_and(|at| now.duration_since(at) >= CHILD_EXIT_GRACE)
+        {
+            self.on_closed(now);
+        }
+        let settling = self.ended_at.is_some_and(|at| now.duration_since(at) < EXIT_SETTLE);
+        if settling && matches!(self.phase, Phase::Exited { .. }) {
+            let latest = (self.exit_code.flatten(), self.stderr_tail(EXIT_STDERR_LINES));
+            if let Phase::Exited { code, stderr } = &mut self.phase {
+                (*code, *stderr) = latest;
+            }
+        }
     }
 }
 
@@ -311,6 +373,9 @@ fn auth_choices(value: &Value) -> Vec<AuthChoice> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        // A `terminal` method is run by the user in a terminal, never sent
+        // to `authenticate`; only agent-handled methods become buttons.
+        .filter(|method| method.get("type").and_then(Value::as_str).is_none_or(|kind| kind == "agent"))
         .filter_map(|method| {
             Some(AuthChoice {
                 id: method.get("id")?.as_str()?.to_owned(),
@@ -322,7 +387,8 @@ fn auth_choices(value: &Value) -> Vec<AuthChoice> {
 }
 
 impl Drop for Client {
-    /// Stops a running turn politely before the process is killed.
+    /// Tells the agent to stop a running turn. Best effort: the process is
+    /// killed right after, when the fields drop.
     fn drop(&mut self) {
         self.cancel();
     }
@@ -428,6 +494,11 @@ mod tests {
         assert_eq!(client.phase, Phase::CreatingSession);
         assert!(client.transcript.entries.is_empty());
         pump(&mut client, |c| c.phase == Phase::Ready);
+        // The fake streamed a chunk for the old session before answering.
+        assert!(client.transcript.entries.is_empty(), "{:?}", client.transcript.entries);
+        client.send_prompt("hi", Instant::now());
+        pump(&mut client, |c| c.phase == Phase::Ready);
+        assert_eq!(client.transcript.entries.last(), Some(&Entry::AgentText("Hello world".into())));
     }
 
     #[test]
@@ -446,12 +517,40 @@ mod tests {
     }
 
     #[test]
+    fn test_failed_sign_in_offers_the_choices_again() {
+        let mut client = start(FakeOptions { require_auth: true, ..FakeOptions::default() });
+        pump(&mut client, |c| matches!(c.phase, Phase::NeedsAuth(_)));
+        client.authenticate("bad", Instant::now());
+        pump(&mut client, |c| matches!(c.phase, Phase::NeedsAuth(_)));
+        assert!(matches!(client.transcript.entries.last(), Some(Entry::Notice(Notice::Error(_)))));
+    }
+
+    #[test]
+    fn test_orphan_error_ends_the_turn() {
+        let mut client = ready(FakeOptions::default());
+        client.send_prompt("orphan", Instant::now());
+        pump(&mut client, |c| c.phase == Phase::Ready);
+        assert!(matches!(client.transcript.entries.last(), Some(Entry::Notice(Notice::Error(_)))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_real_process_exit_reports_code_and_stderr() {
+        let args = ["-c".to_owned(), "echo oops >&2; exit 3".to_owned()];
+        let (conn, process) =
+            AgentProcess::spawn("sh", &args, std::path::Path::new("."), std::sync::Arc::new(|| {})).unwrap();
+        let mut client = Client::new(conn, Some(process), PathBuf::from("/work"), Instant::now());
+        pump(&mut client, |c| matches!(&c.phase, Phase::Exited { code: Some(_), stderr } if !stderr.is_empty()));
+        assert_eq!(client.phase, Phase::Exited { code: Some(3), stderr: vec!["oops".to_owned()] });
+    }
+
+    #[test]
     fn test_setup_times_out() {
         let mut client = start(FakeOptions { silent: true, ..FakeOptions::default() });
-        assert!(client.is_waiting_on_setup());
+        assert!(client.wants_repaint(Instant::now()));
         client.poll(Instant::now() + SETUP_TIMEOUT + Duration::from_secs(1));
         let Phase::Failed(message) = &client.phase else { panic!("{:?}", client.phase) };
         assert!(message.contains("initialize"), "{message}");
-        assert!(!client.is_waiting_on_setup());
+        assert!(!client.wants_repaint(Instant::now()));
     }
 }
