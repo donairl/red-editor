@@ -1,7 +1,7 @@
 //! VS Code-style Activity Bar: the icon column at the far left.
 //!
-//! Holds four items, the Explorer, Search (Find in Files), Source Control
-//! and the Console, and only
+//! Holds five items, the Explorer, Search (Find in Files), Source Control,
+//! the Console and the Agent, and only
 //! reports clicks: `app.rs` decides what a click does.
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, Vec2, pos2, vec2};
@@ -21,6 +21,7 @@ pub struct ActivityBarResponse {
     pub search_clicked: bool,
     pub source_control_clicked: bool,
     pub console_clicked: bool,
+    pub agent_clicked: bool,
     // Only the tests read where the items were drawn.
     #[cfg_attr(not(test), allow(dead_code))]
     pub explorer_rect: Rect,
@@ -40,10 +41,12 @@ pub struct ActivityItems<'a> {
     pub search_open: bool,
     pub source_control_open: bool,
     pub console_open: bool,
+    pub agent_open: bool,
     pub explorer_tooltip: &'a str,
     pub search_tooltip: &'a str,
     pub source_control_tooltip: &'a str,
     pub console_tooltip: &'a str,
+    pub agent_tooltip: &'a str,
     /// Changed files, shown in a badge on the Source Control item.
     pub changes: usize,
 }
@@ -94,11 +97,19 @@ pub fn show(ui: &mut egui::Ui, items: ActivityItems) -> ActivityBarResponse {
         items.console_tooltip,
         paint_console_icon,
     );
+    let (_, agent_clicked) = item(
+        ui,
+        &palette,
+        items.agent_open,
+        items.agent_tooltip,
+        paint_agent_icon,
+    );
     ActivityBarResponse {
         explorer_clicked,
         search_clicked,
         source_control_clicked,
         console_clicked,
+        agent_clicked,
         explorer_rect,
         search_rect,
         source_control_rect,
@@ -192,6 +203,20 @@ fn paint_console_icon(painter: &egui::Painter, center: egui::Pos2, color: Color3
     painter.line_segment([pos2(prompt.x + 5.0, caret_y), pos2(prompt.x + 10.0, caret_y)], stroke);
 }
 
+/// A speech bubble with three dots: a conversation with the agent. Drawn
+/// as lines, so it never depends on the bundled fonts.
+fn paint_agent_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let bubble = Rect::from_center_size(center + vec2(0.0, -1.5), vec2(18.0, 13.0));
+    painter.rect_stroke(bubble, CornerRadius::same(3), stroke, egui::StrokeKind::Middle);
+    // The tail, bottom left.
+    let tail = pos2(bubble.left() + 4.0, bubble.bottom());
+    painter.line(vec![tail, tail + vec2(-1.0, 4.0), tail + vec2(4.0, 0.0)], stroke);
+    for dx in [-4.0, 0.0, 4.0] {
+        painter.circle_filled(bubble.center() + vec2(dx, 0.0), 1.2, color);
+    }
+}
+
 /// A magnifying glass: a ring with its handle to the bottom right, the size
 /// of the other items' icons.
 fn paint_search_icon(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
@@ -250,10 +275,12 @@ mod tests {
             search_open: false,
             source_control_open: false,
             console_open,
+            agent_open: false,
             explorer_tooltip: "Explorer",
             search_tooltip: "Search",
             source_control_tooltip: "Source Control",
             console_tooltip: "Console",
+            agent_tooltip: "Agent",
             changes: 0,
         };
         run_with(ctx, events, items)
@@ -329,10 +356,12 @@ mod tests {
             search_open: false,
             source_control_open: true,
             console_open: false,
+            agent_open: false,
             explorer_tooltip: "",
             search_tooltip: "",
             source_control_tooltip: "",
             console_tooltip: "",
+            agent_tooltip: "",
             changes,
         };
         let texts = |shapes: &[egui::epaint::ClippedShape]| -> Vec<String> {

@@ -8,6 +8,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::about::{self, AboutState};
 use crate::activity_bar;
+use crate::agent_panel::AgentPanel;
+use crate::agent_settings::AgentSettings;
 use crate::blame::{self, Blame};
 use crate::bookmarks::Bookmarks;
 use crate::brackets;
@@ -63,6 +65,8 @@ const FONT_SIZE_KEY: &str = "font_size";
 const AUTO_SAVE_KEY: &str = "auto_save";
 /// eframe storage key of the editor settings (a JSON object).
 const EDITOR_SETTINGS_KEY: &str = "editor_settings";
+const AGENT_SETTINGS_KEY: &str = "agent_settings";
+const AGENT_PANEL_OPEN_KEY: &str = "agent_panel_open";
 
 /// Seconds between checks for open files changed by other programs.
 const DISK_CHECK_SECS: f64 = 2.0;
@@ -436,6 +440,12 @@ pub struct TextEditorApp {
     pub consoles: Vec<Terminal>,
     /// The tab of `consoles` the panel shows.
     pub active_console_index: usize,
+    /// The Agent panel on the right is shown.
+    pub show_agent: bool,
+    /// The ACP session and the panel's own state.
+    pub agent: AgentPanel,
+    /// Settings → Agent.
+    pub agent_settings: AgentSettings,
     /// Show the Git Log panel below the editor: every git command the
     /// editor ran, with its output.
     pub show_git_log: bool,
@@ -573,6 +583,9 @@ impl Default for TextEditorApp {
             show_console: false,
             consoles: Vec::new(),
             active_console_index: 0,
+            show_agent: false,
+            agent: AgentPanel::default(),
+            agent_settings: AgentSettings::default(),
             show_git_log: false,
             git_log: GitLogPanel::default(),
             palette: Palette::default(),
@@ -647,6 +660,15 @@ impl TextEditorApp {
             auto_save: saved_auto_save(cc.storage),
             show_settings: false,
             editor_settings: saved_editor_settings(cc.storage),
+            // A panel restored open waits for Restart: no agent starts with
+            // the app.
+            show_agent: cc
+                .storage
+                .and_then(|storage| storage.get_string(AGENT_PANEL_OPEN_KEY))
+                .is_some_and(|text| text == "true"),
+            agent_settings: AgentSettings::from_storage(
+                cc.storage.and_then(|storage| storage.get_string(AGENT_SETTINGS_KEY)).as_deref(),
+            ),
             ..Default::default()
         };
         saved_session(cc.storage).restore(&mut app);
@@ -1516,6 +1538,8 @@ impl TextEditorApp {
             ShortcutAction::MarkdownPreview => self.toggle_markdown_preview(),
             ShortcutAction::ToggleConsole => self.toggle_console(ctx),
             ShortcutAction::NewConsole => self.new_console(ctx),
+            ShortcutAction::ToggleAgent => self.toggle_agent_panel(ctx),
+            ShortcutAction::NewAgentSession => self.new_agent_session(ctx),
             ShortcutAction::FindInFiles => self.open_search(ctx),
             ShortcutAction::Find => self.open_find(ctx, false),
             ShortcutAction::Replace => self.open_find(ctx, true),
@@ -2856,11 +2880,14 @@ impl eframe::App for TextEditorApp {
         storage.set_string(FONT_SIZE_KEY, zoom::to_storage(self.font_size));
         storage.set_string(AUTO_SAVE_KEY, self.auto_save.to_string());
         storage.set_string(EDITOR_SETTINGS_KEY, self.editor_settings.to_storage());
+        storage.set_string(AGENT_SETTINGS_KEY, self.agent_settings.to_storage());
+        storage.set_string(AGENT_PANEL_OPEN_KEY, self.show_agent.to_string());
         storage.set_string(SESSION_KEY, Session::from_app(self).to_storage());
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.poll_agent(&ctx);
         let theme = theme::apply(&ctx, self.theme);
         self.highlighter.set_theme(theme.syntax);
         // `Ctrl` + scroll zooms the text. Taken before the editor is drawn,
@@ -3083,6 +3110,8 @@ impl eframe::App for TextEditorApp {
                         search_tooltip: self.i18n.t("edit.find_in_files"),
                         source_control_tooltip: self.i18n.t("activity.source_control"),
                         console_tooltip: self.i18n.t("activity.console"),
+                        agent_open: self.show_agent,
+                        agent_tooltip: self.i18n.t("activity.agent"),
                         changes: self.git.change_count(),
                     };
                     activity_bar::show(ui, items)
@@ -3103,6 +3132,9 @@ impl eframe::App for TextEditorApp {
             }
             if activity.console_clicked {
                 self.toggle_console(&ctx);
+            }
+            if activity.agent_clicked {
+                self.toggle_agent_panel(&ctx);
             }
         }
 
@@ -3174,6 +3206,11 @@ impl eframe::App for TextEditorApp {
             self.apply_explorer_action(action);
         }
 
+        // Agent panel, full height on the right: declared before the
+        // Console so the Console stays under the editor only.
+        if self.show_agent && !self.zen_mode {
+            self.show_agent_panel(ui);
+        }
         // Console panel, below the editor and the Markdown preview: declared
         // after the side panels so it does not run under them.
         if self.show_console && !self.zen_mode {

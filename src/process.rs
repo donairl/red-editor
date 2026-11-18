@@ -20,14 +20,14 @@ pub enum RunError {
 /// Keeps a console program from opening a console window of its own: on
 /// Windows the editor runs without a console for it to share.
 #[cfg(windows)]
-fn hide_console(command: &mut Command) {
+pub(crate) fn hide_console(command: &mut Command) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(windows))]
-fn hide_console(_command: &mut Command) {}
+pub(crate) fn hide_console(_command: &mut Command) {}
 
 #[cfg(windows)]
 fn kill(pid: u32) {
