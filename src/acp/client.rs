@@ -8,16 +8,17 @@ use std::time::{Duration, Instant};
 
 use agent_client_protocol_schema::ProtocolVersion;
 use agent_client_protocol_schema::v1::{
-    AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock,
+    AuthenticateRequest, CancelNotification, ClientCapabilities,
     FileSystemCapabilities, Implementation, InitializeRequest, InitializeResponse,
     NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionId,
-    SessionNotification, SelectedPermissionOutcome, TextContent,
+    SessionNotification, SelectedPermissionOutcome,
 };
 use serde_json::Value;
 
+use super::context::{Chip, build_blocks};
 use super::fs::{self, Buffers, FsCall};
-use super::model::{Entry, Notice, PermissionCard, PermissionChoice, PermissionState, Transcript};
+use super::model::{Attached, Entry, Notice, PermissionCard, PermissionChoice, PermissionState, Transcript};
 use super::transport::{AgentProcess, Connection, Incoming, RpcError};
 
 /// How long `initialize` and `session/new` may take. Sign-in (a browser
@@ -145,15 +146,29 @@ impl Client {
     }
 
     /// Starts a turn; `false` unless the session is ready.
+    #[cfg(test)]
     pub fn send_prompt(&mut self, text: &str, now: Instant) -> bool {
+        self.send_prompt_with(&[], text, now)
+    }
+
+    /// Like [`Self::send_prompt`], with chips attached as context blocks.
+    pub fn send_prompt_with(&mut self, chips: &[Chip], text: &str, now: Instant) -> bool {
         let (Phase::Ready, Some(session_id)) = (&self.phase, &self.session_id) else {
             return false;
         };
-        let request = PromptRequest::new(
-            session_id.clone(),
-            vec![ContentBlock::Text(TextContent::new(text))],
-        );
-        self.transcript.push_user(text);
+        let request =
+            PromptRequest::new(session_id.clone(), build_blocks(chips, text, self.embedded_context));
+        if !chips.is_empty() {
+            self.transcript.entries.push(Entry::Attached(
+                chips
+                    .iter()
+                    .map(|c| Attached { label: c.label(), path: c.path.clone(), line: c.line() })
+                    .collect(),
+            ));
+        }
+        if !text.is_empty() {
+            self.transcript.push_user(text);
+        }
         self.send(Pending::Prompt, "session/prompt", params(request), now);
         self.phase = Phase::Prompting;
         true
@@ -530,6 +545,45 @@ mod tests {
             client.transcript.entries,
             vec![Entry::User("hi".into()), Entry::AgentText("Hello world".into())]
         );
+    }
+
+    fn echoed_blocks(client: &mut Client, chips: &[Chip]) -> Value {
+        assert!(client.send_prompt_with(chips, "blocks", Instant::now()));
+        pump(client, |c| c.phase == Phase::Ready);
+        let Some(Entry::AgentText(echo)) =
+            client.transcript.entries.iter().rev().find(|e| matches!(e, Entry::AgentText(_)))
+        else {
+            panic!("no echo")
+        };
+        serde_json::from_str(echo).unwrap()
+    }
+
+    #[test]
+    fn test_prompt_sends_chips_as_embedded_context_blocks() {
+        let mut client = ready(FakeOptions::default());
+        let chips = [Chip::file("/work/a.rs".into()), Chip::selection("/work/b.rs".into(), 2, 3, "x\ny".into())];
+        let blocks = echoed_blocks(&mut client, &chips);
+        assert_eq!(blocks[0]["type"], "resource_link");
+        assert_eq!(blocks[1]["type"], "resource");
+        assert_eq!(blocks[1]["resource"]["uri"], "file:///work/b.rs#L2-3");
+        assert_eq!(blocks[2]["text"], "blocks");
+        assert_eq!(
+            client.transcript.entries[0],
+            Entry::Attached(vec![
+                Attached { label: "a.rs".into(), path: "/work/a.rs".into(), line: None },
+                Attached { label: "b.rs:2-3".into(), path: "/work/b.rs".into(), line: Some(2) },
+            ])
+        );
+        assert_eq!(client.transcript.entries[1], Entry::User("blocks".into()));
+    }
+
+    #[test]
+    fn test_selection_is_inlined_when_the_agent_takes_no_embedded_context() {
+        let mut client = ready(FakeOptions::default());
+        client.embedded_context = false;
+        let blocks = echoed_blocks(&mut client, &[Chip::selection("/work/b.rs".into(), 2, 3, "x\ny".into())]);
+        assert_eq!(blocks[0]["type"], "text");
+        assert!(blocks[0]["text"].as_str().unwrap().contains("```\nx\ny\n```"));
     }
 
     #[test]

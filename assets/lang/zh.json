@@ -384,5 +384,12 @@
   "settings.agent": "智能体",
   "settings.agent_command": "智能体命令",
   "settings.agent_command_hint": "例如 npx @zed-industries/claude-code-acp",
-  "settings.agent_restart_note": "重启智能体后生效。"
+  "settings.agent_restart_note": "重启智能体后生效。",
+  "agent.add_selection": "Add Selection to Agent",
+  "agent.attach_file": "Attach a file (@)",
+  "agent.remove_context": "Remove",
+  "agent.pick_file": "Search files to attach…",
+  "agent.no_files": "No matching files",
+  "agent.context_unsaved": "Save the file first: the agent needs a path to refer to.",
+  "agent.context_too_large": "The selection is too large to attach (over 256 KB)."
 }

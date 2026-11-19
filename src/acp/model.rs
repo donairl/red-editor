@@ -21,6 +21,8 @@ pub enum Notice {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
     User(String),
+    /// What the user attached to the prompt that follows (chips).
+    Attached(Vec<Attached>),
     /// Markdown from the agent.
     AgentText(String),
     Thought(String),
@@ -29,6 +31,14 @@ pub enum Entry {
     TurnEnd(String),
     ToolCall(ToolCallView),
     Permission(PermissionCard),
+}
+
+/// One chip of an attached context, as the transcript shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attached {
+    pub label: String,
+    pub path: PathBuf,
+    pub line: Option<u32>,
 }
 
 /// What a tool call produced, reduced to what the panel draws.

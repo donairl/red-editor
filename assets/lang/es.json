@@ -384,5 +384,12 @@
   "settings.agent": "Agente",
   "settings.agent_command": "Comando del agente",
   "settings.agent_command_hint": "p. ej. npx @zed-industries/claude-code-acp",
-  "settings.agent_restart_note": "Se aplica al reiniciar el agente."
+  "settings.agent_restart_note": "Se aplica al reiniciar el agente.",
+  "agent.add_selection": "Add Selection to Agent",
+  "agent.attach_file": "Attach a file (@)",
+  "agent.remove_context": "Remove",
+  "agent.pick_file": "Search files to attach…",
+  "agent.no_files": "No matching files",
+  "agent.context_unsaved": "Save the file first: the agent needs a path to refer to.",
+  "agent.context_too_large": "The selection is too large to attach (over 256 KB)."
 }

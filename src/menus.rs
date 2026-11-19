@@ -510,6 +510,16 @@ impl TextEditorApp {
         }
         editor.context_menu(|ui| {
             self.show_clipboard_items(ui, ctx);
+            if self.active_tab().current_path.is_some() {
+                ui.separator();
+                if menu_item(
+                    ui,
+                    self.i18n.t("agent.add_selection"),
+                    &shortcuts::label(ctx, &shortcuts::ADD_SELECTION_TO_AGENT),
+                ) {
+                    self.add_selection_to_agent(ctx);
+                }
+            }
             if symbols::navigates(self.effective_language()) {
                 ui.separator();
                 let at = ctx.data(|d| d.get_temp::<usize>(self.editor_id().with(CONTEXT_CHAR)));

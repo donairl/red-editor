@@ -11,6 +11,8 @@
 //! - `"rpc <method> <json params>"`: sends that request (with `sessionId`
 //!   filled in), echoes Red's whole answer (`{"result":..}` or
 //!   `{"error":..}`) as agent text, ends the turn.
+//! - `"blocks"`: echoes the received prompt content blocks (JSON) as agent
+//!   text, ends the turn.
 //! - `"wait"`: does not answer until `session/cancel`, then ends the turn
 //!   with `cancelled`.
 //! - `"orphan"`: answers with an error whose id is `null`.
@@ -124,7 +126,9 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                 }
             }
             Some("session/prompt") => {
-                let text = message["params"]["prompt"][0]["text"].as_str().unwrap_or("").to_owned();
+                let blocks = &message["params"]["prompt"];
+                // The typed text is the last block.
+                let text = blocks.as_array().and_then(|b| b.last()).and_then(|b| b["text"].as_str()).unwrap_or("").to_owned();
                 match text.as_str() {
                     "permission" => {
                         open_prompt = Some(id);
@@ -174,6 +178,11 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                         }
                         open_prompt = Some(id);
                         send(&mut out, json!({"jsonrpc": "2.0", "id": "rpc-1", "method": method, "params": request}));
+                    }
+                    "blocks" => {
+                        let session = format!("s{sessions}");
+                        chunk(&mut out, &session, &blocks.to_string());
+                        end_turn(&mut out, &id, "end_turn");
                     }
                     "wait" => open_prompt = Some(id),
                     "orphan" => send(&mut out, json!({"jsonrpc": "2.0", "id": null,

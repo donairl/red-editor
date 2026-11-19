@@ -51,6 +51,7 @@ pub const TOGGLE_CONSOLE: KeyboardShortcut = cmd(Key::Backtick);
 /// A second terminal tab beside the first one.
 pub const NEW_CONSOLE: KeyboardShortcut = cmd_shift(Key::Backtick);
 pub const TOGGLE_AGENT: KeyboardShortcut = cmd_shift(Key::A);
+pub const ADD_SELECTION_TO_AGENT: KeyboardShortcut = cmd_shift(Key::L);
 pub const FIND: KeyboardShortcut = cmd(Key::F);
 pub const REPLACE: KeyboardShortcut = cmd(Key::H);
 pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
@@ -140,6 +141,8 @@ pub enum ShortcutAction {
     ToggleAgent,
     /// A new conversation with the agent (a Command Palette entry; no key).
     NewAgentSession,
+    /// Attach the selection to the Agent panel's next prompt.
+    AddSelectionToAgent,
     FindInFiles,
     Find,
     Replace,
@@ -203,6 +206,7 @@ impl ShortcutAction {
                 | NewConsole
                 | ToggleAgent
                 | NewAgentSession
+                | AddSelectionToAgent
                 | SourceControl
                 | GitGraph
                 | DiffWithHead
@@ -244,6 +248,7 @@ impl ShortcutAction {
             ToggleConsole => TOGGLE_CONSOLE,
             NewConsole => NEW_CONSOLE,
             ToggleAgent => TOGGLE_AGENT,
+            AddSelectionToAgent => ADD_SELECTION_TO_AGENT,
             FindInFiles => FIND_IN_FILES,
             Find => FIND,
             Replace => REPLACE,
@@ -298,6 +303,7 @@ impl ShortcutAction {
                 | CopyLineUp
                 | CopyLineDown
                 | DeleteLine
+                | AddSelectionToAgent
                 | ToggleComment
                 | SelectNextMatch
                 | GoToBracket
@@ -339,6 +345,7 @@ pub fn consume_shortcut(input: &mut egui::InputState) -> Option<ShortcutAction> 
         (MARKDOWN_PREVIEW, MarkdownPreview),
         (NEW_CONSOLE, NewConsole),
         (TOGGLE_AGENT, ToggleAgent),
+        (ADD_SELECTION_TO_AGENT, AddSelectionToAgent),
         (TOGGLE_CONSOLE, ToggleConsole),
         (PRETTIFY, Prettify),
         (SAVE_AS, SaveAs),
@@ -505,6 +512,7 @@ mod tests {
             (egui::Key::Backtick, ctrl, ShortcutAction::ToggleConsole),
             (egui::Key::Backtick, ctrl_shift, ShortcutAction::NewConsole),
             (egui::Key::A, ctrl_shift, ShortcutAction::ToggleAgent),
+            (egui::Key::L, ctrl_shift, ShortcutAction::AddSelectionToAgent),
         ] {
             let mut got = None;
             let mut output = ctx.run_ui(press(key, mods), |ui| {

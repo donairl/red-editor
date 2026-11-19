@@ -1006,7 +1006,7 @@ impl TextEditorApp {
     }
 
     /// The editor's selection as sorted `char` indices, or just the caret.
-    fn editor_selection(&self, ctx: &egui::Context) -> Option<find::Range> {
+    pub(crate) fn editor_selection(&self, ctx: &egui::Context) -> Option<find::Range> {
         // The start page hides the editor; its old selection means nothing.
         if self.show_welcome {
             return None;
@@ -1540,6 +1540,7 @@ impl TextEditorApp {
             ShortcutAction::NewConsole => self.new_console(ctx),
             ShortcutAction::ToggleAgent => self.toggle_agent_panel(ctx),
             ShortcutAction::NewAgentSession => self.new_agent_session(ctx),
+            ShortcutAction::AddSelectionToAgent => self.add_selection_to_agent(ctx),
             ShortcutAction::FindInFiles => self.open_search(ctx),
             ShortcutAction::Find => self.open_find(ctx, false),
             ShortcutAction::Replace => self.open_find(ctx, true),

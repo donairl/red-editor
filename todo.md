@@ -93,8 +93,11 @@ Last updated 2026-11-18.
     on the card and Save All Agent Edits in the header.
   - [ ] **Stage 4** — terminals for the agent (`terminal/*`), live output
     in cards.
-  - [ ] **Stage 5** — editor context: `@` file chips, Add Selection to
-    Agent.
+  - [x] **Stage 5** — done 2026-11-19 (`src/acp/context.rs`): `@` (typed
+    or button) opens a Quick Open-style file picker that adds removable
+    chips; Add Selection to Agent (Ctrl+Shift+L, palette, editor menu)
+    attaches path and line range; file chips send as `ResourceLink`,
+    selections as `Resource` (text when embedded context is off).
   - [ ] **Stage 6** — README (en, id) and release notes.
   - [x] **Spec drift** — done 2026-11-19: the spec now describes `Phase`,
     the pending map in `Client` and the in-thread fake agent.
