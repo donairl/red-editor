@@ -576,6 +576,15 @@ impl TextEditorApp {
         if item(ui, self.i18n.t("file.new_window"), &shortcuts::NEW_WINDOW) {
             self.open_new_window();
         }
+        // In the active file's folder; needs an open folder to put it in.
+        let new_file = ui.add_enabled(
+            self.explorer.is_some(),
+            egui::Button::new(self.i18n.t("explorer.new_file")),
+        );
+        if new_file.clicked() {
+            self.new_file_in_active_folder();
+            ui.close();
+        }
         ui.separator();
         if item(ui, self.i18n.t("file.open_file"), &shortcuts::OPEN_FILE) {
             self.trigger_open_file();
@@ -941,5 +950,23 @@ mod tests {
         let shortcut = shortcuts::label(&ctx, &shortcuts::NEW_WINDOW);
         let (shortcut, _) = painted_text(&shapes, &shortcut).expect("its shortcut is shown");
         assert!((shortcut.center().y - new_window.center().y).abs() < 1.0);
+    }
+
+    /// File → New File… opens the Explorer's name field for a new file.
+    #[test]
+    fn test_file_menu_new_file_opens_the_name_field() {
+        let dir = std::env::temp_dir().join(format!("rred_menu_new_file_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_welcome: false, ..Default::default() };
+        assert!(app.i18n.select("en"));
+        app.open_folder(dir.clone());
+        let shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_file_menu(ui, &ctx));
+        let (rect, _) = painted_text(&shapes, "New File…").expect("File menu lacks New File…");
+
+        run_frame_with_events(&ctx, click_events(rect.center()), |ui| app.show_file_menu(ui, &ctx));
+        let edit = app.explorer.as_ref().and_then(|e| e.editing()).expect("no name field");
+        assert_eq!(edit.target, crate::file_browser::EditTarget::NewFile { parent: dir.clone() });
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

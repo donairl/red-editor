@@ -456,8 +456,10 @@ impl Explorer {
     }
 
     /// Opens a name field for a new file (or `folder`) as the first entry
-    /// of `parent`, expanding it. Replaces any field already open.
+    /// of `parent`, expanding it (and the folder's section, so the field is
+    /// seen). Replaces any field already open.
     pub fn begin_new(&mut self, parent: PathBuf, folder: bool) {
+        self.section_open = true;
         if parent != self.root {
             self.expanded.insert(parent.clone());
         }
