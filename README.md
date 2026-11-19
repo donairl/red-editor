@@ -203,10 +203,9 @@ The editor runs the `git` installed on the machine, so your credential helper, s
 
 The Agent panel talks to a coding agent over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), a JSON-RPC protocol over the agent's stdin and stdout. Red does not bundle an agent: you point it at one.
 
-**Set up.** Open **File → Settings… → Agent** and type the command that starts your agent, for example:
+**Set up.** Open **File → Settings… → Agent** and pick an agent: **Claude** (`npx -y @zed-industries/claude-code-acp`), **Codex** (`npx -y @zed-industries/codex-acp`), **AntiGravity** (`agy acp`) or **Hermes** (`hermes acp`). For any other agent, choose **Others** and type the command that starts it, for example:
 
 ```
-npx @zed-industries/claude-code-acp
 gemini --experimental-acp
 ```
 

@@ -5,6 +5,7 @@
 
 use eframe::egui;
 
+use crate::agent_settings;
 use crate::app::TextEditorApp;
 use crate::settings::{MAX_TAB_SIZE, MIN_TAB_SIZE};
 use crate::zoom;
@@ -109,10 +110,34 @@ impl TextEditorApp {
 
         ui.separator();
         ui.heading(self.i18n.t("settings.agent"));
+        let field_id = egui::Id::unique("settings_agent_command");
         egui::Grid::new("settings_agent").num_columns(2).show(ui, |ui| {
+            ui.label(self.i18n.t("settings.agent_preset"));
+            // A preset button fills in its command; "Others" is lit for any
+            // other command and empties a preset's one so you can type yours.
+            let current = agent_settings::preset_of(&self.agent_settings.command);
+            ui.horizontal(|ui| {
+                for (index, preset) in agent_settings::PRESETS.iter().enumerate() {
+                    if ui.selectable_label(current == Some(index), preset.name).clicked() {
+                        self.agent_settings.command = preset.command.to_owned();
+                    }
+                }
+                if ui
+                    .selectable_label(current.is_none(), self.i18n.t("settings.agent_other"))
+                    .clicked()
+                {
+                    if current.is_some() {
+                        self.agent_settings.command.clear();
+                    }
+                    ui.memory_mut(|memory| memory.request_focus(field_id));
+                }
+            });
+            ui.end_row();
+
             ui.label(self.i18n.t("settings.agent_command"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.agent_settings.command)
+                    .id(field_id)
                     .hint_text(self.i18n.t("settings.agent_command_hint"))
                     .desired_width(320.0),
             );
@@ -148,5 +173,42 @@ mod tests {
             app.show_settings_window(ui.ctx())
         });
         assert!(!app.editor_settings.insert_spaces, "the click did not flip it");
+    }
+
+    /// Lays the window out until `label` is painted and returns its rect.
+    fn find_label(ctx: &egui::Context, app: &mut TextEditorApp, label: &str) -> egui::Rect {
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = run_frame_with_events(ctx, Vec::new(), |ui| app.show_settings_window(ui.ctx()));
+        }
+        painted_text(&shapes, label).unwrap_or_else(|| panic!("window lacks {label}")).0
+    }
+
+    /// A preset button fills in its command; "Others" empties it for typing,
+    /// and leaves a hand-typed command alone.
+    #[test]
+    fn test_agent_preset_buttons_set_the_command() {
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp { show_settings: true, ..Default::default() };
+        assert!(app.i18n.select("en"));
+
+        let rect = find_label(&ctx, &mut app, "Codex");
+        run_frame_with_events(&ctx, click_events(rect.center()), |ui| {
+            app.show_settings_window(ui.ctx())
+        });
+        assert_eq!(app.agent_settings.command, "npx -y @zed-industries/codex-acp");
+
+        let rect = find_label(&ctx, &mut app, "Others");
+        run_frame_with_events(&ctx, click_events(rect.center()), |ui| {
+            app.show_settings_window(ui.ctx())
+        });
+        assert_eq!(app.agent_settings.command, "", "Others keeps the preset command");
+
+        app.agent_settings.command = "my-agent --acp".to_owned();
+        let rect = find_label(&ctx, &mut app, "Others");
+        run_frame_with_events(&ctx, click_events(rect.center()), |ui| {
+            app.show_settings_window(ui.ctx())
+        });
+        assert_eq!(app.agent_settings.command, "my-agent --acp");
     }
 }
