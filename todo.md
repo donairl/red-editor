@@ -81,20 +81,26 @@ Last updated 2026-11-18.
   plan: `docs/superpowers/plans/2026-11-18-acp-agent-panel-stage1.md`.
   - [ ] **Hand check** with a real agent (`npx @zed-industries/claude-code-acp`
     or `gemini --experimental-acp`): the checklist in Task 10 of the plan.
-  - [ ] **Stage 2** — tool-call cards, permission cards (Allow/Reject; today
-    every request is declined), plan checklist.
-  - [ ] **Stage 3** — `fs/read_text_file` / `fs/write_text_file` through
-    the open buffers, unsaved badge, Diff / Save / Save All Agent Edits.
+  - [x] **Stage 2** — done 2026-11-19 (`src/agent_cards.rs`,
+    `src/acp/model.rs`): tool-call cards merged by id with diffs and
+    location links, permission cards answering with the chosen option
+    (Stop / new session answer `cancelled`), plan checklist; new strings
+    are English in all five language files until stage 6.
+  - [x] **Stage 3** — done 2026-11-19 (`src/acp/fs.rs`,
+    `src/agent_edits.rs`): `fs/read_text_file` / `fs/write_text_file`
+    through the open buffers (workspace-bounded, answered on the UI
+    thread), writes leave the tab unsaved, unsaved badge with Diff / Save
+    on the card and Save All Agent Edits in the header.
   - [ ] **Stage 4** — terminals for the agent (`terminal/*`), live output
     in cards.
-  - [ ] **Stage 5** — editor context: `@` file chips, Add Selection to
-    Agent.
+  - [x] **Stage 5** — done 2026-11-19 (`src/acp/context.rs`): `@` (typed
+    or button) opens a Quick Open-style file picker that adds removable
+    chips; Add Selection to Agent (Ctrl+Shift+L, palette, editor menu)
+    attaches path and line range; file chips send as `ResourceLink`,
+    selections as `Resource` (text when embedded context is off).
   - [ ] **Stage 6** — README (en, id) and release notes.
-  - [ ] **Spec drift** — the spec still describes `AgentEvent`/`Outgoing`,
-    a pending map in `transport.rs` and an `examples/` fake agent; the code
-    keeps the pending map in `Client`, reports exit as a `Phase`, and
-    tests with an in-thread fake (`src/acp/fake_agent.rs`). Update the
-    spec before writing the stage 2 plan.
+  - [x] **Spec drift** — done 2026-11-19: the spec now describes `Phase`,
+    the pending map in `Client` and the in-thread fake agent.
   - Known gaps from review:
     - Windows: `npx` is `npx.cmd`; resolve PATHEXT before spawning (type
       `npx.cmd …` meanwhile). The process tree is only killed while the

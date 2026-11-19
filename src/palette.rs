@@ -145,6 +145,7 @@ pub const COMMANDS: &[Command] = &[
     command("view.new_console", ShortcutAction::NewConsole),
     command("view.agent", ShortcutAction::ToggleAgent),
     command("agent.new_session", ShortcutAction::NewAgentSession),
+    command("agent.add_selection", ShortcutAction::AddSelectionToAgent),
     command("view.source_control", ShortcutAction::SourceControl),
     command("view.blame", ShortcutAction::Blame),
     command("view.git_graph", ShortcutAction::GitGraph),
@@ -658,6 +659,7 @@ mod tests {
             Key::F12,
             Key::P,
             Key::Comma,
+            Key::L,
         ];
         let modifiers = [
             Modifiers::NONE,

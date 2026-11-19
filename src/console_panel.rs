@@ -267,8 +267,7 @@ mod tests {
     #[test]
     fn test_the_panel_closes_without_a_terminal() {
         let ctx = egui::Context::default();
-        let mut app = TextEditorApp::default();
-        app.show_console = true;
+        let mut app = TextEditorApp { show_console: true, ..TextEditorApp::default() };
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(

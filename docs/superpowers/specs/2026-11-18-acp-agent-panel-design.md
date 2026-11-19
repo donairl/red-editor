@@ -35,12 +35,16 @@ images and audio in prompts, the unstable protocol features.
 
 ```
 src/acp/
-  mod.rs        AgentEvent (agent → UI), Outgoing (UI → agent), re-exports
+  mod.rs        module list
   transport.rs  spawn, reader/writer threads, line framing, request ids,
-                pending-response map, stderr ring buffer, kill on Drop
-  client.rs     session state machine: initialize → (authenticate) →
-                session/new → prompt turns; routes the agent's requests
-                (fs/*, terminal/*, session/request_permission)
+                `Incoming` (Response / Request / Notification /
+                OrphanError / Closed), stderr ring buffer, kill on Drop
+  client.rs     session state machine, polled once per frame: `Phase`
+                (Initializing → NeedsAuth → CreatingSession → Ready ⇄
+                Prompting; Failed, Exited) and the pending-response map
+                (`Pending`: which request an id belongs to); routes the
+                agent's requests (fs/*, terminal/*, session/request_permission)
+  fake_agent.rs (tests only) a scripted agent in a thread on two pipes
   fs.rs         workspace-bounded read/write handlers (pure functions over
                 a trait the app implements for its tabs)
   terminals.rs  terminal/create|output|wait_for_exit|kill|release
@@ -200,8 +204,8 @@ Answered on the UI thread.
 
 - **No command set, or the program is not found**: the panel shows the
   message and an **Open Settings** button. No modal.
-- **The agent exits** (stdout EOF or a reaped child): `AgentEvent::Exited
-  { code, stderr_tail }`. The panel shows "Agent exited (code N)", the
+- **The agent exits** (stdout EOF or a reaped child): the client's phase
+  becomes `Phase::Exited { code, stderr }`. The panel shows "Agent exited (code N)", the
   last 20 stderr lines and **Restart**. Pending requests fail, pending
   permissions are cancelled, terminals are killed.
 - **stderr** goes to a ring buffer (last 200 lines), shown on exit or with
@@ -214,23 +218,24 @@ Answered on the UI thread.
 
 ## Testing
 
-Inline `#[cfg(test)]` modules, as elsewhere in the crate, plus one
-integration test.
+Inline `#[cfg(test)]` modules, as elsewhere in the crate.
 
 - `transport.rs`: partial lines, several messages in one read, a UTF-8
   character split across reads, request/response id matching, error
   responses.
 - `model.rs`: consecutive chunks merge, partial `tool_call_update` merge,
-  plan replacement, cancel resolves pending permissions.
+  plan replacement; `client.rs`: cancel resolves pending permissions.
 - `fs.rs`: workspace bounds (relative path, `..`, symlink outside),
   `line`/`limit`, buffer text wins over disk.
 - `terminals.rs`: truncation at a UTF-8 boundary, exit status, kill.
 - `agent_settings.rs`: storage round trip, shell-words splitting.
-- **Fake agent**: `examples/fake_acp_agent.rs`, a scripted ACP agent
-  (initialize, streamed chunks, a tool call with a diff, a permission
-  request, `fs/write_text_file`, `terminal/create`). The integration test
-  `tests/acp_fake_agent.rs` spawns it through the transport and client and
-  checks the events and Red's replies. No real agent, no network.
+- **Fake agent**: `src/acp/fake_agent.rs` (`#[cfg(test)]`), a scripted ACP
+  agent run in a thread on two pipes, choosing its behaviour from the
+  prompt text (streamed chunks, a tool call with a diff, a plan, a
+  permission request, later `fs/write_text_file`, `terminal/create`).
+  Tests in `client.rs` drive a `Client` against it and check the
+  transcript and Red's replies. No real agent, no network, no child
+  process.
 - Manual check with `claude-code-acp` and `gemini --experimental-acp`,
   noted in `todo.md`.
 

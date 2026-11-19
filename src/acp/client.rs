@@ -8,15 +8,17 @@ use std::time::{Duration, Instant};
 
 use agent_client_protocol_schema::ProtocolVersion;
 use agent_client_protocol_schema::v1::{
-    AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock,
+    AuthenticateRequest, CancelNotification, ClientCapabilities,
     FileSystemCapabilities, Implementation, InitializeRequest, InitializeResponse,
     NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionResponse, SessionId, SessionNotification,
-    TextContent,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionId,
+    SessionNotification, SelectedPermissionOutcome,
 };
 use serde_json::Value;
 
-use super::model::{Notice, Transcript};
+use super::context::{Chip, build_blocks};
+use super::fs::{self, Buffers, FsCall};
+use super::model::{Attached, Entry, Notice, PermissionCard, PermissionChoice, PermissionState, Transcript};
 use super::transport::{AgentProcess, Connection, Incoming, RpcError};
 
 /// How long `initialize` and `session/new` may take. Sign-in (a browser
@@ -77,6 +79,8 @@ pub struct Client {
     exit_code: Option<Option<i32>>,
     /// When the child was seen ended, or the exit reported.
     ended_at: Option<Instant>,
+    /// File requests waiting for the UI thread's buffers ([`Self::serve_fs`]).
+    fs_queue: Vec<(Value, FsCall)>,
 }
 
 fn params(value: impl serde::Serialize) -> Value {
@@ -99,12 +103,13 @@ impl Client {
             deadline: None,
             exit_code: None,
             ended_at: None,
+            fs_queue: Vec::new(),
         };
-        // Stage 1 offers no file system and no terminals.
+        // Files go through the editor's buffers; no terminals yet.
         let request = InitializeRequest::new(ProtocolVersion::V1)
             .client_capabilities(
                 ClientCapabilities::new()
-                    .fs(FileSystemCapabilities::new().read_text_file(false).write_text_file(false))
+                    .fs(FileSystemCapabilities::new().read_text_file(true).write_text_file(true))
                     .terminal(false),
             )
             .client_info(Implementation::new("red", env!("CARGO_PKG_VERSION")));
@@ -141,23 +146,39 @@ impl Client {
     }
 
     /// Starts a turn; `false` unless the session is ready.
+    #[cfg(test)]
     pub fn send_prompt(&mut self, text: &str, now: Instant) -> bool {
+        self.send_prompt_with(&[], text, now)
+    }
+
+    /// Like [`Self::send_prompt`], with chips attached as context blocks.
+    pub fn send_prompt_with(&mut self, chips: &[Chip], text: &str, now: Instant) -> bool {
         let (Phase::Ready, Some(session_id)) = (&self.phase, &self.session_id) else {
             return false;
         };
-        let request = PromptRequest::new(
-            session_id.clone(),
-            vec![ContentBlock::Text(TextContent::new(text))],
-        );
-        self.transcript.push_user(text);
+        let request =
+            PromptRequest::new(session_id.clone(), build_blocks(chips, text, self.embedded_context));
+        if !chips.is_empty() {
+            self.transcript.entries.push(Entry::Attached(
+                chips
+                    .iter()
+                    .map(|c| Attached { label: c.label(), path: c.path.clone(), line: c.line() })
+                    .collect(),
+            ));
+        }
+        if !text.is_empty() {
+            self.transcript.push_user(text);
+        }
         self.send(Pending::Prompt, "session/prompt", params(request), now);
         self.phase = Phase::Prompting;
         true
     }
 
-    /// Asks the agent to stop the running turn. The turn ends when the agent
-    /// answers the prompt (with `cancelled`).
+    /// Asks the agent to stop the running turn. Pending permission requests
+    /// are answered `cancelled` first, as the protocol requires; the turn
+    /// ends when the agent answers the prompt (with `cancelled`).
     pub fn cancel(&mut self) {
+        self.cancel_permissions(true);
         if let (Phase::Prompting, Some(session_id)) = (&self.phase, &self.session_id) {
             self.conn.notify("session/cancel", params(CancelNotification::new(session_id.clone())));
         }
@@ -178,6 +199,54 @@ impl Client {
         self.pending.retain(|_, pending| *pending != Pending::Prompt);
         self.transcript = Transcript::default();
         self.request_session(now);
+    }
+
+    /// Answers a pending permission card with one of its options. Does
+    /// nothing when the card is gone or already answered.
+    pub fn answer_permission(&mut self, rpc_id: &Value, option_id: &str) {
+        let Some(card) = self.transcript.pending_permission_mut(rpc_id) else { return };
+        let Some(choice) = card.options.iter().find(|o| o.id == option_id) else { return };
+        card.state = PermissionState::Chosen(choice.name.clone());
+        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id.to_owned()));
+        self.conn.respond(rpc_id.clone(), Ok(params(RequestPermissionResponse::new(outcome))));
+    }
+
+    /// Answers the file requests that arrived since the last call, from the
+    /// editor's `buffers`. Returns the paths the agent wrote (now unsaved in
+    /// their tabs). Call on the UI thread after [`Self::poll`].
+    pub fn serve_fs(&mut self, buffers: &mut dyn Buffers) -> Vec<PathBuf> {
+        let mut written = Vec::new();
+        for (id, call) in std::mem::take(&mut self.fs_queue) {
+            let (result, path) = fs::handle(&self.cwd, buffers, &call);
+            written.extend(path);
+            self.conn.respond(id, result);
+        }
+        written
+    }
+
+    /// Whether file requests wait for [`Self::serve_fs`].
+    pub fn has_fs_requests(&self) -> bool {
+        !self.fs_queue.is_empty()
+    }
+
+    /// Ends every pending permission card as cancelled; `respond` also tells
+    /// the agent (not when it is gone).
+    fn cancel_permissions(&mut self, respond: bool) {
+        let mut ids = Vec::new();
+        for entry in &mut self.transcript.entries {
+            if let Entry::Permission(card) = entry
+                && card.state == PermissionState::Pending
+            {
+                card.state = PermissionState::Cancelled;
+                ids.push(card.rpc_id.clone());
+            }
+        }
+        if respond {
+            for id in ids {
+                let response = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+                self.conn.respond(id, Ok(params(response)));
+            }
+        }
     }
 
     pub fn authenticate(&mut self, method_id: &str, now: Instant) {
@@ -217,8 +286,10 @@ impl Client {
     }
 
     fn fail(&mut self, message: String) {
+        self.cancel_permissions(false);
         self.phase = Phase::Failed(message);
         self.pending.clear();
+        self.fs_queue.clear();
         self.deadline = None;
     }
 
@@ -240,6 +311,7 @@ impl Client {
                         self.phase = Phase::NeedsAuth(self.auth_methods.clone());
                     }
                     Pending::Prompt => {
+                        self.cancel_permissions(true);
                         self.transcript.notice(Notice::Error(error.message));
                         self.phase = Phase::Ready;
                     }
@@ -265,6 +337,9 @@ impl Client {
                 Err(error) => self.fail(format!("unreadable session/new answer: {error}")),
             },
             Pending::Prompt => {
+                // A request left open when the turn ended can no longer be
+                // granted.
+                self.cancel_permissions(true);
                 if let Ok(response) = serde_json::from_value::<PromptResponse>(value) {
                     self.transcript.end_turn(&response.stop_reason);
                 }
@@ -289,15 +364,43 @@ impl Client {
         self.request_session(now);
     }
 
-    fn on_request(&mut self, id: Value, method: &str, _params: Value) {
+    fn on_request(&mut self, id: Value, method: &str, request_params: Value) {
         match method {
-            "session/request_permission" => {
-                let response = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
-                self.conn.respond(id, Ok(params(response)));
-                self.transcript.notice(Notice::PermissionDeclined);
-            }
-            _ => self.conn.respond(id, Err(RpcError::method_not_found(method))),
+            "session/request_permission" => self.on_permission_request(id, request_params),
+            _ => match FsCall::parse(method, request_params) {
+                Some(Ok(call)) => self.fs_queue.push((id, call)),
+                Some(Err(error)) => self.conn.respond(id, Err(error)),
+                None => self.conn.respond(id, Err(RpcError::method_not_found(method))),
+            },
         }
+    }
+
+    /// Shows the request as a card; the user's click answers it later. A
+    /// request for another session, or one that cannot be read, is
+    /// answered `cancelled` at once.
+    fn on_permission_request(&mut self, id: Value, request_params: Value) {
+        let request = serde_json::from_value::<RequestPermissionRequest>(request_params)
+            .ok()
+            .filter(|r| self.session_id.as_ref() == Some(&r.session_id) && !r.options.is_empty());
+        let Some(request) = request else {
+            let response = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+            self.conn.respond(id, Ok(params(response)));
+            return;
+        };
+        self.transcript.update_tool_call(&request.tool_call);
+        let tool_call_id = request.tool_call.tool_call_id.to_string();
+        let title = self.transcript.tool_call(&tool_call_id).map(|c| c.title.clone()).unwrap_or_default();
+        self.transcript.entries.push(Entry::Permission(PermissionCard {
+            rpc_id: id,
+            tool_call_id,
+            title,
+            options: request
+                .options
+                .iter()
+                .map(|o| PermissionChoice { id: o.option_id.to_string(), name: o.name.clone(), kind: o.kind })
+                .collect(),
+            state: PermissionState::Pending,
+        }));
     }
 
     fn on_notification(&mut self, method: &str, params: Value) {
@@ -320,6 +423,7 @@ impl Client {
         }
         if self.phase == Phase::Prompting {
             self.pending.retain(|_, pending| *pending != Pending::Prompt);
+            self.cancel_permissions(true);
             self.transcript.notice(Notice::Error(error.message));
             self.phase = Phase::Ready;
         } else if self.deadline.is_some() {
@@ -334,7 +438,9 @@ impl Client {
         // Never wait here: the code and late stderr lines are filled in by
         // `watch_process` on later polls.
         let stderr = self.stderr_tail(EXIT_STDERR_LINES);
+        self.cancel_permissions(false);
         self.pending.clear();
+        self.fs_queue.clear();
         self.deadline = None;
         self.ended_at.get_or_insert(now);
         self.phase = Phase::Exited { code: self.exit_code.flatten(), stderr };
@@ -399,7 +505,7 @@ impl Drop for Client {
 mod tests {
     use super::*;
     use crate::acp::fake_agent::{self, FakeOptions};
-    use crate::acp::model::{Entry, Notice};
+    use crate::acp::model::{Entry, Notice, ToolContent};
     use std::thread;
 
     fn start(options: FakeOptions) -> Client {
@@ -441,6 +547,45 @@ mod tests {
         );
     }
 
+    fn echoed_blocks(client: &mut Client, chips: &[Chip]) -> Value {
+        assert!(client.send_prompt_with(chips, "blocks", Instant::now()));
+        pump(client, |c| c.phase == Phase::Ready);
+        let Some(Entry::AgentText(echo)) =
+            client.transcript.entries.iter().rev().find(|e| matches!(e, Entry::AgentText(_)))
+        else {
+            panic!("no echo")
+        };
+        serde_json::from_str(echo).unwrap()
+    }
+
+    #[test]
+    fn test_prompt_sends_chips_as_embedded_context_blocks() {
+        let mut client = ready(FakeOptions::default());
+        let chips = [Chip::file("/work/a.rs".into()), Chip::selection("/work/b.rs".into(), 2, 3, "x\ny".into())];
+        let blocks = echoed_blocks(&mut client, &chips);
+        assert_eq!(blocks[0]["type"], "resource_link");
+        assert_eq!(blocks[1]["type"], "resource");
+        assert_eq!(blocks[1]["resource"]["uri"], "file:///work/b.rs#L2-3");
+        assert_eq!(blocks[2]["text"], "blocks");
+        assert_eq!(
+            client.transcript.entries[0],
+            Entry::Attached(vec![
+                Attached { label: "a.rs".into(), path: "/work/a.rs".into(), line: None },
+                Attached { label: "b.rs:2-3".into(), path: "/work/b.rs".into(), line: Some(2) },
+            ])
+        );
+        assert_eq!(client.transcript.entries[1], Entry::User("blocks".into()));
+    }
+
+    #[test]
+    fn test_selection_is_inlined_when_the_agent_takes_no_embedded_context() {
+        let mut client = ready(FakeOptions::default());
+        client.embedded_context = false;
+        let blocks = echoed_blocks(&mut client, &[Chip::selection("/work/b.rs".into(), 2, 3, "x\ny".into())]);
+        assert_eq!(blocks[0]["type"], "text");
+        assert!(blocks[0]["text"].as_str().unwrap().contains("```\nx\ny\n```"));
+    }
+
     #[test]
     fn test_cancel_ends_the_turn_as_cancelled() {
         let mut client = ready(FakeOptions::default());
@@ -450,14 +595,146 @@ mod tests {
         assert_eq!(client.transcript.entries.last(), Some(&Entry::TurnEnd("cancelled".into())));
     }
 
+    fn pending_card(client: &Client) -> PermissionCard {
+        client.transcript.pending_permissions().next().cloned().expect("a pending card")
+    }
+
     #[test]
-    fn test_permission_requests_are_declined_in_stage_one() {
+    fn test_permission_card_waits_then_answers_with_the_chosen_option() {
         let mut client = ready(FakeOptions::default());
         client.send_prompt("permission", Instant::now());
+        pump(&mut client, |c| c.transcript.pending_permissions().next().is_some());
+        let card = pending_card(&client);
+        assert_eq!(card.title, "Edit main.rs");
+        assert_eq!(card.options.len(), 4);
+        assert_eq!(client.phase, Phase::Prompting, "the turn waits for the user");
+        client.answer_permission(&card.rpc_id, "allow_always");
         pump(&mut client, |c| c.phase == Phase::Ready);
         let entries = &client.transcript.entries;
-        assert!(entries.contains(&Entry::Notice(Notice::PermissionDeclined)));
+        assert!(entries.contains(&Entry::AgentText("selected:allow_always".into())), "{entries:?}");
+        assert!(entries.iter().any(|e| matches!(e,
+            Entry::Permission(c) if c.state == PermissionState::Chosen("Always allow".into()))));
+        // A second click on the same card does nothing.
+        client.answer_permission(&card.rpc_id, "reject");
+    }
+
+    #[test]
+    fn test_stop_answers_pending_permissions_cancelled() {
+        let mut client = ready(FakeOptions::default());
+        client.send_prompt("permission", Instant::now());
+        pump(&mut client, |c| c.transcript.pending_permissions().next().is_some());
+        client.cancel();
+        assert!(client.transcript.pending_permissions().next().is_none());
+        pump(&mut client, |c| c.phase == Phase::Ready);
+        let entries = &client.transcript.entries;
         assert!(entries.contains(&Entry::AgentText("cancelled".into())), "{entries:?}");
+        assert!(entries.iter().any(|e| matches!(e,
+            Entry::Permission(c) if c.state == PermissionState::Cancelled)));
+    }
+
+    #[test]
+    fn test_new_session_cancels_pending_permissions() {
+        let mut client = ready(FakeOptions::default());
+        client.send_prompt("permission", Instant::now());
+        pump(&mut client, |c| c.transcript.pending_permissions().next().is_some());
+        client.new_session(Instant::now());
+        assert!(client.transcript.entries.is_empty());
+        pump(&mut client, |c| c.phase == Phase::Ready);
+    }
+
+    #[test]
+    fn test_tool_calls_and_plan_stream_into_the_model() {
+        let mut client = ready(FakeOptions::default());
+        client.send_prompt("tools", Instant::now());
+        pump(&mut client, |c| c.phase == Phase::Ready);
+        let call = client.transcript.tool_call("t1").expect("tool call");
+        assert_eq!(call.status, agent_client_protocol_schema::v1::ToolCallStatus::Completed);
+        assert_eq!(call.title, "Edit main.rs");
+        assert_eq!(call.locations.len(), 1);
+        assert!(matches!(call.content.as_slice(), [ToolContent::Diff { .. }]));
+        assert_eq!(client.transcript.plan.len(), 2);
+        assert_eq!(client.transcript.entries.len(), 3, "the prompt, one card, the closing text");
+    }
+
+    /// Runs one prompt, serving file requests from `buffers`; returns the
+    /// agent's echo of Red's answer and the paths written.
+    fn fs_round_trip(
+        client: &mut Client,
+        buffers: &mut crate::acp::fs::tests::MemBuffers,
+        text: &str,
+    ) -> (Value, Vec<PathBuf>) {
+        client.send_prompt(text, Instant::now());
+        let mut written = Vec::new();
+        let started = Instant::now();
+        while client.phase != Phase::Ready {
+            assert!(started.elapsed() < Duration::from_secs(5), "stuck in {:?}", client.phase);
+            client.poll(Instant::now());
+            written.extend(client.serve_fs(buffers));
+            thread::sleep(Duration::from_millis(5));
+        }
+        let Some(Entry::AgentText(echo)) = client.transcript.entries.iter().rev().find(|e| matches!(e, Entry::AgentText(_)))
+        else {
+            panic!("no echo: {:?}", client.transcript.entries)
+        };
+        (serde_json::from_str(echo).unwrap(), written)
+    }
+
+    fn fs_client(root: &std::path::Path) -> Client {
+        let mut client = Client::new(
+            fake_agent::connect(FakeOptions::default()),
+            None,
+            root.to_path_buf(),
+            Instant::now(),
+        );
+        pump(&mut client, |c| c.phase == Phase::Ready);
+        client
+    }
+
+    #[test]
+    fn test_fs_read_round_trip_uses_buffer_text_and_range() {
+        let root = crate::acp::fs::tests::temp_dir("client_read");
+        std::fs::write(root.join("a.txt"), "disk 1\ndisk 2\n").unwrap();
+        std::fs::write(root.join("b.txt"), "disk\n").unwrap();
+        let mut buffers = crate::acp::fs::tests::MemBuffers::default();
+        buffers.open.insert(root.join("b.txt"), "tab 1\ntab 2\ntab 3\n".into());
+        let mut client = fs_client(&root);
+        let request = |path: &std::path::Path, extra: &str| {
+            format!(r#"rpc fs/read_text_file {{"path": {:?}{extra}}}"#, path.to_str().unwrap())
+        };
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, &request(&root.join("a.txt"), ""));
+        assert_eq!(echo["result"]["content"], "disk 1\ndisk 2\n");
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, &request(&root.join("b.txt"), r#", "line": 2, "limit": 1"#));
+        assert_eq!(echo["result"]["content"], "tab 2\n");
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, &request(&root.join("nope.txt"), ""));
+        assert_eq!(echo["error"]["code"], -32002);
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, r#"rpc fs/read_text_file {"path": "rel.txt"}"#);
+        assert_eq!(echo["error"]["code"], -32602);
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, r#"rpc fs/read_text_file {"nope": 1}"#);
+        assert_eq!(echo["error"]["code"], -32602, "unparsable params are answered without the UI");
+    }
+
+    #[test]
+    fn test_fs_write_round_trip_edits_the_buffer_only() {
+        let root = crate::acp::fs::tests::temp_dir("client_write");
+        std::fs::write(root.join("a.txt"), "old\n").unwrap();
+        let mut buffers = crate::acp::fs::tests::MemBuffers::default();
+        let mut client = fs_client(&root);
+        let text = format!(
+            r#"rpc fs/write_text_file {{"path": {:?}, "content": "new\n"}}"#,
+            root.join("a.txt").to_str().unwrap()
+        );
+        let (echo, written) = fs_round_trip(&mut client, &mut buffers, &text);
+        assert_eq!(echo["result"], serde_json::json!({}));
+        assert_eq!(written, vec![root.join("a.txt")]);
+        assert_eq!(buffers.open[&root.join("a.txt")], "new\n");
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "old\n");
+        let (echo, written) = fs_round_trip(
+            &mut client,
+            &mut buffers,
+            r#"rpc fs/write_text_file {"path": "/etc/passwd", "content": "x"}"#,
+        );
+        assert_eq!(echo["error"]["code"], -32602);
+        assert!(written.is_empty());
     }
 
     #[test]

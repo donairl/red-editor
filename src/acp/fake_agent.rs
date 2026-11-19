@@ -1,10 +1,18 @@
 //! A scripted ACP agent for tests, run in a thread on two pipes. What it
 //! does on `session/prompt` depends on the prompt text:
 //!
-//! - `"permission"`: asks `session/request_permission`, then echoes the
-//!   outcome Red chose (`"cancelled"`) as agent text and ends the turn.
-//! - `"unknown"`: sends a request Red does not support (`fs/read_text_file`
-//!   in stage 1), echoes the error code as agent text, ends the turn.
+//! - `"permission"`: asks `session/request_permission` (four options) and
+//!   waits; echoes the outcome Red chose (`"cancelled"` or
+//!   `"selected:<optionId>"`) as agent text and ends the turn.
+//! - `"tools"`: a tool call with a location, updates (in progress, then a
+//!   diff and `completed`), a two-step plan, then closing text.
+//! - `"unknown"`: sends a request Red does not support (`bogus/method`),
+//!   echoes the error code as agent text, ends the turn.
+//! - `"rpc <method> <json params>"`: sends that request (with `sessionId`
+//!   filled in), echoes Red's whole answer (`{"result":..}` or
+//!   `{"error":..}`) as agent text, ends the turn.
+//! - `"blocks"`: echoes the received prompt content blocks (JSON) as agent
+//!   text, ends the turn.
 //! - `"wait"`: does not answer until `session/cancel`, then ends the turn
 //!   with `cancelled`.
 //! - `"orphan"`: answers with an error whose id is `null`.
@@ -118,7 +126,9 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                 }
             }
             Some("session/prompt") => {
-                let text = message["params"]["prompt"][0]["text"].as_str().unwrap_or("").to_owned();
+                let blocks = &message["params"]["prompt"];
+                // The typed text is the last block.
+                let text = blocks.as_array().and_then(|b| b.last()).and_then(|b| b["text"].as_str()).unwrap_or("").to_owned();
                 match text.as_str() {
                     "permission" => {
                         open_prompt = Some(id);
@@ -126,14 +136,53 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                             "method": "session/request_permission", "params": {
                                 "sessionId": "s1",
                                 "toolCall": {"toolCallId": "t1", "title": "Edit main.rs"},
-                                "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}]
+                                "options": [
+                                    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                                    {"optionId": "allow_always", "name": "Always allow", "kind": "allow_always"},
+                                    {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+                                    {"optionId": "reject_always", "name": "Always reject", "kind": "reject_always"}
+                                ]
                             }}));
+                    }
+                    "tools" => {
+                        let session = format!("s{sessions}");
+                        for update in [
+                            json!({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Edit main.rs",
+                                "kind": "edit", "status": "pending",
+                                "locations": [{"path": "/work/main.rs", "line": 3}]}),
+                            json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "in_progress"}),
+                            json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed",
+                                "content": [{"type": "diff", "path": "/work/main.rs",
+                                    "oldText": "a\nb\n", "newText": "a\nc\n"}]}),
+                            json!({"sessionUpdate": "plan", "entries": [
+                                {"content": "Edit", "priority": "high", "status": "completed"},
+                                {"content": "Test", "priority": "medium", "status": "pending"}]}),
+                        ] {
+                            send(&mut out, json!({"jsonrpc": "2.0", "method": "session/update",
+                                "params": {"sessionId": session, "update": update}}));
+                        }
+                        chunk(&mut out, &session, "Done");
+                        end_turn(&mut out, &id, "end_turn");
                     }
                     "unknown" => {
                         open_prompt = Some(id);
                         send(&mut out, json!({"jsonrpc": "2.0", "id": "fs-1",
-                            "method": "fs/read_text_file",
-                            "params": {"sessionId": "s1", "path": "/tmp/x"}}));
+                            "method": "bogus/method", "params": {}}));
+                    }
+                    rpc if rpc.starts_with("rpc ") => {
+                        let mut parts = rpc[4..].splitn(2, ' ');
+                        let method = parts.next().unwrap_or("");
+                        let mut request: Value = serde_json::from_str(parts.next().unwrap_or("{}")).unwrap_or(Value::Null);
+                        if let Some(object) = request.as_object_mut() {
+                            object.insert("sessionId".into(), json!("s1"));
+                        }
+                        open_prompt = Some(id);
+                        send(&mut out, json!({"jsonrpc": "2.0", "id": "rpc-1", "method": method, "params": request}));
+                    }
+                    "blocks" => {
+                        let session = format!("s{sessions}");
+                        chunk(&mut out, &session, &blocks.to_string());
+                        end_turn(&mut out, &id, "end_turn");
                     }
                     "wait" => open_prompt = Some(id),
                     "orphan" => send(&mut out, json!({"jsonrpc": "2.0", "id": null,
@@ -155,8 +204,15 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
             // Red's answer to one of our requests.
             None => {
                 let echo = match id.as_str() {
-                    Some("perm-1") => message["result"]["outcome"]["outcome"].as_str().unwrap_or("?").to_owned(),
+                    Some("perm-1") => {
+                        let outcome = &message["result"]["outcome"];
+                        match outcome["outcome"].as_str() {
+                            Some("selected") => format!("selected:{}", outcome["optionId"].as_str().unwrap_or("?")),
+                            other => other.unwrap_or("?").to_owned(),
+                        }
+                    }
                     Some("fs-1") => message["error"]["code"].to_string(),
+                    Some("rpc-1") => json!({"result": message.get("result"), "error": message.get("error")}).to_string(),
                     _ => continue,
                 };
                 chunk(&mut out, &format!("s{sessions}"), &echo);

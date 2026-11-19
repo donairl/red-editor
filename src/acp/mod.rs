@@ -3,6 +3,8 @@
 //! stdin and stdout, one message per line.
 
 pub mod client;
+pub mod context;
+pub mod fs;
 #[cfg(test)]
 mod fake_agent;
 pub mod model;
