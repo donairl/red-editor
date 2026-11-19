@@ -13,6 +13,7 @@ mod blame;
 mod brackets;
 mod bookmarks;
 mod console_panel;
+mod disk;
 mod diff_view;
 mod drop;
 mod editor_view;

@@ -30,7 +30,7 @@ use crate::i18n::{self, I18n};
 use crate::layout_cache::LayoutCache;
 use crate::line_diff::{self, LineMarks};
 use crate::markdown_preview::{MarkdownPreview, ScrollPos, ScrollSync};
-use crate::modals::{self, DiskChoice, ModalResponse, PendingAction};
+use crate::modals::{self, ModalResponse, PendingAction};
 use crate::prettify;
 use crate::find::{self, FindAction, FindState, GotoAction, GotoState};
 use crate::folding::{self, Folds};
@@ -69,7 +69,7 @@ const AGENT_SETTINGS_KEY: &str = "agent_settings";
 const AGENT_PANEL_OPEN_KEY: &str = "agent_panel_open";
 
 /// Seconds between checks for open files changed by other programs.
-const DISK_CHECK_SECS: f64 = 2.0;
+pub(crate) const DISK_CHECK_SECS: f64 = 2.0;
 
 /// How long the typing must pause before auto-save writes the open files.
 const AUTOSAVE_SECS: f64 = 1.0;
@@ -82,7 +82,7 @@ const MARKS_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Largest file the editor opens. egui lays out the whole document, on every
 /// edit: past this size each keystroke takes well over a frame.
-const MAX_OPEN_BYTES: u64 = 10 * 1024 * 1024;
+pub(crate) const MAX_OPEN_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Under the editor's id, the `char` index it was last right-clicked at.
 pub(crate) const CONTEXT_CHAR: &str = "context_char";
@@ -136,7 +136,7 @@ pub struct DocumentTab {
 pub type DiskStamp = (SystemTime, u64);
 
 /// The [`DiskStamp`] of the file at `path`, if it can be read.
-fn disk_stamp(path: &Path) -> Option<DiskStamp> {
+pub(crate) fn disk_stamp(path: &Path) -> Option<DiskStamp> {
     let metadata = fs::metadata(path).ok()?;
     Some((metadata.modified().ok()?, metadata.len()))
 }
@@ -144,7 +144,7 @@ fn disk_stamp(path: &Path) -> Option<DiskStamp> {
 /// The contents of the file at `path` and its [`DiskStamp`]. A file over
 /// [`MAX_OPEN_BYTES`] is refused with [`std::io::ErrorKind::FileTooLarge`]
 /// before any of it is read.
-fn read_document(path: &Path) -> Result<(String, Option<DiskStamp>), std::io::Error> {
+pub(crate) fn read_document(path: &Path) -> Result<(String, Option<DiskStamp>), std::io::Error> {
     // Stamped before reading: a write in between shows as a change.
     let stamp = disk_stamp(path);
     if fs::metadata(path)?.len() > MAX_OPEN_BYTES {
@@ -211,28 +211,6 @@ impl DocumentTab {
             foldable: Vec::new(),
             hidden: None,
         })
-    }
-
-    /// Whether another program changed the file since this tab last read or
-    /// wrote it. A file that cannot be read (deleted, moved) is no change.
-    pub fn changed_on_disk(&self) -> bool {
-        self.current_path
-            .as_deref()
-            .and_then(disk_stamp)
-            .is_some_and(|stamp| Some(stamp) != self.disk_stamp)
-    }
-
-    /// Replaces the text, unsaved edits included, with the file's contents.
-    pub fn reload(&mut self) -> Result<(), std::io::Error> {
-        let path = self.current_path.as_deref().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "No file path specified")
-        })?;
-        let (content, disk_stamp) = read_document(path)?;
-        self.text_content = content.clone();
-        self.saved_content = content;
-        self.disk_stamp = disk_stamp;
-        self.disk_conflict = false;
-        Ok(())
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -1882,7 +1860,7 @@ impl TextEditorApp {
     }
 
     /// The status bar's message for a file that could not be read.
-    fn open_failed_message(&self, error: &std::io::Error) -> String {
+    pub(crate) fn open_failed_message(&self, error: &std::io::Error) -> String {
         if error.kind() == std::io::ErrorKind::FileTooLarge {
             let limit = (MAX_OPEN_BYTES / (1024 * 1024)).to_string();
             self.i18n.tf("msg.file_too_big", &[("limit", &limit)])
@@ -1890,51 +1868,6 @@ impl TextEditorApp {
             self.i18n
                 .tf("msg.open_failed", &[("error", &error.to_string())])
         }
-    }
-
-    /// Compares every open file with the disk: a tab without unsaved edits
-    /// reloads the new contents, one with edits is flagged so the user can
-    /// choose.
-    pub fn check_files_on_disk(&mut self) {
-        let mut reloaded = None;
-        for tab in &mut self.tabs {
-            if tab.disk_conflict || !tab.changed_on_disk() {
-                continue;
-            }
-            if tab.is_dirty() {
-                tab.disk_conflict = true;
-            } else if tab.reload().is_ok() {
-                reloaded = Some(tab.file_display_name(""));
-            }
-        }
-        if let Some(name) = reloaded {
-            self.status_message = Some((self.i18n.tf("msg.reloaded", &[("name", &name)]), false));
-            self.git.request_refresh();
-        }
-    }
-
-    /// Runs [`Self::check_files_on_disk`] when the window gets the focus
-    /// back and every [`DISK_CHECK_SECS`], waking egui for it.
-    pub fn poll_disk(&mut self, ctx: &egui::Context) {
-        let (now, refocused) = ctx.input(|i| {
-            let refocused = i
-                .events
-                .iter()
-                .any(|e| matches!(e, egui::Event::WindowFocused(true)));
-            (i.time, refocused)
-        });
-        if refocused || now - self.last_disk_check >= DISK_CHECK_SECS {
-            self.last_disk_check = now;
-            self.check_files_on_disk();
-            // Back from another program: files may have changed under git
-            // without touching its index.
-            if refocused {
-                self.git.refresh(ctx);
-            } else {
-                self.git.refresh_if_changed(ctx);
-            }
-        }
-        ctx.request_repaint_after(Duration::from_secs_f64(DISK_CHECK_SECS));
     }
 
     /// The folder whose repository git features act on: the open folder,
@@ -2062,22 +1995,6 @@ impl TextEditorApp {
             }
         };
         Some(message)
-    }
-
-    /// Applies the conflict dialog's choice to the active tab.
-    pub fn resolve_disk_conflict(&mut self, choice: DiskChoice) {
-        let tab = self.active_tab_mut();
-        tab.disk_conflict = false;
-        let result = match choice {
-            DiskChoice::Reload => tab.reload(),
-            DiskChoice::Keep => {
-                tab.disk_stamp = tab.current_path.as_deref().and_then(disk_stamp);
-                Ok(())
-            }
-        };
-        if let Err(err) = result {
-            self.status_message = Some((self.open_failed_message(&err), true));
-        }
     }
 
     pub fn save_tab(&mut self, index: usize) -> bool {
@@ -3808,24 +3725,6 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    /// An open file that grows past the limit is not reloaded.
-    #[test]
-    fn test_reload_refuses_a_file_grown_past_the_size_limit() {
-        let path = std::env::temp_dir().join("red_test_grows.log");
-        fs::write(&path, "small").unwrap();
-        let mut tab = DocumentTab::from_file(path.clone()).unwrap();
-        File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_len(MAX_OPEN_BYTES + 1)
-            .unwrap();
-        let error = tab.reload().unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::FileTooLarge);
-        assert_eq!(tab.text_content, "small");
-        let _ = fs::remove_file(&path);
-    }
-
     #[test]
     fn test_load_file_and_save() {
         let temp_dir = std::env::temp_dir().join("rred_app_test");
@@ -4958,109 +4857,6 @@ mod tests {
         assert!(app.show_sidebar);
         assert!(app.explorer.is_some(), "toggling keeps the open folder");
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    /// A fresh file `rred_disk_<name>.txt` in the temp directory.
-    fn disk_file(name: &str, content: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("rred_disk_{name}.txt"));
-        fs::write(&path, content).unwrap();
-        path
-    }
-
-    #[test]
-    fn test_tab_notices_its_file_changing_on_disk() {
-        let path = disk_file("notice", "one");
-        let mut tab = DocumentTab::from_file(path.clone()).unwrap();
-        assert!(!tab.changed_on_disk());
-        fs::write(&path, "one two").unwrap();
-        assert!(tab.changed_on_disk());
-        tab.reload().unwrap();
-        assert_eq!(tab.text_content, "one two");
-        assert!(!tab.is_dirty() && !tab.changed_on_disk());
-        fs::remove_file(&path).unwrap();
-        assert!(!tab.changed_on_disk(), "a deleted file is nothing to reload");
-    }
-
-    #[test]
-    fn test_disk_check_reloads_clean_tabs_and_flags_dirty_ones() {
-        let clean = disk_file("check_clean", "clean");
-        let dirty = disk_file("check_dirty", "dirty");
-        let mut app = TextEditorApp::default();
-        app.open_file_in_tab(clean.clone());
-        app.open_file_in_tab(dirty.clone());
-        app.active_tab_mut().text_content.push_str(" edited");
-        fs::write(&clean, "clean, changed outside").unwrap();
-        fs::write(&dirty, "dirty, changed outside").unwrap();
-
-        app.check_files_on_disk();
-        assert_eq!(app.tabs[0].text_content, "clean, changed outside");
-        assert!(!app.tabs[0].is_dirty() && !app.tabs[0].disk_conflict);
-        assert_eq!(app.tabs[1].text_content, "dirty edited", "unsaved edits stay");
-        assert!(app.tabs[1].disk_conflict, "the user is asked instead");
-        let _ = fs::remove_file(&clean);
-        let _ = fs::remove_file(&dirty);
-    }
-
-    /// Saving over a file changed on disk waits for the user's choice;
-    /// keeping their version lets the save through, reloading drops it.
-    #[test]
-    fn test_disk_conflict_choices() {
-        let path = disk_file("choice", "disk v1");
-        let mut app = TextEditorApp::default();
-        app.open_file_in_tab(path.clone());
-        app.active_tab_mut().text_content = "mine".into();
-        fs::write(&path, "disk v2, longer").unwrap();
-
-        assert!(!app.save(), "no silent overwrite");
-        assert_eq!(fs::read_to_string(&path).unwrap(), "disk v2, longer");
-        assert!(app.active_tab().disk_conflict);
-
-        app.resolve_disk_conflict(DiskChoice::Keep);
-        assert!(!app.active_tab().disk_conflict);
-        app.check_files_on_disk();
-        assert!(!app.active_tab().disk_conflict, "no second prompt for a kept change");
-        assert!(app.save());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "mine");
-
-        fs::write(&path, "disk v3, even longer").unwrap();
-        app.active_tab_mut().text_content = "mine again".into();
-        app.check_files_on_disk();
-        assert!(app.active_tab().disk_conflict);
-        app.resolve_disk_conflict(DiskChoice::Reload);
-        assert_eq!(app.active_tab().text_content, "disk v3, even longer");
-        assert!(!app.active_tab().is_dirty() && !app.active_tab().disk_conflict);
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn test_disk_is_checked_on_focus_and_every_few_seconds() {
-        let path = disk_file("poll", "v1");
-        let mut app = TextEditorApp::default();
-        app.open_file_in_tab(path.clone());
-        let ctx = egui::Context::default();
-        let frame = |app: &mut TextEditorApp, time: f64, events: Vec<egui::Event>| {
-            let input = egui::RawInput {
-                time: Some(time),
-                events,
-                ..Default::default()
-            };
-            let mut output = ctx.run_ui(input, |ui| app.poll_disk(ui.ctx()));
-            output.textures_delta.clear();
-        };
-        let text = |app: &TextEditorApp| app.active_tab().text_content.clone();
-
-        frame(&mut app, 0.0, Vec::new());
-        fs::write(&path, "v2 changed").unwrap();
-        frame(&mut app, 1.0, Vec::new());
-        assert_eq!(text(&app), "v1", "not due yet");
-        frame(&mut app, 1.5, vec![egui::Event::WindowFocused(true)]);
-        assert_eq!(text(&app), "v2 changed", "the focus coming back checks at once");
-        fs::write(&path, "v3 changed again").unwrap();
-        frame(&mut app, 3.0, Vec::new());
-        assert_eq!(text(&app), "v2 changed");
-        frame(&mut app, 3.6, Vec::new());
-        assert_eq!(text(&app), "v3 changed again", "checked again after the interval");
-        let _ = fs::remove_file(&path);
     }
 
     /// Clicking a file in the tree opens it, and clicking it again focuses
