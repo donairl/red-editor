@@ -33,6 +33,7 @@ Editor teks desktop ringan yang ditulis dengan Rust dan [egui](https://github.co
 - **Zen mode** (`F11`): mode layar penuh tanpa gangguan, sembunyikan semua panel selain editor; tekan `Esc` untuk keluar.
 - **Prettify** (**Edit → Rapikan**, `Ctrl+Shift+I`): merapikan JSON, HTML, dan CSS langsung di editor, serta Rust, Go, C/C++, Python, JS/TS lewat formatter yang terpasang (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Pratinjau Markdown** (`Ctrl+Shift+V`): hasil render file `.md` dalam tampilan terbelah langsung di samping editor.
+- **Panel Agen** (`Ctrl+Shift+A`): ngobrol dengan agen coding apa pun yang mendukung [Agent Client Protocol](https://agentclientprotocol.com) (ACP) dari panel di sebelah kanan; perubahan yang dibuatnya masuk ke file yang terbuka, belum disimpan, supaya kamu bisa memeriksanya. Lihat [Panel Agen](#panel-agen).
 - **Integrasi git** (butuh `git` di `PATH`): branch dan jumlah ahead/behind di status bar, file yang berubah diwarnai di Explorer, penanda perubahan di gutter, view **Source Control** untuk stage, unstage, buang perubahan, commit, pull, dan push, riwayat commit dengan riwayat file dan blame, serta **Git Graph** semua branch dan tag dengan jalur, panel detail, dan aksi branch. Lihat [Git](#git).
 - Tema terang/gelap mengikuti pengaturan sistem.
 
@@ -122,7 +123,7 @@ Editor dibuka dengan **halaman awal** berisi **File Baru**, **Buka File…**, **
 |---|---|
 | **File** | Tab Baru, Tutup Tab, Jendela Baru, Buka File…, Buka Folder…, Buka Cepat…, Buka Terbaru, Simpan, Simpan Sebagai…, Simpan Otomatis, Bahasa, Keluar |
 | **Edit** | Urungkan, Ulangi, Potong, Salin, Tempel, Cari, Ganti, Cari di File, Ke Baris… |
-| **Tampilan** | Bungkus Baris, Nomor Baris, Garis Indentasi, Tampilkan Spasi, Zen Mode, Bagi Editor, Pratinjau Markdown, Palet Perintah…, Perbesar, Tema, Bahasa, Bahasa Antarmuka |
+| **Tampilan** | Bungkus Baris, Nomor Baris, Garis Indentasi, Tampilkan Spasi, Zen Mode, Bagi Editor, Pratinjau Markdown, Panel Agen, Palet Perintah…, Perbesar, Tema, Bahasa, Bahasa Antarmuka |
 | **Help** | About |
 
 ### Shortcut keyboard
@@ -145,6 +146,8 @@ Di macOS, `Ctrl` menjadi `Cmd`.
 | `Ctrl+Alt+G` | Git Graph |
 | `F11` | Zen mode (layar penuh, hanya editor); `Esc` untuk keluar |
 | `Ctrl+Shift+V` | Tampilkan/sembunyikan pratinjau Markdown (file `.md`) |
+| `Ctrl+Shift+A` | Tampilkan/sembunyikan panel Agen |
+| `Ctrl+Shift+L` | Tambahkan pilihan ke prompt berikutnya di panel Agen |
 | `Ctrl+Shift+I` | Rapikan dokumen |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Tab berikutnya / sebelumnya |
 | `Ctrl+Z` | Urungkan |
@@ -185,6 +188,31 @@ Editor menjalankan `git` yang terpasang di komputer, jadi credential helper, ssh
 - **Blame** (**Tampilan → Git Blame**, `Ctrl+Alt+B`): kolom di kiri nomor baris menampilkan siapa yang terakhir mengubah tiap baris dan berapa lama lalu, dari commit terakhir. Arahkan mouse ke baris untuk hash dan pesan commit-nya. Saat ada perubahan belum disimpan, kolom meminta simpan dulu karena barisnya tidak lagi cocok.
 - **Git Graph** (**Tampilan → Git Graph**, `Ctrl+Alt+G`, atau ikon graph di judul Source Control): semua branch dan tag sebagai graph commit menggantikan editor, 200 commit sekali muat, dengan jalur berwarna, chip branch dan tag (branch aktif diberi garis tepi), penulis, umur, dan hash pendek. Klik commit untuk pesan, induk (klik untuk melompat ke sana), dan daftar file; klik file membuka diff-nya di panel kanan. Klik kanan commit untuk **Checkout Commit**, **Buat Branch di Sini…**, dan **Salin Hash**; klik kanan chip branch untuk **Pindah ke Branch**, **Hapus Branch…** (hanya branch yang sudah di-merge penuh; selebihnya ditolak git), dan **Salin Nama**. `×` atau `Esc` kembali ke editor.
 - Pull hanya fast-forward; kalau branch sudah bercabang, lakukan merge atau rebase di Console. Git tidak pernah meminta password di dalam editor: pull atau push yang butuh password atau key memberi tahu untuk menjalankannya sekali di Console, dengan tombol untuk membukanya.
+
+## Panel Agen
+
+Panel Agen berbicara dengan agen coding lewat [Agent Client Protocol](https://agentclientprotocol.com) (ACP), protokol JSON-RPC lewat stdin dan stdout agen. Red tidak membawa agen sendiri: kamu menunjuk salah satu.
+
+**Pengaturan.** Buka **File → Pengaturan… → Agen** dan ketik perintah yang menjalankan agenmu, misalnya:
+
+```
+npx @zed-industries/claude-code-acp
+gemini --experimental-acp
+```
+
+Perintah dipecah seperti shell, tetapi tidak dijalankan lewat shell. Buka folder dulu: agen bekerja di dalam workspace itu. Lalu tekan `Ctrl+Shift+A` (atau **Tampilan → Panel Agen**).
+
+- **Obrolan**: ketik prompt, `Enter` mengirim (`Shift+Enter` untuk baris baru). Jawaban mengalir masuk; **Hentikan** membatalkan giliran. **Sesi Baru** memulai percakapan baru, dan **Mulai Ulang Agen** menjalankan ulang prosesnya (perlu setelah perintah diubah). Jika agen meminta kamu masuk (sign in), panel menampilkan pilihan yang ditawarkannya.
+- **Panggilan alat** tampil sebagai kartu berisi jenis, status, dan detail alat. Saat agen meminta izin, kartu menampilkan pilihan yang diberikannya; Hentikan atau Sesi Baru menjawabnya sebagai dibatalkan. Kartu **Rencana** menampilkan daftar langkah agen beserta kemajuannya.
+- **Perubahan tetap di editor.** Saat agen menulis file, perubahannya masuk ke buffer yang terbuka (file dibukakan jika perlu) dan tab tetap belum disimpan. Kartu punya **Diff** (terhadap HEAD, atau file di disk di luar repository) dan **Simpan**; di header ada **Simpan Semua Perubahan Agen**. Sebelum kamu menyimpan, perintah yang dijalankan agen masih membaca file lama dari disk. File di luar workspace ditolak.
+- **Terminal**: perintah yang dijalankan agen menampilkan outputnya langsung di dalam kartu alat, dan semuanya dihentikan saat Sesi Baru, Mulai Ulang, atau agen berhenti.
+- **Konteks**: ketik `@` atau klik tombol `@` untuk mencari file di workspace dan melampirkannya sebagai chip; `×` menghapusnya. **Tambahkan Pilihan ke Agen** (`Ctrl+Shift+L`, menu klik kanan editor, atau Palet Perintah) melampirkan baris terpilih beserta path dan rentang barisnya, maksimal 256 KB. File harus sudah disimpan agar agen punya path.
+
+Keterbatasan yang diketahui:
+
+- Di Windows, ketik `npx.cmd` secara eksplisit; `npx` saja tidak ditemukan.
+- Terminal agen hanyalah pipe, bukan PTY: program yang butuh terminal sungguhan (warna, prompt, alat layar penuh) berperilaku seperti outputnya dialihkan.
+- Shortcut editor seperti `Alt+Up` atau `Ctrl+/` masih bekerja pada dokumen saat prompt agen sedang fokus.
 
 ## Menambah bahasa antarmuka
 

@@ -35,6 +35,7 @@ A lightweight desktop text editor written in Rust and [egui](https://github.com/
 - **Zen Mode** (`F11`): Distraction-free full-screen mode showing only the editor; press `Esc` to exit.
 - **Prettify** (**Edit → Prettify**, `Ctrl+Shift+I`): re-indents JSON, HTML and CSS in place, and Rust, Go, C/C++, Python and JS/TS through the installed formatter (`rustfmt`, `gofmt`, `clang-format`, `ruff`/`black`, `prettier`).
 - **Markdown preview** (`Ctrl+Shift+V`): rendered preview of `.md` files in a live split view beside the editor.
+- **Agent panel** (`Ctrl+Shift+A`): chat with any [Agent Client Protocol](https://agentclientprotocol.com) (ACP) coding agent from a panel on the right; its edits land in your open files, unsaved, for you to review. See [Agent panel](#agent-panel).
 - **Git integration** (needs `git` on the `PATH`): branch and ahead/behind counts in the status bar, changed files coloured in the Explorer, change markers in the gutter, a **Source Control** view to stage, unstage, discard, commit, pull and push, commit history with file history and blame, and a **Git Graph** of every branch and tag with lanes, a detail pane and branch actions. See [Git](#git).
 - System light/dark theme detection.
 
@@ -124,7 +125,7 @@ The editor opens on a **start page** with **New File**, **Open File…** and **O
 |---|---|
 | **File** | New Tab, Close Tab, New Window, Open File…, Open Folder…, Quick Open…, Open Recent, Save, Save As…, Auto Save, Settings…, Language, Exit |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Find, Replace, Find in Files, Go to Line…, Prettify |
-| **View** | Word Wrap, Line Numbers, Indent Guides, Render Whitespace, Zen Mode, Split Editor, Markdown Preview, Command Palette…, Zoom, Theme, Language, Interface Language |
+| **View** | Word Wrap, Line Numbers, Indent Guides, Render Whitespace, Zen Mode, Split Editor, Markdown Preview, Agent Panel, Command Palette…, Zoom, Theme, Language, Interface Language |
 | **Help** | About |
 
 ### Keyboard Shortcuts
@@ -147,6 +148,8 @@ On macOS, `Ctrl` is mapped to `Cmd`.
 | `Ctrl+Alt+G` | Git Graph |
 | `F11` | Zen mode (full screen, editor only); `Esc` to exit |
 | `Ctrl+Shift+V` | Toggle Markdown preview (`.md` files) |
+| `Ctrl+Shift+A` | Show or hide the Agent panel |
+| `Ctrl+Shift+L` | Add the selection to the Agent panel's next prompt |
 | `Ctrl+Shift+I` or `Shift+Alt+F` | Prettify the document |
 | `Alt+Up` / `Alt+Down` | Move the current line (or selected lines) up / down |
 | `Shift+Alt+Up` / `Shift+Alt+Down` | Copy the current line (or selected lines) up / down |
@@ -195,6 +198,31 @@ The editor runs the `git` installed on the machine, so your credential helper, s
 - **Blame** (**View → Git Blame**, `Ctrl+Alt+B`): a column left of the line numbers names who last changed each line and how long ago, from the last commit. Hover a line for the commit's hash and message. With unsaved edits the column asks you to save first, as the lines would no longer match.
 - **Git Graph** (**View → Git Graph**, `Ctrl+Alt+G`, or the graph icon in the Source Control title bar): every branch and tag as a commit graph in place of the editor, 200 commits at a time, with coloured lanes, branch and tag chips (the checked-out branch outlined), author, age and short hash. Click a commit for its message, parents (click one to jump to it) and files; a file opens its diff in the panel on the right. Right-click a commit for **Checkout Commit**, **Create Branch Here…** and **Copy Hash**; right-click a branch chip for **Switch to Branch**, **Delete Branch…** (fully merged branches only; git refuses the rest) and **Copy Name**. `×` or `Esc` returns to the editor.
 - Pull only fast-forwards; if the branch has diverged, merge or rebase in the Console. Git never prompts inside the editor: a pull or push that needs a password or key tells you to run it once in the Console, with a button to open it.
+
+## Agent panel
+
+The Agent panel talks to a coding agent over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), a JSON-RPC protocol over the agent's stdin and stdout. Red does not bundle an agent: you point it at one.
+
+**Set up.** Open **File → Settings… → Agent** and type the command that starts your agent, for example:
+
+```
+npx @zed-industries/claude-code-acp
+gemini --experimental-acp
+```
+
+The command is split like a shell would, but no shell runs it. Open a folder first: the agent works inside that workspace. Then press `Ctrl+Shift+A` (or **View → Agent Panel**).
+
+- **Chat**: type a prompt, `Enter` sends (`Shift+Enter` adds a line). The reply streams in; **Stop** cancels the turn. **New Session** starts a fresh conversation, and **Restart Agent** restarts the process (needed after changing the command). If the agent asks you to sign in, the panel shows the options it offers.
+- **Tool calls** appear as cards with the tool's kind, status and details. When the agent asks permission, the card shows the choices it offers; Stop or New Session answers as cancelled. A **Plan** card shows the agent's checklist as it progresses.
+- **Edits stay in the editor.** When the agent writes a file, the change goes into the open buffer (the file is opened for it if needed) and the tab stays unsaved. The card has **Diff** (against HEAD, or the file on disk outside a repository) and **Save**; the header has **Save All Agent Edits**. Until you save, a command the agent runs still reads the old files from disk. Files outside the workspace are refused.
+- **Terminals**: commands the agent runs show their output live inside the tool card, and are all stopped on New Session, Restart or exit.
+- **Context**: type `@` or click the `@` button to search the workspace and attach a file as a chip; `×` removes it. **Add Selection to Agent** (`Ctrl+Shift+L`, the editor's right-click menu or the Command Palette) attaches the selected lines with their path and line range, up to 256 KB. The file must be saved so the agent has a path.
+
+Known limitations:
+
+- On Windows, type `npx.cmd` explicitly; `npx` alone is not found.
+- Agent terminals are plain pipes, not a PTY: programs that need a real terminal (colours, prompts, full-screen tools) behave as if their output were redirected.
+- Editor shortcuts such as `Alt+Up` or `Ctrl+/` still act on the document while the agent prompt has focus.
 
 ## Adding Interface Languages
 
