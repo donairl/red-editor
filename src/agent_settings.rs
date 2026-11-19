@@ -19,6 +19,33 @@ pub enum CommandError {
     UnclosedQuote,
 }
 
+/// A known agent: a button in Settings → Agent that fills in its command.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AgentPreset {
+    /// The button label, a product name (not translated).
+    pub name: &'static str,
+    /// The command it fills in. `npx -y` skips npm's install prompt, which
+    /// would otherwise wait on the agent's stdin.
+    pub command: &'static str,
+}
+
+/// The agents offered as buttons; anything else is typed by hand ("Others").
+pub const PRESETS: [AgentPreset; 4] = [
+    AgentPreset { name: "Claude", command: "npx -y @zed-industries/claude-code-acp" },
+    AgentPreset { name: "Codex", command: "npx -y @zed-industries/codex-acp" },
+    AgentPreset { name: "AntiGravity", command: "agy acp" },
+    AgentPreset { name: "Hermes", command: "hermes acp" },
+];
+
+/// The preset whose command `command` is, word for word (extra spaces and
+/// quoting don't matter); `None` for a hand-typed or empty command.
+pub fn preset_of(command: &str) -> Option<usize> {
+    let words = split_command(command).ok()?;
+    PRESETS.iter().position(|preset| {
+        split_command(preset.command).is_ok_and(|preset_words| preset_words == words)
+    })
+}
+
 impl AgentSettings {
     pub fn to_storage(&self) -> String {
         json!({ "command": self.command }).to_string()
@@ -106,6 +133,24 @@ mod tests {
 
     fn split(text: &str) -> Result<Vec<String>, CommandError> {
         split_command(text)
+    }
+
+    /// Each preset's own command is recognised as that preset.
+    #[test]
+    fn test_preset_of_finds_each_preset() {
+        for (index, preset) in PRESETS.iter().enumerate() {
+            assert_eq!(preset_of(preset.command), Some(index), "{}", preset.name);
+        }
+    }
+
+    /// Spacing and quoting don't matter; other or empty commands are none.
+    #[test]
+    fn test_preset_of_compares_words() {
+        assert_eq!(preset_of("  hermes   'acp' "), Some(3));
+        assert_eq!(preset_of("hermes acp --verbose"), None);
+        assert_eq!(preset_of("gemini --experimental-acp"), None);
+        assert_eq!(preset_of(""), None);
+        assert_eq!(preset_of("agy \"acp"), None);
     }
 
     #[test]

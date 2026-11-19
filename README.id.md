@@ -193,10 +193,9 @@ Editor menjalankan `git` yang terpasang di komputer, jadi credential helper, ssh
 
 Panel Agen berbicara dengan agen coding lewat [Agent Client Protocol](https://agentclientprotocol.com) (ACP), protokol JSON-RPC lewat stdin dan stdout agen. Red tidak membawa agen sendiri: kamu menunjuk salah satu.
 
-**Pengaturan.** Buka **File → Pengaturan… → Agen** dan ketik perintah yang menjalankan agenmu, misalnya:
+**Pengaturan.** Buka **File → Pengaturan… → Agen** dan pilih agen: **Claude** (`npx -y @zed-industries/claude-code-acp`), **Codex** (`npx -y @zed-industries/codex-acp`), **AntiGravity** (`agy acp`) atau **Hermes** (`hermes acp`). Untuk agen lain, pilih **Lainnya** dan ketik perintah yang menjalankannya, misalnya:
 
 ```
-npx @zed-industries/claude-code-acp
 gemini --experimental-acp
 ```
 
