@@ -211,6 +211,10 @@ impl TextEditorApp {
                         clicks.close = ui.small_button("✕").on_hover_text(i18n.t("agent.close")).clicked();
                         clicks.restart =
                             ui.small_button("⟲").on_hover_text(i18n.t("agent.restart")).clicked();
+                        clicks.open_settings |= ui
+                            .small_button("⚙")
+                            .on_hover_text(i18n.t("agent.open_settings"))
+                            .clicked();
                         clicks.new_session =
                             ui.small_button("+").on_hover_text(i18n.t("agent.new_session")).clicked();
                         if client.is_some() {
@@ -691,5 +695,25 @@ mod tests {
         panel.remove_chip(9);
         panel.remove_chip(0);
         assert_eq!(panel.chips, vec![Chip::file("/w/b.rs".into())]);
+    }
+
+    /// The ⚙ button in the panel header, next to Restart, opens Settings.
+    #[test]
+    fn test_the_header_gear_opens_settings() {
+        use crate::app::test_support::*;
+        let ctx = egui::Context::default();
+        let mut app = TextEditorApp::default();
+        assert!(app.i18n.select("en"));
+        let mut shapes = Vec::new();
+        for _ in 0..2 {
+            shapes = run_frame_with_events(&ctx, Vec::new(), |ui| app.show_agent_panel(ui));
+        }
+        let (gear, _) = painted_text(&shapes, "⚙").expect("header lacks the gear");
+        let (restart, _) = painted_text(&shapes, "⟲").expect("header lacks restart");
+        assert!(gear.max.x <= restart.min.x, "the gear sits left of Restart");
+        assert!((gear.center().y - restart.center().y).abs() < 1.0, "same row");
+
+        run_frame_with_events(&ctx, click_events(gear.center()), |ui| app.show_agent_panel(ui));
+        assert!(app.show_settings, "the gear did not open Settings");
     }
 }
