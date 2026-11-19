@@ -142,10 +142,11 @@ Last updated 2026-11-18.
   a shared or busy target dir may be the cause.
 - [x] **Split `src/app.rs`** — done 2026-11-03: 7,092 → 4,812 lines;
   `shortcuts.rs`, `menus.rs`, `status_bar.rs`, `console_panel.rs`,
-  `editor_view.rs`. Left for later: `disk.rs` (poll/reload on disk change)
-  and `git_actions.rs` (poll git, SCM actions, confirm dialogs), and
-  `update` itself (~530 lines). `app.rs` is back up to about 5,700 lines; the
-  hunk popup and diff view wiring could move to `git_actions.rs` too.
+  `editor_view.rs`. Then 2026-11-19: 7,049 → 6,102 lines; `disk.rs` (poll
+  and reload on disk change, the conflict choice) and `git_actions.rs` (poll
+  git, gutter marks, SCM and Git Graph actions, the confirm dialog, the hunk
+  popup and the diff view), each with its tests. Left for later: `update`
+  itself (the `ui` frame, ~770 lines).
 
 ## Suggested order
 
