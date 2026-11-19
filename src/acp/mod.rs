@@ -6,7 +6,7 @@ pub mod client;
 pub mod context;
 pub mod fs;
 #[cfg(test)]
-mod fake_agent;
+pub(crate) mod fake_agent;
 pub mod model;
 pub mod terminals;
 pub mod transport;

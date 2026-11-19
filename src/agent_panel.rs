@@ -49,6 +49,9 @@ pub struct AgentPanel {
     note: Option<&'static str>,
     show_log: bool,
     markdown: CommonMarkCache,
+    /// Another folder was opened while an agent ran: start it again there
+    /// on the next frame (`poll_agent` has the context it needs).
+    restart_in_new_folder: bool,
 }
 
 /// The `@` file picker: a query over the workspace's files.
@@ -172,8 +175,31 @@ impl TextEditorApp {
         }
     }
 
+    /// Called by `open_folder` before the workspace changes to `folder`. The
+    /// agent's process, fs bounds and terminals all live in the folder it
+    /// was started in, so a running agent (or one that failed to start) is
+    /// stopped now and started again in the new folder on the next frame.
+    /// Reopening the same folder, or an agent never started, is left alone.
+    pub(crate) fn agent_workspace_changing(&mut self, folder: &std::path::Path) {
+        let same = self.explorer.as_ref().is_some_and(|e| e.root() == folder);
+        let started = self.agent.client.is_some() || self.agent.start_error.is_some();
+        if same || !started {
+            return;
+        }
+        // Dropping the client cancels its turn and kills its process.
+        self.agent.client = None;
+        self.agent.start_error = None;
+        self.agent.chips.clear();
+        self.agent.picker = None;
+        self.agent.note = None;
+        self.agent.restart_in_new_folder = true;
+    }
+
     /// Once per frame, shown or not: the agent keeps working while hidden.
     pub(crate) fn poll_agent(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.agent.restart_in_new_folder) {
+            self.start_agent(ctx);
+        }
         if let Some(client) = &mut self.agent.client {
             let now = Instant::now();
             client.poll(now);
@@ -198,7 +224,7 @@ impl TextEditorApp {
         let unsaved = self.agent_unsaved_paths();
         let (picker_items, indexing) = self.picker_items(&ctx);
         let i18n = &self.i18n;
-        let AgentPanel { client, start_error, input, show_log, markdown, edits: _, chips, picker, note } =
+        let AgentPanel { client, start_error, input, show_log, markdown, edits: _, chips, picker, note, restart_in_new_folder: _ } =
             &mut self.agent;
         egui::Panel::right("agent_panel")
             .resizable(true)
@@ -695,6 +721,55 @@ mod tests {
         panel.remove_chip(9);
         panel.remove_chip(0);
         assert_eq!(panel.chips, vec![Chip::file("/w/b.rs".into())]);
+    }
+
+    fn folder(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rred_agent_{name}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The agent works in the workspace it was started in, so opening
+    /// another folder stops it and starts it again there on the next frame.
+    #[test]
+    fn test_opening_another_folder_restarts_the_agent() {
+        use crate::acp::fake_agent::{self, FakeOptions};
+        let ctx = egui::Context::default();
+        let (old, new) = (folder("old"), folder("new"));
+        let mut app = TextEditorApp::default();
+        app.open_folder(old.clone());
+        app.agent.client =
+            Some(Client::new(fake_agent::connect(FakeOptions::default()), None, old.clone(), Instant::now()));
+        app.agent.chips.push(Chip::file(old.join("a.rs")));
+
+        app.open_folder(old.clone());
+        assert!(app.agent.client.is_some(), "the same folder again keeps the agent");
+
+        app.open_folder(new.clone());
+        assert!(app.agent.client.is_none(), "the old agent still runs");
+        assert!(app.agent.chips.is_empty(), "chips of the old folder stay");
+
+        // No command set, so the restart shows why it cannot start.
+        app.poll_agent(&ctx);
+        assert_eq!(app.agent.start_error, Some(StartError::NoCommand), "no restart was tried");
+        app.agent.start_error = None;
+        app.poll_agent(&ctx);
+        assert_eq!(app.agent.start_error, None, "it restarts only once");
+        let _ = std::fs::remove_dir_all(old);
+        let _ = std::fs::remove_dir_all(new);
+    }
+
+    /// An agent that was never started stays stopped when a folder opens.
+    #[test]
+    fn test_opening_a_folder_does_not_start_an_idle_agent() {
+        let ctx = egui::Context::default();
+        let dir = folder("idle");
+        let mut app = TextEditorApp::default();
+        app.open_folder(dir.clone());
+        app.poll_agent(&ctx);
+        assert!(app.agent.client.is_none());
+        assert_eq!(app.agent.start_error, None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The ⚙ button in the panel header, next to Restart, opens Settings.
