@@ -21,6 +21,7 @@ mod embedded_sql;
 mod file_browser;
 mod file_ops;
 mod git;
+mod git_actions;
 mod git_graph;
 mod git_log;
 mod git_worker;
