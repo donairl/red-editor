@@ -91,8 +91,11 @@ Last updated 2026-11-18.
     through the open buffers (workspace-bounded, answered on the UI
     thread), writes leave the tab unsaved, unsaved badge with Diff / Save
     on the card and Save All Agent Edits in the header.
-  - [ ] **Stage 4** — terminals for the agent (`terminal/*`), live output
-    in cards.
+  - [x] **Stage 4** — done 2026-11-19 (`src/acp/terminals.rs`): the agent
+    runs commands in pipe-based terminals Red owns (create / output /
+    wait_for_exit answered later by a watcher thread / kill / release,
+    bounded UTF-8-safe buffer), live output in tool cards (12 rows,
+    follows the end), all killed on New Session, Restart, exit and drop.
   - [x] **Stage 5** — done 2026-11-19 (`src/acp/context.rs`): `@` (typed
     or button) opens a Quick Open-style file picker that adds removable
     chips; Add Selection to Agent (Ctrl+Shift+L, palette, editor menu)
@@ -107,8 +110,6 @@ Last updated 2026-11-18.
       direct child runs (a Job Object would fix it).
     - Editor shortcuts (Alt+Up, Ctrl+/, Ctrl+D…) still act on the document
       while the agent prompt has focus.
-    - Unix tree kill runs the `kill` binary (and relies on `kill --`,
-      which BSD/macOS may lack); a direct `killpg` would avoid both.
 - [ ] **Minimal LSP client** — diagnostics first (squiggles + a Problems
   panel) from `rust-analyzer` / `gopls` / `tsserver`, then Go to Definition
   (`F12`) and hover. Biggest feature, biggest cost.

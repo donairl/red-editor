@@ -130,11 +130,13 @@ impl Connection {
 
     /// Answers a request from the agent.
     pub fn respond(&self, id: Value, result: Result<Value, RpcError>) {
-        let message = match result {
-            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            Err(error) => json!({ "jsonrpc": "2.0", "id": id, "error": error.to_value() }),
-        };
-        self.send(message);
+        self.responder().respond(id, result);
+    }
+
+    /// A handle that answers requests from another thread (a terminal's
+    /// watcher answering `terminal/wait_for_exit`).
+    pub fn responder(&self) -> Responder {
+        Responder(self.outgoing.clone())
     }
 
     /// The next message, if one has arrived. `None` once the reader has
@@ -151,6 +153,28 @@ impl Connection {
     fn send(&self, message: Value) {
         // A closed writer means the agent is gone; the reader reports that.
         let _ = self.outgoing.send(message.to_string());
+    }
+}
+
+/// Answers agent requests; cheap to clone, usable from any thread.
+#[derive(Clone)]
+pub struct Responder(Sender<String>);
+
+impl Responder {
+    /// A responder whose answers (JSON lines) the test reads.
+    #[cfg(test)]
+    pub fn channel() -> (Self, Receiver<String>) {
+        let (tx, rx) = mpsc::channel();
+        (Self(tx), rx)
+    }
+
+    pub fn respond(&self, id: Value, result: Result<Value, RpcError>) {
+        let message = match result {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err(error) => json!({ "jsonrpc": "2.0", "id": id, "error": error.to_value() }),
+        };
+        // A closed writer means the agent is gone; nobody needs the answer.
+        let _ = self.0.send(message.to_string());
     }
 }
 
@@ -281,19 +305,19 @@ impl Drop for AgentProcess {
     }
 }
 
-/// The agent's process group (Unix; see `process_group(0)` in `spawn`).
+/// The process group `pid` leads (Unix; the child was started with
+/// `process_group(0)`), killed with one `killpg` call.
 #[cfg(unix)]
-fn kill_tree(pid: u32) {
-    let _ = Command::new("kill")
-        .args(["-KILL", "--", &format!("-{pid}")])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+pub(crate) fn kill_tree(pid: u32) {
+    // SAFETY: a plain syscall with no pointers; at worst the group is gone.
+    unsafe {
+        libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+    }
 }
 
 /// The agent and its child processes.
 #[cfg(windows)]
-fn kill_tree(pid: u32) {
+pub(crate) fn kill_tree(pid: u32) {
     let mut command = Command::new("taskkill");
     command.args(["/F", "/T", "/PID", &pid.to_string()]);
     crate::process::hide_console(&mut command);

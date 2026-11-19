@@ -12,6 +12,7 @@ use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use serde_json::Value;
 
+use crate::acp::terminals::{TerminalView, Terminals};
 use crate::acp::model::{
     Location, PermissionCard, PermissionState, PlanItem, ToolCallView, ToolContent,
 };
@@ -151,6 +152,7 @@ pub fn draw_tool_call(
     markdown: &mut CommonMarkCache,
     call: &ToolCallView,
     unsaved: &[PathBuf],
+    terminals: &Terminals,
 ) -> Option<CardAction> {
     let mut action = None;
     let (icon, color) = status_icon(ui, &call.status);
@@ -199,11 +201,16 @@ pub fn draw_tool_call(
                                         action = Some(a);
                                     }
                                 }
-                                ToolContent::Terminal(id) => {
-                                    ui.label(
-                                        egui::RichText::new(i18n.tf("agent.terminal", &[("id", id)])).weak(),
-                                    );
-                                }
+                                ToolContent::Terminal(id) => match terminals.view(id) {
+                                    Some(view) => draw_terminal(ui, i18n, id, &view),
+                                    // Cleared by a new session, or never ours.
+                                    None => {
+                                        ui.label(
+                                            egui::RichText::new(i18n.tf("agent.terminal", &[("id", id)]))
+                                                .weak(),
+                                        );
+                                    }
+                                },
                             });
                         }
                         draw_raw(ui, i18n.t("agent.raw_input"), ("in", &call.id), call.raw_input.as_ref());
@@ -212,6 +219,39 @@ pub fn draw_tool_call(
             }
         });
     action
+}
+
+/// Rows of terminal output shown before it scrolls.
+const TERMINAL_ROWS: f32 = 12.0;
+
+/// A terminal's output, live: a status line, then monospace text in a
+/// scroll area of at most [`TERMINAL_ROWS`] rows that follows the end while
+/// the process runs.
+fn draw_terminal(ui: &mut egui::Ui, i18n: &I18n, id: &str, view: &TerminalView) {
+    let status = match &view.exit {
+        None => i18n.t("agent.terminal_running").to_owned(),
+        Some(exit) => match (exit.exit_code, &exit.signal) {
+            (Some(code), _) => i18n.tf("agent.terminal_exit_code", &[("code", &code.to_string())]),
+            (None, Some(signal)) => i18n.tf("agent.terminal_signal", &[("signal", signal)]),
+            (None, None) => i18n.t("agent.terminal_exited").to_owned(),
+        },
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new(status).weak().small());
+        if view.truncated {
+            ui.label(egui::RichText::new(i18n.t("agent.terminal_truncated")).weak().small());
+        }
+    });
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let row = ui.fonts_mut(|f| f.row_height(&font));
+    egui::ScrollArea::vertical()
+        .id_salt(("terminal", id))
+        .max_height(row * TERMINAL_ROWS)
+        .stick_to_bottom(view.exit.is_none())
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(egui::RichText::new(&view.text).monospace()).selectable(true).wrap());
+        });
 }
 
 /// The files this call names (diffs, locations) that the agent wrote and

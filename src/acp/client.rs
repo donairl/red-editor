@@ -19,6 +19,7 @@ use serde_json::Value;
 use super::context::{Chip, build_blocks};
 use super::fs::{self, Buffers, FsCall};
 use super::model::{Attached, Entry, Notice, PermissionCard, PermissionChoice, PermissionState, Transcript};
+use super::terminals::Terminals;
 use super::transport::{AgentProcess, Connection, Incoming, RpcError};
 
 /// How long `initialize` and `session/new` may take. Sign-in (a browser
@@ -81,6 +82,8 @@ pub struct Client {
     ended_at: Option<Instant>,
     /// File requests waiting for the UI thread's buffers ([`Self::serve_fs`]).
     fs_queue: Vec<(Value, FsCall)>,
+    /// The terminals the agent runs; killed when the session or agent ends.
+    terminals: Terminals,
 }
 
 fn params(value: impl serde::Serialize) -> Value {
@@ -90,6 +93,7 @@ fn params(value: impl serde::Serialize) -> Value {
 impl Client {
     /// Sends `initialize` at once; the rest follows from [`Self::poll`].
     pub fn new(conn: Connection, process: Option<AgentProcess>, cwd: PathBuf, now: Instant) -> Self {
+        let terminals = Terminals::new(conn.responder(), cwd.clone());
         let mut client = Self {
             conn,
             process,
@@ -104,13 +108,15 @@ impl Client {
             exit_code: None,
             ended_at: None,
             fs_queue: Vec::new(),
+            terminals,
         };
-        // Files go through the editor's buffers; no terminals yet.
+        // Files go through the editor's buffers; commands run in terminals
+        // Red owns.
         let request = InitializeRequest::new(ProtocolVersion::V1)
             .client_capabilities(
                 ClientCapabilities::new()
                     .fs(FileSystemCapabilities::new().read_text_file(true).write_text_file(true))
-                    .terminal(false),
+                    .terminal(true),
             )
             .client_info(Implementation::new("red", env!("CARGO_PKG_VERSION")));
         client.send(Pending::Initialize, "initialize", params(request), now);
@@ -141,6 +147,7 @@ impl Client {
     /// so the UI should keep repainting even without messages.
     pub fn wants_repaint(&self, now: Instant) -> bool {
         self.deadline.is_some()
+            || self.terminals.any_running()
             || (self.process.is_some()
                 && self.ended_at.is_some_and(|at| now.duration_since(at) < EXIT_SETTLE))
     }
@@ -198,6 +205,7 @@ impl Client {
         // The old turn's answer, when it comes, belongs to nobody.
         self.pending.retain(|_, pending| *pending != Pending::Prompt);
         self.transcript = Transcript::default();
+        self.terminals.kill_all();
         self.request_session(now);
     }
 
@@ -222,6 +230,11 @@ impl Client {
             self.conn.respond(id, result);
         }
         written
+    }
+
+    /// The agent's terminals, for drawing their output.
+    pub fn terminals(&self) -> &Terminals {
+        &self.terminals
     }
 
     /// Whether file requests wait for [`Self::serve_fs`].
@@ -290,6 +303,7 @@ impl Client {
         self.phase = Phase::Failed(message);
         self.pending.clear();
         self.fs_queue.clear();
+        self.terminals.kill_all();
         self.deadline = None;
     }
 
@@ -367,6 +381,12 @@ impl Client {
     fn on_request(&mut self, id: Value, method: &str, request_params: Value) {
         match method {
             "session/request_permission" => self.on_permission_request(id, request_params),
+            // Answered at once, or by a watcher thread when the process ends.
+            _ if method.starts_with("terminal/") => {
+                if !self.terminals.handle(id.clone(), method, request_params) {
+                    self.conn.respond(id, Err(RpcError::method_not_found(method)));
+                }
+            }
             _ => match FsCall::parse(method, request_params) {
                 Some(Ok(call)) => self.fs_queue.push((id, call)),
                 Some(Err(error)) => self.conn.respond(id, Err(error)),
@@ -441,6 +461,7 @@ impl Client {
         self.cancel_permissions(false);
         self.pending.clear();
         self.fs_queue.clear();
+        self.terminals.kill_all();
         self.deadline = None;
         self.ended_at.get_or_insert(now);
         self.phase = Phase::Exited { code: self.exit_code.flatten(), stderr };
@@ -498,6 +519,7 @@ impl Drop for Client {
     /// killed right after, when the fields drop.
     fn drop(&mut self) {
         self.cancel();
+        self.terminals.kill_all();
     }
 }
 
@@ -820,6 +842,87 @@ mod tests {
         let mut client = Client::new(conn, Some(process), PathBuf::from("/work"), Instant::now());
         pump(&mut client, |c| matches!(&c.phase, Phase::Exited { code: Some(_), stderr } if !stderr.is_empty()));
         assert_eq!(client.phase, Phase::Exited { code: Some(3), stderr: vec!["oops".to_owned()] });
+    }
+
+    /// The agent sends `rpc <method> <params>`; returns Red's answer.
+    fn rpc(client: &mut Client, method: &str, params: &str) -> Value {
+        assert!(client.send_prompt(&format!("rpc {method} {params}"), Instant::now()));
+        pump(client, |c| c.phase == Phase::Ready);
+        let Some(Entry::AgentText(echo)) = client.transcript.entries.iter().rev().find(|e| matches!(e, Entry::AgentText(_)))
+        else {
+            panic!("no echo")
+        };
+        serde_json::from_str(echo).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn create_terminal(client: &mut Client, script: &str) -> String {
+        let params = serde_json::json!({"command": "sh", "args": ["-c", script], "cwd": "/"});
+        let echo = rpc(client, "terminal/create", &params.to_string());
+        echo["result"]["terminalId"].as_str().unwrap_or_else(|| panic!("{echo}")).to_owned()
+    }
+
+    #[cfg(unix)]
+    fn assert_gone(pid: u32) {
+        let started = Instant::now();
+        // SAFETY: signal 0 only checks that the process exists.
+        while unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+            assert!(started.elapsed() < Duration::from_secs(5), "process {pid} still runs");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_terminal_round_trip_through_the_agent() {
+        let mut client = ready(FakeOptions::default());
+        let id = create_terminal(&mut client, "echo from-terminal");
+        let target = format!(r#"{{"terminalId": "{id}"}}"#);
+        let waited = rpc(&mut client, "terminal/wait_for_exit", &target);
+        assert_eq!(waited["result"]["exitCode"], 0);
+        let output = rpc(&mut client, "terminal/output", &target);
+        assert!(output["result"]["output"].as_str().unwrap().contains("from-terminal"));
+        assert_eq!(output["result"]["truncated"], false);
+        // The card reads the same buffer.
+        assert!(client.terminals().view(&id).unwrap().text.contains("from-terminal"));
+        let unknown = rpc(&mut client, "terminal/output", r#"{"terminalId": "nope"}"#);
+        assert_eq!(unknown["error"]["code"], -32602);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_new_session_and_drop_kill_the_terminals() {
+        let mut client = ready(FakeOptions::default());
+        let id = create_terminal(&mut client, "sleep 30");
+        let pid = client.terminals().pid(&id).unwrap();
+        assert!(client.wants_repaint(Instant::now()), "a running terminal keeps the panel repainting");
+        client.new_session(Instant::now());
+        assert_gone(pid);
+        assert!(client.terminals().view(&id).is_none());
+        pump(&mut client, |c| c.phase == Phase::Ready);
+
+        let id = create_terminal(&mut client, "sleep 30");
+        let pid = client.terminals().pid(&id).unwrap();
+        drop(client);
+        assert_gone(pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_agent_exit_kills_the_terminals() {
+        let args = ["-c".to_owned(), "sleep 1".to_owned()];
+        let (conn, process) =
+            AgentProcess::spawn("sh", &args, std::path::Path::new("."), std::sync::Arc::new(|| {})).unwrap();
+        let mut client = Client::new(conn, Some(process), PathBuf::from("/"), Instant::now());
+        // No ACP conversation here; start a terminal as the agent would.
+        assert!(client.terminals().handle(
+            Value::from(1),
+            "terminal/create",
+            serde_json::json!({"sessionId": "s", "command": "sh", "args": ["-c", "sleep 30"]})
+        ));
+        let pid = client.terminals().pid("term-1").unwrap();
+        pump(&mut client, |c| matches!(c.phase, Phase::Exited { .. }));
+        assert_gone(pid);
     }
 
     #[test]

@@ -22,6 +22,9 @@ trash = "5"
 # Agent Client Protocol wire types (serde only; no async runtime).
 agent-client-protocol-schema = { version = "1.18", default-features = false }
 
+# Kills a process group directly (`killpg`) instead of running `kill`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # winit 0.30.13 with a fix for moving the window onto a monitor with another
 # display scale on Windows. See vendor/README.md.
