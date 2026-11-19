@@ -1990,6 +1990,29 @@ impl TextEditorApp {
         self.status_message = Some((self.i18n.t("msg.folder_opened").to_owned(), false));
     }
 
+    /// File → New File…: opens the Explorer's name field for a new file in
+    /// the active file's folder, or in the workspace root when the active
+    /// tab has no file inside the workspace. Enter creates and opens it, as
+    /// the Explorer's own New File does. False without a workspace.
+    pub fn new_file_in_active_folder(&mut self) -> bool {
+        let Some(root) = self.explorer.as_ref().map(|e| e.root().to_path_buf()) else {
+            return false;
+        };
+        let folder = self
+            .active_tab()
+            .current_path
+            .as_deref()
+            .and_then(Path::parent)
+            .filter(|parent| parent.starts_with(&root) && parent.is_dir())
+            .map_or(root, Path::to_path_buf);
+        self.show_sidebar = true;
+        self.sidebar_view = SidebarView::Explorer;
+        if let Some(explorer) = &mut self.explorer {
+            explorer.begin_new(folder, false);
+        }
+        true
+    }
+
     /// Opens what was dropped on the window: a folder becomes the workspace
     /// and every file opens in a tab.
     ///
@@ -4213,6 +4236,42 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("notes.txt"), "notes").unwrap();
         dir
+    }
+
+    /// File → New File… opens the Explorer's name field in the active
+    /// file's folder, or in the workspace root when the active tab has no
+    /// file inside it; without a workspace it does nothing.
+    #[test]
+    fn test_new_file_from_the_menu_starts_in_the_active_folder() {
+        use crate::file_browser::EditTarget;
+        let dir = folder_with_notes("menu_new_file");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/main.rs"), "fn main() {}").unwrap();
+        let parent = |app: &TextEditorApp| {
+            app.explorer.as_ref().and_then(|e| e.editing()).map(|edit| edit.target.clone())
+        };
+
+        let mut app = TextEditorApp::default();
+        assert!(!app.new_file_in_active_folder(), "no workspace, nothing to do");
+
+        app.open_folder(dir.clone());
+        app.show_sidebar = false;
+        assert!(app.new_file_in_active_folder());
+        assert_eq!(parent(&app), Some(EditTarget::NewFile { parent: dir.clone() }));
+        assert!(app.show_sidebar && app.sidebar_view == SidebarView::Explorer);
+
+        app.open_file_in_tab(dir.join("src/main.rs"));
+        assert!(app.new_file_in_active_folder());
+        assert_eq!(parent(&app), Some(EditTarget::NewFile { parent: dir.join("src") }));
+
+        let outside = std::env::temp_dir().join("rred_app_menu_new_file_outside.txt");
+        fs::write(&outside, "x").unwrap();
+        app.open_file_in_tab(outside.clone());
+        assert_eq!(app.active_tab().current_path.as_deref(), Some(outside.as_path()));
+        app.new_file_in_active_folder();
+        assert_eq!(parent(&app), Some(EditTarget::NewFile { parent: dir.clone() }));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_file(&outside);
     }
 
     #[test]
