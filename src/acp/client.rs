@@ -11,12 +11,12 @@ use agent_client_protocol_schema::v1::{
     AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock,
     FileSystemCapabilities, Implementation, InitializeRequest, InitializeResponse,
     NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionResponse, SessionId, SessionNotification,
-    TextContent,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionId,
+    SessionNotification, SelectedPermissionOutcome, TextContent,
 };
 use serde_json::Value;
 
-use super::model::{Notice, Transcript};
+use super::model::{Entry, Notice, PermissionCard, PermissionChoice, PermissionState, Transcript};
 use super::transport::{AgentProcess, Connection, Incoming, RpcError};
 
 /// How long `initialize` and `session/new` may take. Sign-in (a browser
@@ -155,9 +155,11 @@ impl Client {
         true
     }
 
-    /// Asks the agent to stop the running turn. The turn ends when the agent
-    /// answers the prompt (with `cancelled`).
+    /// Asks the agent to stop the running turn. Pending permission requests
+    /// are answered `cancelled` first, as the protocol requires; the turn
+    /// ends when the agent answers the prompt (with `cancelled`).
     pub fn cancel(&mut self) {
+        self.cancel_permissions(true);
         if let (Phase::Prompting, Some(session_id)) = (&self.phase, &self.session_id) {
             self.conn.notify("session/cancel", params(CancelNotification::new(session_id.clone())));
         }
@@ -178,6 +180,36 @@ impl Client {
         self.pending.retain(|_, pending| *pending != Pending::Prompt);
         self.transcript = Transcript::default();
         self.request_session(now);
+    }
+
+    /// Answers a pending permission card with one of its options. Does
+    /// nothing when the card is gone or already answered.
+    pub fn answer_permission(&mut self, rpc_id: &Value, option_id: &str) {
+        let Some(card) = self.transcript.pending_permission_mut(rpc_id) else { return };
+        let Some(choice) = card.options.iter().find(|o| o.id == option_id) else { return };
+        card.state = PermissionState::Chosen(choice.name.clone());
+        let outcome = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id.to_owned()));
+        self.conn.respond(rpc_id.clone(), Ok(params(RequestPermissionResponse::new(outcome))));
+    }
+
+    /// Ends every pending permission card as cancelled; `respond` also tells
+    /// the agent (not when it is gone).
+    fn cancel_permissions(&mut self, respond: bool) {
+        let mut ids = Vec::new();
+        for entry in &mut self.transcript.entries {
+            if let Entry::Permission(card) = entry
+                && card.state == PermissionState::Pending
+            {
+                card.state = PermissionState::Cancelled;
+                ids.push(card.rpc_id.clone());
+            }
+        }
+        if respond {
+            for id in ids {
+                let response = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+                self.conn.respond(id, Ok(params(response)));
+            }
+        }
     }
 
     pub fn authenticate(&mut self, method_id: &str, now: Instant) {
@@ -217,6 +249,7 @@ impl Client {
     }
 
     fn fail(&mut self, message: String) {
+        self.cancel_permissions(false);
         self.phase = Phase::Failed(message);
         self.pending.clear();
         self.deadline = None;
@@ -240,6 +273,7 @@ impl Client {
                         self.phase = Phase::NeedsAuth(self.auth_methods.clone());
                     }
                     Pending::Prompt => {
+                        self.cancel_permissions(true);
                         self.transcript.notice(Notice::Error(error.message));
                         self.phase = Phase::Ready;
                     }
@@ -265,6 +299,9 @@ impl Client {
                 Err(error) => self.fail(format!("unreadable session/new answer: {error}")),
             },
             Pending::Prompt => {
+                // A request left open when the turn ended can no longer be
+                // granted.
+                self.cancel_permissions(true);
                 if let Ok(response) = serde_json::from_value::<PromptResponse>(value) {
                     self.transcript.end_turn(&response.stop_reason);
                 }
@@ -289,15 +326,39 @@ impl Client {
         self.request_session(now);
     }
 
-    fn on_request(&mut self, id: Value, method: &str, _params: Value) {
+    fn on_request(&mut self, id: Value, method: &str, request_params: Value) {
         match method {
-            "session/request_permission" => {
-                let response = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
-                self.conn.respond(id, Ok(params(response)));
-                self.transcript.notice(Notice::PermissionDeclined);
-            }
+            "session/request_permission" => self.on_permission_request(id, request_params),
             _ => self.conn.respond(id, Err(RpcError::method_not_found(method))),
         }
+    }
+
+    /// Shows the request as a card; the user's click answers it later. A
+    /// request for another session, or one that cannot be read, is
+    /// answered `cancelled` at once.
+    fn on_permission_request(&mut self, id: Value, request_params: Value) {
+        let request = serde_json::from_value::<RequestPermissionRequest>(request_params)
+            .ok()
+            .filter(|r| self.session_id.as_ref() == Some(&r.session_id) && !r.options.is_empty());
+        let Some(request) = request else {
+            let response = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+            self.conn.respond(id, Ok(params(response)));
+            return;
+        };
+        self.transcript.update_tool_call(&request.tool_call);
+        let tool_call_id = request.tool_call.tool_call_id.to_string();
+        let title = self.transcript.tool_call(&tool_call_id).map(|c| c.title.clone()).unwrap_or_default();
+        self.transcript.entries.push(Entry::Permission(PermissionCard {
+            rpc_id: id,
+            tool_call_id,
+            title,
+            options: request
+                .options
+                .iter()
+                .map(|o| PermissionChoice { id: o.option_id.to_string(), name: o.name.clone(), kind: o.kind })
+                .collect(),
+            state: PermissionState::Pending,
+        }));
     }
 
     fn on_notification(&mut self, method: &str, params: Value) {
@@ -320,6 +381,7 @@ impl Client {
         }
         if self.phase == Phase::Prompting {
             self.pending.retain(|_, pending| *pending != Pending::Prompt);
+            self.cancel_permissions(true);
             self.transcript.notice(Notice::Error(error.message));
             self.phase = Phase::Ready;
         } else if self.deadline.is_some() {
@@ -334,6 +396,7 @@ impl Client {
         // Never wait here: the code and late stderr lines are filled in by
         // `watch_process` on later polls.
         let stderr = self.stderr_tail(EXIT_STDERR_LINES);
+        self.cancel_permissions(false);
         self.pending.clear();
         self.deadline = None;
         self.ended_at.get_or_insert(now);
@@ -399,7 +462,7 @@ impl Drop for Client {
 mod tests {
     use super::*;
     use crate::acp::fake_agent::{self, FakeOptions};
-    use crate::acp::model::{Entry, Notice};
+    use crate::acp::model::{Entry, Notice, ToolContent};
     use std::thread;
 
     fn start(options: FakeOptions) -> Client {
@@ -450,14 +513,65 @@ mod tests {
         assert_eq!(client.transcript.entries.last(), Some(&Entry::TurnEnd("cancelled".into())));
     }
 
+    fn pending_card(client: &Client) -> PermissionCard {
+        client.transcript.pending_permissions().next().cloned().expect("a pending card")
+    }
+
     #[test]
-    fn test_permission_requests_are_declined_in_stage_one() {
+    fn test_permission_card_waits_then_answers_with_the_chosen_option() {
         let mut client = ready(FakeOptions::default());
         client.send_prompt("permission", Instant::now());
+        pump(&mut client, |c| c.transcript.pending_permissions().next().is_some());
+        let card = pending_card(&client);
+        assert_eq!(card.title, "Edit main.rs");
+        assert_eq!(card.options.len(), 4);
+        assert_eq!(client.phase, Phase::Prompting, "the turn waits for the user");
+        client.answer_permission(&card.rpc_id, "allow_always");
         pump(&mut client, |c| c.phase == Phase::Ready);
         let entries = &client.transcript.entries;
-        assert!(entries.contains(&Entry::Notice(Notice::PermissionDeclined)));
+        assert!(entries.contains(&Entry::AgentText("selected:allow_always".into())), "{entries:?}");
+        assert!(entries.iter().any(|e| matches!(e,
+            Entry::Permission(c) if c.state == PermissionState::Chosen("Always allow".into()))));
+        // A second click on the same card does nothing.
+        client.answer_permission(&card.rpc_id, "reject");
+    }
+
+    #[test]
+    fn test_stop_answers_pending_permissions_cancelled() {
+        let mut client = ready(FakeOptions::default());
+        client.send_prompt("permission", Instant::now());
+        pump(&mut client, |c| c.transcript.pending_permissions().next().is_some());
+        client.cancel();
+        assert!(client.transcript.pending_permissions().next().is_none());
+        pump(&mut client, |c| c.phase == Phase::Ready);
+        let entries = &client.transcript.entries;
         assert!(entries.contains(&Entry::AgentText("cancelled".into())), "{entries:?}");
+        assert!(entries.iter().any(|e| matches!(e,
+            Entry::Permission(c) if c.state == PermissionState::Cancelled)));
+    }
+
+    #[test]
+    fn test_new_session_cancels_pending_permissions() {
+        let mut client = ready(FakeOptions::default());
+        client.send_prompt("permission", Instant::now());
+        pump(&mut client, |c| c.transcript.pending_permissions().next().is_some());
+        client.new_session(Instant::now());
+        assert!(client.transcript.entries.is_empty());
+        pump(&mut client, |c| c.phase == Phase::Ready);
+    }
+
+    #[test]
+    fn test_tool_calls_and_plan_stream_into_the_model() {
+        let mut client = ready(FakeOptions::default());
+        client.send_prompt("tools", Instant::now());
+        pump(&mut client, |c| c.phase == Phase::Ready);
+        let call = client.transcript.tool_call("t1").expect("tool call");
+        assert_eq!(call.status, agent_client_protocol_schema::v1::ToolCallStatus::Completed);
+        assert_eq!(call.title, "Edit main.rs");
+        assert_eq!(call.locations.len(), 1);
+        assert!(matches!(call.content.as_slice(), [ToolContent::Diff { .. }]));
+        assert_eq!(client.transcript.plan.len(), 2);
+        assert_eq!(client.transcript.entries.len(), 3, "the prompt, one card, the closing text");
     }
 
     #[test]

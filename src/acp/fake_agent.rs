@@ -1,8 +1,11 @@
 //! A scripted ACP agent for tests, run in a thread on two pipes. What it
 //! does on `session/prompt` depends on the prompt text:
 //!
-//! - `"permission"`: asks `session/request_permission`, then echoes the
-//!   outcome Red chose (`"cancelled"`) as agent text and ends the turn.
+//! - `"permission"`: asks `session/request_permission` (four options) and
+//!   waits; echoes the outcome Red chose (`"cancelled"` or
+//!   `"selected:<optionId>"`) as agent text and ends the turn.
+//! - `"tools"`: a tool call with a location, updates (in progress, then a
+//!   diff and `completed`), a two-step plan, then closing text.
 //! - `"unknown"`: sends a request Red does not support (`fs/read_text_file`
 //!   in stage 1), echoes the error code as agent text, ends the turn.
 //! - `"wait"`: does not answer until `session/cancel`, then ends the turn
@@ -126,8 +129,33 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                             "method": "session/request_permission", "params": {
                                 "sessionId": "s1",
                                 "toolCall": {"toolCallId": "t1", "title": "Edit main.rs"},
-                                "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}]
+                                "options": [
+                                    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                                    {"optionId": "allow_always", "name": "Always allow", "kind": "allow_always"},
+                                    {"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+                                    {"optionId": "reject_always", "name": "Always reject", "kind": "reject_always"}
+                                ]
                             }}));
+                    }
+                    "tools" => {
+                        let session = format!("s{sessions}");
+                        for update in [
+                            json!({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Edit main.rs",
+                                "kind": "edit", "status": "pending",
+                                "locations": [{"path": "/work/main.rs", "line": 3}]}),
+                            json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "in_progress"}),
+                            json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed",
+                                "content": [{"type": "diff", "path": "/work/main.rs",
+                                    "oldText": "a\nb\n", "newText": "a\nc\n"}]}),
+                            json!({"sessionUpdate": "plan", "entries": [
+                                {"content": "Edit", "priority": "high", "status": "completed"},
+                                {"content": "Test", "priority": "medium", "status": "pending"}]}),
+                        ] {
+                            send(&mut out, json!({"jsonrpc": "2.0", "method": "session/update",
+                                "params": {"sessionId": session, "update": update}}));
+                        }
+                        chunk(&mut out, &session, "Done");
+                        end_turn(&mut out, &id, "end_turn");
                     }
                     "unknown" => {
                         open_prompt = Some(id);
@@ -155,7 +183,13 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
             // Red's answer to one of our requests.
             None => {
                 let echo = match id.as_str() {
-                    Some("perm-1") => message["result"]["outcome"]["outcome"].as_str().unwrap_or("?").to_owned(),
+                    Some("perm-1") => {
+                        let outcome = &message["result"]["outcome"];
+                        match outcome["outcome"].as_str() {
+                            Some("selected") => format!("selected:{}", outcome["optionId"].as_str().unwrap_or("?")),
+                            other => other.unwrap_or("?").to_owned(),
+                        }
+                    }
                     Some("fs-1") => message["error"]["code"].to_string(),
                     _ => continue,
                 };

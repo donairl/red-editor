@@ -9,6 +9,7 @@ use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::acp::client::{Client, Phase};
+use crate::agent_cards::{self, CardAction};
 use crate::acp::model::{Entry, Notice};
 use crate::acp::transport::AgentProcess;
 use crate::agent_settings::CommandError;
@@ -17,8 +18,6 @@ use crate::i18n::I18n;
 
 /// Stderr lines shown under "Agent log".
 const LOG_LINES: usize = 200;
-/// Notices that need attention but are not errors.
-const WARNING: egui::Color32 = egui::Color32::from_rgb(0xcc, 0x99, 0x00);
 
 /// Why there is no agent to talk to.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +49,7 @@ struct Clicks {
     open_settings: bool,
     open_folder: bool,
     sign_in: Option<String>,
+    card: Option<CardAction>,
 }
 
 impl TextEditorApp {
@@ -107,6 +107,24 @@ impl TextEditorApp {
         }
         self.show_agent = true;
         ctx.memory_mut(|m| m.request_focus(input_id()));
+    }
+
+    /// Opens a file the agent named in a tool call, at its line. A relative
+    /// path is taken from the workspace folder.
+    pub fn open_agent_location(&mut self, path: std::path::PathBuf, line: Option<u32>) {
+        let path = if path.is_relative()
+            && let Some(root) = self.explorer.as_ref().map(|e| e.root())
+        {
+            root.join(path)
+        } else {
+            path
+        };
+        self.open_file_in_tab(path.clone());
+        if let Some(line) = line
+            && self.active_tab().current_path.as_ref() == Some(&path)
+        {
+            self.goto_line(line as usize);
+        }
     }
 
     /// Once per frame, shown or not: the agent keeps working while hidden.
@@ -212,12 +230,17 @@ impl TextEditorApp {
                     ui.separator();
 
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        agent_cards::draw_plan(ui, i18n, &client.transcript.plan);
                         egui::ScrollArea::vertical()
                             .stick_to_bottom(true)
                             .auto_shrink(false)
                             .show(ui, |ui| {
                                 for (i, entry) in client.transcript.entries.iter().enumerate() {
-                                    ui.push_id(i, |ui| draw_entry(ui, i18n, markdown, entry));
+                                    ui.push_id(i, |ui| {
+                                        if let Some(action) = draw_entry(ui, i18n, markdown, entry) {
+                                            clicks.card = Some(action);
+                                        }
+                                    });
                                     ui.add_space(6.0);
                                 }
                                 draw_phase(ui, i18n, &client.phase, &mut clicks);
@@ -250,6 +273,15 @@ impl TextEditorApp {
         if clicks.open_folder {
             self.trigger_open_folder();
         }
+        match clicks.card.take() {
+            Some(CardAction::Open(path, line)) => self.open_agent_location(path, line),
+            Some(CardAction::Permission { rpc_id, option_id }) => {
+                if let Some(client) = &mut self.agent.client {
+                    client.answer_permission(&rpc_id, &option_id);
+                }
+            }
+            None => {}
+        }
         if let Some(client) = &mut self.agent.client {
             if clicks.stop {
                 client.cancel();
@@ -271,7 +303,12 @@ fn input_id() -> egui::Id {
     egui::Id::unique("agent_prompt_input")
 }
 
-fn draw_entry(ui: &mut egui::Ui, i18n: &I18n, markdown: &mut CommonMarkCache, entry: &Entry) {
+fn draw_entry(
+    ui: &mut egui::Ui,
+    i18n: &I18n,
+    markdown: &mut CommonMarkCache,
+    entry: &Entry,
+) -> Option<CardAction> {
     match entry {
         Entry::User(text) => {
             egui::Frame::new()
@@ -293,16 +330,16 @@ fn draw_entry(ui: &mut egui::Ui, i18n: &I18n, markdown: &mut CommonMarkCache, en
                     ui.add(egui::Label::new(egui::RichText::new(text).weak()).wrap());
                 });
         }
-        Entry::Notice(Notice::PermissionDeclined) => {
-            ui.colored_label(WARNING, i18n.t("agent.permission_declined"));
-        }
         Entry::Notice(Notice::Error(message)) => {
             ui.colored_label(ui.visuals().error_fg_color, i18n.tf("agent.failed", &[("error", message)]));
         }
         Entry::TurnEnd(reason) => {
             ui.label(egui::RichText::new(i18n.tf("agent.turn_end", &[("reason", reason)])).weak().small());
         }
+        Entry::ToolCall(call) => return agent_cards::draw_tool_call(ui, i18n, markdown, call),
+        Entry::Permission(card) => return agent_cards::draw_permission(ui, i18n, card),
     }
+    None
 }
 
 fn draw_phase(ui: &mut egui::Ui, i18n: &I18n, phase: &Phase, clicks: &mut Clicks) {
