@@ -1977,6 +1977,7 @@ impl TextEditorApp {
     /// tab it showed, and Search in Files forgets its query, options and
     /// results.
     pub fn open_folder(&mut self, folder: PathBuf) {
+        self.agent_workspace_changing(&folder);
         self.close_diff_view();
         self.close_tabs_where(0, |_, _| true);
         self.search.stop();
