@@ -34,6 +34,10 @@ pub enum CardAction {
     Open(PathBuf, Option<u32>),
     /// Answer the permission request `rpc_id` with this option.
     Permission { rpc_id: Value, option_id: String },
+    /// Show a file the agent wrote next to HEAD (or the file on disk).
+    Diff(PathBuf),
+    /// Save a file the agent wrote.
+    Save(PathBuf),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +150,7 @@ pub fn draw_tool_call(
     i18n: &I18n,
     markdown: &mut CommonMarkCache,
     call: &ToolCallView,
+    unsaved: &[PathBuf],
 ) -> Option<CardAction> {
     let mut action = None;
     let (icon, color) = status_icon(ui, &call.status);
@@ -165,6 +170,11 @@ pub fn draw_tool_call(
                 ui.label(egui::RichText::new(kind).weak().small());
                 ui.strong(title);
             });
+            for path in unsaved_paths(call, unsaved) {
+                if let Some(a) = draw_unsaved(ui, i18n, path) {
+                    action = Some(a);
+                }
+            }
             if !call.locations.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     for location in &call.locations {
@@ -201,6 +211,44 @@ pub fn draw_tool_call(
                     });
             }
         });
+    action
+}
+
+/// The files this call names (diffs, locations) that the agent wrote and
+/// are still unsaved.
+fn unsaved_paths<'a>(call: &ToolCallView, unsaved: &'a [PathBuf]) -> Vec<&'a PathBuf> {
+    let named = call
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            ToolContent::Diff { path, .. } => Some(path),
+            _ => None,
+        })
+        .chain(call.locations.iter().map(|l| &l.path));
+    let mut out: Vec<&PathBuf> = Vec::new();
+    for path in named {
+        if let Some(found) = unsaved.iter().find(|u| *u == path)
+            && !out.contains(&found)
+        {
+            out.push(found);
+        }
+    }
+    out
+}
+
+/// The unsaved badge with Diff and Save.
+fn draw_unsaved(ui: &mut egui::Ui, i18n: &I18n, path: &Path) -> Option<CardAction> {
+    let mut action = None;
+    let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+    ui.horizontal_wrapped(|ui| {
+        ui.colored_label(WARNING, i18n.tf("agent.unsaved", &[("name", &name)]));
+        if ui.small_button(i18n.t("agent.diff")).on_hover_text(i18n.t("agent.diff_hint")).clicked() {
+            action = Some(CardAction::Diff(path.to_path_buf()));
+        }
+        if ui.small_button(i18n.t("agent.save")).clicked() {
+            action = Some(CardAction::Save(path.to_path_buf()));
+        }
+    });
     action
 }
 

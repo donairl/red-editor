@@ -34,6 +34,9 @@ pub struct AgentPanel {
     pub client: Option<Client>,
     pub start_error: Option<StartError>,
     pub input: String,
+    /// Files the agent wrote through the editor; only the unsaved ones are
+    /// kept (see `agent_unsaved_paths`).
+    pub edits: Vec<std::path::PathBuf>,
     show_log: bool,
     markdown: CommonMarkCache,
 }
@@ -48,6 +51,7 @@ struct Clicks {
     stop: bool,
     open_settings: bool,
     open_folder: bool,
+    save_all: bool,
     sign_in: Option<String>,
     card: Option<CardAction>,
 }
@@ -132,6 +136,11 @@ impl TextEditorApp {
         if let Some(client) = &mut self.agent.client {
             let now = Instant::now();
             client.poll(now);
+        }
+        // Answered here, on the UI thread, where the tabs are.
+        self.serve_agent_fs();
+        if let Some(client) = &mut self.agent.client {
+            let now = Instant::now();
             if client.wants_repaint(now) {
                 ctx.request_repaint_after(Duration::from_millis(100));
             } else if !client.is_finished() {
@@ -145,8 +154,9 @@ impl TextEditorApp {
     pub(crate) fn show_agent_panel(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let mut clicks = Clicks::default();
+        let unsaved = self.agent_unsaved_paths();
         let i18n = &self.i18n;
-        let AgentPanel { client, start_error, input, show_log, markdown } = &mut self.agent;
+        let AgentPanel { client, start_error, input, show_log, markdown, edits: _ } = &mut self.agent;
         egui::Panel::right("agent_panel")
             .resizable(true)
             .default_size(380.0)
@@ -162,6 +172,12 @@ impl TextEditorApp {
                             ui.small_button("+").on_hover_text(i18n.t("agent.new_session")).clicked();
                         if client.is_some() {
                             ui.toggle_value(show_log, i18n.t("agent.show_log"));
+                        }
+                        if !unsaved.is_empty() {
+                            clicks.save_all = ui
+                                .small_button(i18n.t("agent.save_all"))
+                                .on_hover_text(i18n.t("agent.save_all_hint"))
+                                .clicked();
                         }
                     });
                 });
@@ -237,7 +253,7 @@ impl TextEditorApp {
                             .show(ui, |ui| {
                                 for (i, entry) in client.transcript.entries.iter().enumerate() {
                                     ui.push_id(i, |ui| {
-                                        if let Some(action) = draw_entry(ui, i18n, markdown, entry) {
+                                        if let Some(action) = draw_entry(ui, i18n, markdown, entry, &unsaved) {
                                             clicks.card = Some(action);
                                         }
                                     });
@@ -280,7 +296,12 @@ impl TextEditorApp {
                     client.answer_permission(&rpc_id, &option_id);
                 }
             }
+            Some(CardAction::Diff(path)) => self.diff_agent_edit(&ctx, path),
+            Some(CardAction::Save(path)) => self.save_agent_edit(&path),
             None => {}
+        }
+        if clicks.save_all {
+            self.save_all_agent_edits();
         }
         if let Some(client) = &mut self.agent.client {
             if clicks.stop {
@@ -308,6 +329,7 @@ fn draw_entry(
     i18n: &I18n,
     markdown: &mut CommonMarkCache,
     entry: &Entry,
+    unsaved: &[std::path::PathBuf],
 ) -> Option<CardAction> {
     match entry {
         Entry::User(text) => {
@@ -336,7 +358,7 @@ fn draw_entry(
         Entry::TurnEnd(reason) => {
             ui.label(egui::RichText::new(i18n.tf("agent.turn_end", &[("reason", reason)])).weak().small());
         }
-        Entry::ToolCall(call) => return agent_cards::draw_tool_call(ui, i18n, markdown, call),
+        Entry::ToolCall(call) => return agent_cards::draw_tool_call(ui, i18n, markdown, call, unsaved),
         Entry::Permission(card) => return agent_cards::draw_permission(ui, i18n, card),
     }
     None

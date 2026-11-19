@@ -6,6 +6,7 @@ mod about;
 mod acp;
 mod activity_bar;
 mod agent_cards;
+mod agent_edits;
 mod agent_panel;
 mod agent_settings;
 mod app;

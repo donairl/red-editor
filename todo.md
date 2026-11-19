@@ -86,8 +86,11 @@ Last updated 2026-11-18.
     location links, permission cards answering with the chosen option
     (Stop / new session answer `cancelled`), plan checklist; new strings
     are English in all five language files until stage 6.
-  - [ ] **Stage 3** — `fs/read_text_file` / `fs/write_text_file` through
-    the open buffers, unsaved badge, Diff / Save / Save All Agent Edits.
+  - [x] **Stage 3** — done 2026-11-19 (`src/acp/fs.rs`,
+    `src/agent_edits.rs`): `fs/read_text_file` / `fs/write_text_file`
+    through the open buffers (workspace-bounded, answered on the UI
+    thread), writes leave the tab unsaved, unsaved badge with Diff / Save
+    on the card and Save All Agent Edits in the header.
   - [ ] **Stage 4** — terminals for the agent (`terminal/*`), live output
     in cards.
   - [ ] **Stage 5** — editor context: `@` file chips, Add Selection to

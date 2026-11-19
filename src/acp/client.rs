@@ -16,6 +16,7 @@ use agent_client_protocol_schema::v1::{
 };
 use serde_json::Value;
 
+use super::fs::{self, Buffers, FsCall};
 use super::model::{Entry, Notice, PermissionCard, PermissionChoice, PermissionState, Transcript};
 use super::transport::{AgentProcess, Connection, Incoming, RpcError};
 
@@ -77,6 +78,8 @@ pub struct Client {
     exit_code: Option<Option<i32>>,
     /// When the child was seen ended, or the exit reported.
     ended_at: Option<Instant>,
+    /// File requests waiting for the UI thread's buffers ([`Self::serve_fs`]).
+    fs_queue: Vec<(Value, FsCall)>,
 }
 
 fn params(value: impl serde::Serialize) -> Value {
@@ -99,12 +102,13 @@ impl Client {
             deadline: None,
             exit_code: None,
             ended_at: None,
+            fs_queue: Vec::new(),
         };
-        // Stage 1 offers no file system and no terminals.
+        // Files go through the editor's buffers; no terminals yet.
         let request = InitializeRequest::new(ProtocolVersion::V1)
             .client_capabilities(
                 ClientCapabilities::new()
-                    .fs(FileSystemCapabilities::new().read_text_file(false).write_text_file(false))
+                    .fs(FileSystemCapabilities::new().read_text_file(true).write_text_file(true))
                     .terminal(false),
             )
             .client_info(Implementation::new("red", env!("CARGO_PKG_VERSION")));
@@ -192,6 +196,24 @@ impl Client {
         self.conn.respond(rpc_id.clone(), Ok(params(RequestPermissionResponse::new(outcome))));
     }
 
+    /// Answers the file requests that arrived since the last call, from the
+    /// editor's `buffers`. Returns the paths the agent wrote (now unsaved in
+    /// their tabs). Call on the UI thread after [`Self::poll`].
+    pub fn serve_fs(&mut self, buffers: &mut dyn Buffers) -> Vec<PathBuf> {
+        let mut written = Vec::new();
+        for (id, call) in std::mem::take(&mut self.fs_queue) {
+            let (result, path) = fs::handle(&self.cwd, buffers, &call);
+            written.extend(path);
+            self.conn.respond(id, result);
+        }
+        written
+    }
+
+    /// Whether file requests wait for [`Self::serve_fs`].
+    pub fn has_fs_requests(&self) -> bool {
+        !self.fs_queue.is_empty()
+    }
+
     /// Ends every pending permission card as cancelled; `respond` also tells
     /// the agent (not when it is gone).
     fn cancel_permissions(&mut self, respond: bool) {
@@ -252,6 +274,7 @@ impl Client {
         self.cancel_permissions(false);
         self.phase = Phase::Failed(message);
         self.pending.clear();
+        self.fs_queue.clear();
         self.deadline = None;
     }
 
@@ -329,7 +352,11 @@ impl Client {
     fn on_request(&mut self, id: Value, method: &str, request_params: Value) {
         match method {
             "session/request_permission" => self.on_permission_request(id, request_params),
-            _ => self.conn.respond(id, Err(RpcError::method_not_found(method))),
+            _ => match FsCall::parse(method, request_params) {
+                Some(Ok(call)) => self.fs_queue.push((id, call)),
+                Some(Err(error)) => self.conn.respond(id, Err(error)),
+                None => self.conn.respond(id, Err(RpcError::method_not_found(method))),
+            },
         }
     }
 
@@ -398,6 +425,7 @@ impl Client {
         let stderr = self.stderr_tail(EXIT_STDERR_LINES);
         self.cancel_permissions(false);
         self.pending.clear();
+        self.fs_queue.clear();
         self.deadline = None;
         self.ended_at.get_or_insert(now);
         self.phase = Phase::Exited { code: self.exit_code.flatten(), stderr };
@@ -572,6 +600,87 @@ mod tests {
         assert!(matches!(call.content.as_slice(), [ToolContent::Diff { .. }]));
         assert_eq!(client.transcript.plan.len(), 2);
         assert_eq!(client.transcript.entries.len(), 3, "the prompt, one card, the closing text");
+    }
+
+    /// Runs one prompt, serving file requests from `buffers`; returns the
+    /// agent's echo of Red's answer and the paths written.
+    fn fs_round_trip(
+        client: &mut Client,
+        buffers: &mut crate::acp::fs::tests::MemBuffers,
+        text: &str,
+    ) -> (Value, Vec<PathBuf>) {
+        client.send_prompt(text, Instant::now());
+        let mut written = Vec::new();
+        let started = Instant::now();
+        while client.phase != Phase::Ready {
+            assert!(started.elapsed() < Duration::from_secs(5), "stuck in {:?}", client.phase);
+            client.poll(Instant::now());
+            written.extend(client.serve_fs(buffers));
+            thread::sleep(Duration::from_millis(5));
+        }
+        let Some(Entry::AgentText(echo)) = client.transcript.entries.iter().rev().find(|e| matches!(e, Entry::AgentText(_)))
+        else {
+            panic!("no echo: {:?}", client.transcript.entries)
+        };
+        (serde_json::from_str(echo).unwrap(), written)
+    }
+
+    fn fs_client(root: &std::path::Path) -> Client {
+        let mut client = Client::new(
+            fake_agent::connect(FakeOptions::default()),
+            None,
+            root.to_path_buf(),
+            Instant::now(),
+        );
+        pump(&mut client, |c| c.phase == Phase::Ready);
+        client
+    }
+
+    #[test]
+    fn test_fs_read_round_trip_uses_buffer_text_and_range() {
+        let root = crate::acp::fs::tests::temp_dir("client_read");
+        std::fs::write(root.join("a.txt"), "disk 1\ndisk 2\n").unwrap();
+        std::fs::write(root.join("b.txt"), "disk\n").unwrap();
+        let mut buffers = crate::acp::fs::tests::MemBuffers::default();
+        buffers.open.insert(root.join("b.txt"), "tab 1\ntab 2\ntab 3\n".into());
+        let mut client = fs_client(&root);
+        let request = |path: &std::path::Path, extra: &str| {
+            format!(r#"rpc fs/read_text_file {{"path": {:?}{extra}}}"#, path.to_str().unwrap())
+        };
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, &request(&root.join("a.txt"), ""));
+        assert_eq!(echo["result"]["content"], "disk 1\ndisk 2\n");
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, &request(&root.join("b.txt"), r#", "line": 2, "limit": 1"#));
+        assert_eq!(echo["result"]["content"], "tab 2\n");
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, &request(&root.join("nope.txt"), ""));
+        assert_eq!(echo["error"]["code"], -32002);
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, r#"rpc fs/read_text_file {"path": "rel.txt"}"#);
+        assert_eq!(echo["error"]["code"], -32602);
+        let (echo, _) = fs_round_trip(&mut client, &mut buffers, r#"rpc fs/read_text_file {"nope": 1}"#);
+        assert_eq!(echo["error"]["code"], -32602, "unparsable params are answered without the UI");
+    }
+
+    #[test]
+    fn test_fs_write_round_trip_edits_the_buffer_only() {
+        let root = crate::acp::fs::tests::temp_dir("client_write");
+        std::fs::write(root.join("a.txt"), "old\n").unwrap();
+        let mut buffers = crate::acp::fs::tests::MemBuffers::default();
+        let mut client = fs_client(&root);
+        let text = format!(
+            r#"rpc fs/write_text_file {{"path": {:?}, "content": "new\n"}}"#,
+            root.join("a.txt").to_str().unwrap()
+        );
+        let (echo, written) = fs_round_trip(&mut client, &mut buffers, &text);
+        assert_eq!(echo["result"], serde_json::json!({}));
+        assert_eq!(written, vec![root.join("a.txt")]);
+        assert_eq!(buffers.open[&root.join("a.txt")], "new\n");
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "old\n");
+        let (echo, written) = fs_round_trip(
+            &mut client,
+            &mut buffers,
+            r#"rpc fs/write_text_file {"path": "/etc/passwd", "content": "x"}"#,
+        );
+        assert_eq!(echo["error"]["code"], -32602);
+        assert!(written.is_empty());
     }
 
     #[test]

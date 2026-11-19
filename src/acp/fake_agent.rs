@@ -6,8 +6,11 @@
 //!   `"selected:<optionId>"`) as agent text and ends the turn.
 //! - `"tools"`: a tool call with a location, updates (in progress, then a
 //!   diff and `completed`), a two-step plan, then closing text.
-//! - `"unknown"`: sends a request Red does not support (`fs/read_text_file`
-//!   in stage 1), echoes the error code as agent text, ends the turn.
+//! - `"unknown"`: sends a request Red does not support (`bogus/method`),
+//!   echoes the error code as agent text, ends the turn.
+//! - `"rpc <method> <json params>"`: sends that request (with `sessionId`
+//!   filled in), echoes Red's whole answer (`{"result":..}` or
+//!   `{"error":..}`) as agent text, ends the turn.
 //! - `"wait"`: does not answer until `session/cancel`, then ends the turn
 //!   with `cancelled`.
 //! - `"orphan"`: answers with an error whose id is `null`.
@@ -160,8 +163,17 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                     "unknown" => {
                         open_prompt = Some(id);
                         send(&mut out, json!({"jsonrpc": "2.0", "id": "fs-1",
-                            "method": "fs/read_text_file",
-                            "params": {"sessionId": "s1", "path": "/tmp/x"}}));
+                            "method": "bogus/method", "params": {}}));
+                    }
+                    rpc if rpc.starts_with("rpc ") => {
+                        let mut parts = rpc[4..].splitn(2, ' ');
+                        let method = parts.next().unwrap_or("");
+                        let mut request: Value = serde_json::from_str(parts.next().unwrap_or("{}")).unwrap_or(Value::Null);
+                        if let Some(object) = request.as_object_mut() {
+                            object.insert("sessionId".into(), json!("s1"));
+                        }
+                        open_prompt = Some(id);
+                        send(&mut out, json!({"jsonrpc": "2.0", "id": "rpc-1", "method": method, "params": request}));
                     }
                     "wait" => open_prompt = Some(id),
                     "orphan" => send(&mut out, json!({"jsonrpc": "2.0", "id": null,
@@ -191,6 +203,7 @@ fn run(input: PipeReader, mut out: PipeWriter, options: FakeOptions) {
                         }
                     }
                     Some("fs-1") => message["error"]["code"].to_string(),
+                    Some("rpc-1") => json!({"result": message.get("result"), "error": message.get("error")}).to_string(),
                     _ => continue,
                 };
                 chunk(&mut out, &format!("s{sessions}"), &echo);
