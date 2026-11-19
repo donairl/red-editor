@@ -1,7 +1,7 @@
 # Todo
 
 Improvement ideas for Red Text Editor, roughly in order of value per effort.
-Last updated 2026-11-18.
+Last updated 2026-11-19.
 
 ## High priority (daily use)
 
@@ -79,7 +79,7 @@ Last updated 2026-11-18.
   Agent, chat with streaming, Stop, New Session, sign-in, Restart;
   `Ctrl+Shift+A`. Spec: `docs/superpowers/specs/2026-11-18-acp-agent-panel-design.md`,
   plan: `docs/superpowers/plans/2026-11-18-acp-agent-panel-stage1.md`.
-  - [ ] **Hand check** with a real agent (`npx @zed-industries/claude-code-acp`
+  - [ ] **Hand check** (all stages 2-6 are done; this is what is left) with a real agent (`npx @zed-industries/claude-code-acp`
     or `gemini --experimental-acp`): the checklist in Task 10 of the plan.
   - [x] **Stage 2** — done 2026-11-19 (`src/agent_cards.rs`,
     `src/acp/model.rs`): tool-call cards merged by id with diffs and
@@ -101,7 +101,9 @@ Last updated 2026-11-18.
     chips; Add Selection to Agent (Ctrl+Shift+L, palette, editor menu)
     attaches path and line range; file chips send as `ResourceLink`,
     selections as `Resource` (text when embedded context is off).
-  - [ ] **Stage 6** — README (en, id) and release notes.
+  - [x] **Stage 6** — done 2026-11-19: the stage 2-5 strings translated
+    in id, es, de and zh; Agent panel section in README (en, id); draft
+    release notes in `docs/releases/v0.10.0.md` (version not bumped).
   - [x] **Spec drift** — done 2026-11-19: the spec now describes `Phase`,
     the pending map in `Client` and the in-thread fake agent.
   - Known gaps from review:
@@ -140,10 +142,9 @@ Last updated 2026-11-18.
 
 ## Tech debt
 
-- [ ] **Clippy on tests** — `cargo clippy --all-targets -- -D warnings`
-  fails on `src/console_panel.rs:271` (`app.show_console = true` after
-  `Default::default()`; use a struct literal). CI runs neither clippy nor
-  `cargo fmt`, and most files are not rustfmt-clean.
+- [x] **Clippy on tests** — fixed: `cargo clippy --all-targets -- -D warnings`
+  is clean (struct literal in `src/console_panel.rs`). CI still runs neither
+  clippy nor `cargo fmt`, and most files are not rustfmt-clean.
 - [ ] **Flaky test** — `app::tests::test_spawn_window_starts_a_process_or_reports_why_not`
   failed once in a full run and passed alone; it runs `current_exe()`, so
   a shared or busy target dir may be the cause.
