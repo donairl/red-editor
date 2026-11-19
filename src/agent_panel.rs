@@ -14,6 +14,7 @@ use crate::agent_cards::{self, CardAction};
 use crate::acp::context::{self, Chip};
 use crate::acp::model::{Entry, Notice};
 use crate::palette::{self, Item};
+use crate::acp::terminals::Terminals;
 use crate::acp::transport::AgentProcess;
 use crate::agent_settings::CommandError;
 use crate::app::TextEditorApp;
@@ -326,13 +327,14 @@ impl TextEditorApp {
 
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                         agent_cards::draw_plan(ui, i18n, &client.transcript.plan);
+                        let terminals = client.terminals().clone();
                         egui::ScrollArea::vertical()
                             .stick_to_bottom(true)
                             .auto_shrink(false)
                             .show(ui, |ui| {
                                 for (i, entry) in client.transcript.entries.iter().enumerate() {
                                     ui.push_id(i, |ui| {
-                                        if let Some(action) = draw_entry(ui, i18n, markdown, entry, &unsaved) {
+                                        if let Some(action) = draw_entry(ui, i18n, markdown, entry, &unsaved, &terminals) {
                                             clicks.card = Some(action);
                                         }
                                     });
@@ -574,6 +576,7 @@ fn draw_entry(
     markdown: &mut CommonMarkCache,
     entry: &Entry,
     unsaved: &[std::path::PathBuf],
+    terminals: &Terminals,
 ) -> Option<CardAction> {
     match entry {
         Entry::User(text) => {
@@ -613,7 +616,7 @@ fn draw_entry(
         Entry::TurnEnd(reason) => {
             ui.label(egui::RichText::new(i18n.tf("agent.turn_end", &[("reason", reason)])).weak().small());
         }
-        Entry::ToolCall(call) => return agent_cards::draw_tool_call(ui, i18n, markdown, call, unsaved),
+        Entry::ToolCall(call) => return agent_cards::draw_tool_call(ui, i18n, markdown, call, unsaved, terminals),
         Entry::Permission(card) => return agent_cards::draw_permission(ui, i18n, card),
     }
     None
